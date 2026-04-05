@@ -2,21 +2,27 @@
 
 ## Overview
 
-AnyClaw is a plugin for OpenClaw (or compatible agent harnesses) that adds a self-evolving mobile UI layer. Instead of a fixed interface, the agent designs, builds, and maintains a fully personalized full-stack web application that the user accesses through a companion mobile app. The user talks to their existing agent via a persistent chat/voice interface; the agent responds by building features — dashboards, trackers, news feeds, custom tools — that persist across sessions.
+AnyClaw is a self-evolving mobile UI layer powered by a personal AI agent. Instead of a fixed interface, the agent designs, builds, and maintains a fully personalized full-stack web application that the user accesses through a companion mobile app. The user talks to their agent via a persistent chat/voice interface; the agent responds by building features — dashboards, trackers, news feeds, custom tools — that persist across sessions.
 
-**AnyClaw consists of three deliverables:**
-1. **A skill suite + MCP server** — plugs into an existing OpenClaw deployment, giving the agent the ability to create UI, API routes, DB collections, deploy, and rollback.
-2. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend, spun up alongside OpenClaw via docker-compose or setup script.
+**AnyClaw supports two deployment modes:**
+
+1. **Plugin mode (for existing OpenClaw users):** AnyClaw installs as an MCP server + skill suite into an existing OpenClaw deployment. The user keeps their agent's memory, personality, and capabilities. Infrastructure (PocketBase, Node logic, Vite frontend) spins up alongside OpenClaw.
+2. **Standalone mode (for new users):** A single installation script sets up everything — a bundled agent runtime (lightweight OpenClaw or compatible harness), the AnyClaw infrastructure, and all dependencies. One command, fully self-contained. No prior setup required.
+
+Both modes produce the same server environment. The difference is whether the agent harness already exists or is bundled.
+
+**AnyClaw consists of:**
+1. **An MCP server + skill suite** — gives the agent the ability to create UI, API routes, DB collections, deploy, and rollback. In plugin mode, installs into the existing harness. In standalone mode, bundled with the agent runtime.
+2. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend.
 3. **A companion mobile app** — a thin native shell (settings, chat, version history) wrapping a WebView that loads the agent-generated UI from the user's server.
-
-AnyClaw leverages the user's existing OpenClaw agent — its memory, personality, and capabilities carry over. No separate agent runtime is required.
 
 ## Deployment Model
 
 **Hybrid: self-hosted or cloud-hosted.**
 
-- **Self-hosted:** User runs OpenClaw + AnyClaw server on their own machine/NAS. Free tier. User provides their own LLM API keys.
-- **Cloud-hosted:** Monthly subscription. AnyClaw hosts the server (one container per subscriber). LLM tokens bundled or BYOK.
+- **Self-hosted (plugin):** User has an existing OpenClaw. Installs AnyClaw MCP server + skills + infrastructure alongside it. Free tier. User provides their own LLM API keys.
+- **Self-hosted (standalone):** User runs a single install script that sets up everything from scratch — agent runtime + AnyClaw. Free tier. User provides their own LLM API keys.
+- **Cloud-hosted:** Monthly subscription. AnyClaw hosts the full stack (one container per subscriber). LLM tokens bundled or BYOK.
 - **Connection broker:** A lightweight cloud service (run by AnyClaw) that authenticates users and brokers connections between the mobile app and the server. Handles NAT traversal for self-hosters. Content flows directly between client and server — the broker only handles signaling.
 
 ## Architecture
@@ -190,13 +196,19 @@ OpenClaw skills that teach the agent *how* to use the MCP tools effectively:
 - **anyclaw-refactor** — Periodic skill: review the codebase for growing complexity, extract shared components, clean up dead code. Run on agent's initiative or user request.
 - **anyclaw-describe-version** — Write a clear, non-technical version description that a non-developer can understand and use to decide whether to rollback.
 
-#### Why Plugin, Not Standalone
+#### Why Both Modes
 
-- Users keep their existing OpenClaw agent with all its memory and personality
-- No separate agent runtime to install or maintain
-- Modular — install the MCP server, spin up infrastructure, connect the app
+**Plugin mode** is ideal for existing OpenClaw users:
+- Users keep their agent's memory, personality, and capabilities
+- No duplicate agent runtime — just add the MCP server and skills
 - Compatible with other harnesses that support MCP (not locked to OpenClaw)
-- Easier adoption: "add AnyClaw to your existing setup" vs "deploy a new system"
+
+**Standalone mode** lowers the barrier for new users:
+- One install script, no prerequisites beyond Docker
+- Bundles a lightweight agent runtime with AnyClaw pre-configured
+- Same capabilities — user can later migrate to a full OpenClaw setup if they want
+
+Both modes produce identical server infrastructure. The MCP server and skills are the same. The only difference is whether the agent harness is pre-existing or bundled.
 
 ## Versioning & Rollback
 
