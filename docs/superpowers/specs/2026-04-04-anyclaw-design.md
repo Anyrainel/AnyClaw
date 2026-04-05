@@ -148,18 +148,44 @@ Responsibilities:
 - Server instance registry (self-hosted servers send heartbeats)
 - NAT traversal / tunnel establishment
 
-**Tunnel options to prototype (in priority order):**
+**Tunnel strategy (phased):**
 
-1. **Embedded WireGuard** — Server and mobile app both embed WireGuard libraries. Broker handles key exchange and STUN/TURN-style hole punching. Traffic flows directly P2P, encrypted. Broker sees nothing. Most private, most Parsec-like UX.
-2. **Tailscale tsnet** — Embed Tailscale's open-source library in the server. Gets NAT traversal for free without requiring users to install Tailscale. Less control but faster to prototype.
-3. **Cloudflare Tunnel** — Server runs `cloudflared`. Client connects through Cloudflare's network. Simplest to implement but routes traffic through Cloudflare (privacy tradeoff). Good fallback option.
+Research confirmed that embedded WireGuard and Tailscale tsnet are not viable in React Native/Expo — the libraries are immature and require full native ejection. The realistic options are:
 
-**Security requirements:**
+**Phase 1 (MVP): HTTPS/WSS relay through the broker**
+- The broker acts as a thin encrypted relay — mobile app connects to broker via WSS, broker forwards to server via WSS. All traffic TLS-encrypted.
+- Works in Expo managed workflow with zero native code.
+- Tradeoff: traffic passes through the broker (not true P2P). Mitigated by TLS encryption — the broker relays encrypted bytes without inspecting content.
+- Simplest to build, fastest to ship.
+
+**Phase 2 (upgrade): WebRTC data channels for true P2P**
+- `react-native-webrtc` has an official Expo config plugin (`@config-plugins/react-native-webrtc`). Requires `expo prebuild` (development build, not Expo Go) but does not require full ejection.
+- WebRTC provides NAT traversal (ICE/STUN/TURN) built in, encrypted P2P data channels.
+- The broker becomes a signaling server only (exchanges SDP offers/answers). Content flows directly between devices.
+- This is the Parsec-like model: broker helps devices find each other, then gets out of the way.
+
+**Phase 3 (optional): Cloudflare Tunnel as fallback**
+- For networks where WebRTC hole-punching fails (strict symmetric NAT), server runs `cloudflared` as a fallback path.
+- Client connects via standard HTTPS through Cloudflare's network.
+- Privacy tradeoff: traffic routes through Cloudflare. Acceptable as a last-resort fallback.
+
+**Security requirements (all phases):**
 - The server exposes zero open ports to the internet
-- All traffic is end-to-end encrypted
-- The broker never sees content — only signaling metadata
-- The connection setup must be fully automated (no manual port forwarding, no DNS config)
+- All traffic is encrypted in transit (TLS for Phase 1, DTLS/SRTP for Phase 2)
+- The connection setup is fully automated (no manual port forwarding, no DNS config)
 - User experience: install app, log in, server appears, one tap to connect
+
+### Chat Protocol (Mobile App ↔ Agent)
+
+The mobile app's chat interface communicates with the agent via the OpenAI-compatible `/v1/chat/completions` API format — the de facto standard for LLM chat. This works for both plugin mode (OpenClaw's gateway has an optional OpenAI-compatible endpoint) and standalone mode (the bundled agent runtime exposes the same endpoint).
+
+**Request path:** Mobile app → HTTP POST `/v1/chat/completions` (with auth token) → through tunnel → server's agent gateway → LLM provider.
+
+**Response path:** Server streams tokens back via SSE (Server-Sent Events). Each token is a `data:` event in the SSE stream. The mobile app renders tokens incrementally into the chat bubble.
+
+**React Native libraries:** `react-native-sse` or `@falcondev-oss/expo-event-source-polyfill` — both work in Expo managed workflow with zero native code.
+
+**Why SSE over WebSocket for chat:** SSE is unidirectional (server→client), lightweight, auto-reconnects on drops, and works over standard HTTP. Sending a user message is a normal POST — no need for a persistent bidirectional channel. This is the same pattern ChatGPT and Claude mobile apps use. If future features require bidirectional streaming (e.g., mid-stream cancellation, tool approval prompts), WebSocket can be added alongside SSE.
 
 ### Layer 4: Agent Integration (OpenClaw Plugin)
 
@@ -260,7 +286,8 @@ Both modes produce identical server infrastructure. The MCP server and skills ar
 | Versioning | Git | Natural fit — agent commits, tags, describes. Rollback = checkout. |
 | Agent integration | MCP server + OpenClaw skills | Plugin model — no separate agent runtime, leverages existing OpenClaw |
 | Containerization | Docker / docker-compose | PocketBase + Node + Vite + watchdog in one compose file, alongside existing OpenClaw |
-| Tunnel (to evaluate) | WireGuard / tsnet / Cloudflare Tunnel | See tunnel options section — prototype all three, pick best |
+| Chat streaming | SSE via react-native-sse | OpenAI-compatible /v1/chat/completions format, works in Expo managed |
+| Tunnel (phased) | WSS relay → WebRTC P2P → Cloudflare fallback | Phase 1 MVP relay, Phase 2 true P2P via @config-plugins/react-native-webrtc |
 | Broker | Node.js or Go API server | Lightweight signaling service |
 
 ## Monetization
