@@ -2,26 +2,29 @@
 
 ## Overview
 
-AnyClaw is a self-evolving mobile UI layer powered by a personal AI agent. Instead of a fixed interface, the agent designs, builds, and maintains a fully personalized full-stack web application that the user accesses through a companion mobile app. The user talks to their agent via a persistent chat/voice interface; the agent responds by building features — dashboards, trackers, news feeds, custom tools — that persist across sessions.
+AnyClaw is a self-evolving mobile UI layer powered by a personal AI coding agent. Instead of a fixed interface, the agent designs, builds, and maintains a fully personalized full-stack web application that the user accesses through a companion mobile app. The user submits feature requests; the agent clarifies requirements, then designs, implements, tests, and deploys — all automatically.
 
-**AnyClaw supports two deployment modes:**
-
-1. **Plugin mode (for existing OpenClaw users):** AnyClaw installs as an MCP server + skill suite into an existing OpenClaw deployment. The user keeps their agent's memory, personality, and capabilities. Infrastructure (PocketBase, Node logic, Vite frontend) spins up alongside OpenClaw.
-2. **Standalone mode (for new users):** A single installation script sets up everything — a bundled agent runtime (lightweight OpenClaw or compatible harness), the AnyClaw infrastructure, and all dependencies. One command, fully self-contained. No prior setup required.
-
-Both modes produce the same server environment. The difference is whether the agent harness already exists or is bundled.
+**AnyClaw is agent-agnostic.** It does not own or bundle a coding agent. Instead, it provides infrastructure (server runtime, MCP tools, deployment pipeline) and a mobile viewer that works with any compatible coding agent. Initial adapters support **OpenClaw** and **Claude Code**, with the architecture extensible to Codex, Aider, or any agent that can use MCP tools.
 
 **AnyClaw consists of:**
-1. **An MCP server + skill suite** — gives the agent the ability to create UI, API routes, DB collections, deploy, and rollback. In plugin mode, installs into the existing harness. In standalone mode, bundled with the agent runtime.
-2. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend.
-3. **A companion mobile app** — a thin native shell (settings, chat, version history) wrapping a WebView that loads the agent-generated UI from the user's server.
+1. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend + dev/prod deployment pipeline. This is the foundation the agent builds on.
+2. **An MCP server + skill suite** — gives any compatible coding agent the ability to create UI, API routes, DB collections, deploy, and rollback.
+3. **An agent dispatch layer** — a pluggable adapter interface that lets the mobile app submit work requests to the user's chosen coding agent (OpenClaw, Claude Code, etc.), including support for agent-initiated clarifying questions.
+4. **A companion mobile app** — a thin native shell (WebView for agent-built UI, task submission with Q&A, version history/rollback, settings).
+
+**Deployment modes:**
+
+1. **Plugin mode (for existing agent users):** User already has OpenClaw, Claude Code, or another agent. AnyClaw installs the MCP server + skills into the existing agent, spins up the server infrastructure alongside it, and the mobile app connects via the appropriate adapter.
+2. **Standalone mode (for new users):** A single installation script sets up everything — the AnyClaw infrastructure + a default agent (likely OpenClaw). One command, fully self-contained.
+
+Both modes produce the same server infrastructure. The difference is whether the coding agent already exists or is bundled.
 
 ## Deployment Model
 
 **Hybrid: self-hosted or cloud-hosted.**
 
-- **Self-hosted (plugin):** User has an existing OpenClaw. Installs AnyClaw MCP server + skills + infrastructure alongside it. Free tier. User provides their own LLM API keys.
-- **Self-hosted (standalone):** User runs a single install script that sets up everything from scratch — agent runtime + AnyClaw. Free tier. User provides their own LLM API keys.
+- **Self-hosted (plugin):** User has an existing coding agent (OpenClaw, Claude Code, etc.). Installs AnyClaw MCP server + skills + infrastructure alongside it. Free tier. User provides their own LLM API keys.
+- **Self-hosted (standalone):** User runs a single install script that sets up everything from scratch — a default agent (OpenClaw) + AnyClaw infrastructure. Free tier. User provides their own LLM API keys.
 - **Cloud-hosted:** Monthly subscription. AnyClaw hosts the full stack (one container per subscriber). LLM tokens bundled or BYOK.
 - **Connection broker:** A lightweight cloud service (run by AnyClaw) that authenticates users and brokers connections between the mobile app and the server. Handles NAT traversal for self-hosters. Content flows directly between client and server — the broker only handles signaling.
 
@@ -36,29 +39,38 @@ Both modes produce the same server environment. The difference is whether the ag
 |                     |  auth   |  (Cloud)          |  signal |   Cloud-hosted)      |
 |  +---------------+  |         +-------------------+         |                      |
 |  | Native Shell  |  |                                       |  +----------------+  |
-|  | - Settings    |  |         encrypted tunnel (direct)     |  | PocketBase     |  |
-|  | - Chat/Voice  |  | <----------------------------------> |  | (data, auth,   |  |
-|  | - Versions    |  |                                       |  |  files, RT)    |  |
-|  | - Rollback    |  |                                       |  +----------------+  |
+|  | - Task Card   |  |         encrypted tunnel (direct)     |  | PocketBase     |  |
+|  | - Versions    |  | <----------------------------------> |  | (data, auth,   |  |
+|  | - Settings    |  |                                       |  |  files, RT)    |  |
+|  +---------------+  |                                       |  +----------------+  |
 |  +---------------+  |                                       |                      |
-|  +---------------+  |                                       |  +----------------+  |
-|  | WebView       |  |                                       |  | Node.js Logic  |  |
-|  | (agent-built  |  |                                       |  | (jobs, custom  |  |
-|  |  React app)   |  |                                       |  |  APIs, LLM)    |  |
-|  +---------------+  |                                       |  +----------------+  |
-+---------------------+                                       |                      |
+|  | WebView       |  |         task dispatch (via adapter)   |  +----------------+  |
+|  | (agent-built  |  | - - - - - - - - - - - - - - - - - -> |  | Agent Adapter  |  |
+|  |  React app)   |  |                                       |  | (OC / CC /     |  |
+|  +---------------+  |                                       |  |  webhook)      |  |
++---------------------+                                       |  +----------------+  |
+                                                              |         |            |
+                                                              |         v            |
+                                                              |  +----------------+  |
+                                                              |  | Coding Agent   |  |
+                                                              |  | (OpenClaw,     |  |
+                                                              |  |  Claude Code,  |  |
+                                                              |  |  or other)     |  |
+                                                              |  +----------------+  |
+                                                              |         |            |
+                                                              |         | uses       |
+                                                              |         v            |
+                                                              |  +----------------+  |
+                                                              |  | AnyClaw MCP    |  |
+                                                              |  | Server         |  |
+                                                              |  +----------------+  |
+                                                              |         |            |
+                                                              |    creates/deploys   |
+                                                              |         v            |
                                                               |  +----------------+  |
                                                               |  | Vite + React   |  |
-                                                              |  | (agent-built   |  |
-                                                              |  |  frontend)     |  |
-                                                              |  +----------------+  |
-                                                              |                      |
-                                                              |  +----------------+  |
-                                                              |  | OpenClaw       |  |
-                                                              |  | (existing)     |  |
-                                                              |  | + AnyClaw MCP  |  |
-                                                              |  | + AnyClaw      |  |
-                                                              |  |   Skills       |  |
+                                                              |  | + Node.js      |  |
+                                                              |  | (agent-built)  |  |
                                                               |  +----------------+  |
                                                               +----------------------+
 ```
@@ -70,11 +82,11 @@ Both modes produce the same server environment. The difference is whether the ag
 A thin native shell with four responsibilities:
 
 1. **Connection management** — Login screen, server selection, reconnect/restart controls. Communicates with the broker to establish a tunnel to the server.
-2. **Chat/voice interface** — Floating action button (bottom-right), opens a native chat view. Text and voice input. This is how the user talks to the agent. Always available regardless of what the WebView shows.
+2. **Task dispatch interface** — A "Request" button that opens a task submission flow. Not a full chat — a focused task card that transitions through states (see Task Dispatch Protocol below).
 3. **Version history & rollback** — Native screen listing agent-deployed versions with descriptions and optional screenshots. User taps to rollback. Rollback is always user-initiated.
-4. **Settings & monitoring** — Server status, resource usage, agent activity log, subscription management.
+4. **Settings & monitoring** — Server status, agent adapter configuration, agent activity log, subscription management.
 
-The main content area is a single WebView pointing at the user's server. The WebView and native shell communicate via a JS bridge (postMessage/onMessage) for events like "agent deployed a new version, please reload" or "user tapped chat button."
+The main content area is a single WebView pointing at the user's server. The WebView and native shell communicate via a JS bridge (postMessage/onMessage) for events like "agent deployed a new version, please reload."
 
 **Why Expo:** Handles builds, signing, OTA updates, and push notifications without touching Xcode or Android Studio. The native shell is simple enough that Expo's managed workflow covers it. Ejecting to bare workflow is available if needed later.
 
@@ -175,25 +187,114 @@ Research confirmed that embedded WireGuard and Tailscale tsnet are not viable in
 - The connection setup is fully automated (no manual port forwarding, no DNS config)
 - User experience: install app, log in, server appears, one tap to connect
 
-### Chat Protocol (Mobile App ↔ Agent)
+### Task Dispatch Protocol (Mobile App ↔ Agent)
 
-The mobile app's chat interface communicates with the agent via the OpenAI-compatible `/v1/chat/completions` API format — the de facto standard for LLM chat. This works for both plugin mode (OpenClaw's gateway has an optional OpenAI-compatible endpoint) and standalone mode (the bundled agent runtime exposes the same endpoint).
+AnyClaw does not own the coding agent. Instead, the mobile app communicates with agents through a pluggable **Agent Adapter** interface. The interaction model is **task dispatch with clarification**, not real-time chat.
 
-**Request path:** Mobile app → HTTP POST `/v1/chat/completions` (with auth token) → through tunnel → server's agent gateway → LLM provider.
+#### Task Lifecycle
 
-**Response path:** Server streams tokens back via SSE (Server-Sent Events). Each token is a `data:` event in the SSE stream. The mobile app renders tokens incrementally into the chat bubble.
+A task moves through these states:
 
-**React Native libraries:** `react-native-sse` or `@falcondev-oss/expo-event-source-polyfill` — both work in Expo managed workflow with zero native code.
+```
+[input] → [clarifying] → [working] → [deploying] → [done]
+                ↑    ↓
+              (Q&A rounds — agent asks, user answers)
+```
 
-**Why SSE over WebSocket for chat:** SSE is unidirectional (server→client), lightweight, auto-reconnects on drops, and works over standard HTTP. Sending a user message is a normal POST — no need for a persistent bidirectional channel. This is the same pattern ChatGPT and Claude mobile apps use. If future features require bidirectional streaming (e.g., mid-stream cancellation, tool approval prompts), WebSocket can be added alongside SSE.
+1. **Input** — User types a request: "add a mood tracker for stress, sleep, and energy"
+2. **Clarifying** — Agent may ask questions: "Daily check-in or multiple times per day? Do you want trend charts?" User answers in the mobile app. Multiple Q&A rounds are possible. Agent may also skip this step if the request is clear enough.
+3. **Working** — Agent designs, implements, and tests the feature in the dev environment. Mobile app shows progress updates and an activity log (if the adapter supports it). User can cancel.
+4. **Deploying** — Agent runs validation suite, commits, snapshots DB, promotes to prod.
+5. **Done** — WebView reloads. User sees the new feature. Task card shows the version description.
 
-### Layer 4: Agent Integration (OpenClaw Plugin)
+If the task fails at any step, the card shows an error state with the failure reason. No changes reach prod.
 
-AnyClaw integrates with the user's existing OpenClaw deployment as a plugin — no separate agent runtime. The plugin provides two components:
+#### Agent Adapter Interface
+
+```typescript
+interface AgentAdapter {
+  /** Submit a new task request. Returns a handle to track progress. */
+  dispatch(request: string): Promise<TaskHandle>;
+
+  /** Get current task status and any pending clarification questions. */
+  getStatus(handle: TaskHandle): Promise<TaskStatus>;
+
+  /** Respond to a clarifying question from the agent. */
+  answerQuestion(handle: TaskHandle, answer: string): Promise<void>;
+
+  /** Cancel a running task. */
+  cancel(handle: TaskHandle): Promise<void>;
+
+  /** Get the activity log (what the agent is doing). Optional — not all adapters support this. */
+  getActivityLog?(handle: TaskHandle): Promise<ActivityEntry[]>;
+}
+
+interface TaskStatus {
+  state: "clarifying" | "working" | "deploying" | "done" | "failed" | "cancelled";
+  /** If state is "clarifying", this is the agent's question to the user. */
+  question?: string;
+  /** If state is "done", this is the version description. */
+  versionDescription?: string;
+  /** If state is "failed", this is the error message. */
+  error?: string;
+  /** Progress summary (e.g., "Creating React components...") */
+  progressSummary?: string;
+}
+
+interface ActivityEntry {
+  timestamp: string;
+  message: string;
+  type: "info" | "warning" | "error";
+}
+```
+
+#### Adapter: OpenClaw
+
+- **Dispatch:** POST to OpenClaw gateway's WebSocket or OpenAI-compatible REST endpoint. The request is sent as a user message. The system prompt instructs the agent to use AnyClaw MCP tools and follow the build-feature skill.
+- **Clarification:** OpenClaw's gateway supports multi-turn conversation. When the agent responds with a question (detected by message format or a structured tag), the adapter surfaces it to the user. When the user answers, the adapter sends the follow-up message.
+- **Progress:** Subscribe to gateway WebSocket events for real-time status updates. The MCP tools emit progress events during validation and deployment.
+- **Cancel:** Send a cancel signal via the gateway API.
+- **Activity log:** Available via gateway event stream.
+
+**For OpenClaw users who prefer WhatsApp/Discord:** They can continue to dispatch work through those channels. The mobile app will still show the results (WebView refreshes on deploy, version history updates). The task dispatch in the mobile app is an additional channel, not a replacement.
+
+#### Adapter: Claude Code
+
+- **Dispatch:** Use Claude Code's remote trigger API to start a headless session. The trigger prompt includes the user's request and instructions to use AnyClaw MCP tools.
+- **Clarification:** Claude Code remote triggers don't natively support mid-task Q&A. Two approaches:
+  - **Option A (simpler):** The agent writes clarifying questions to a "task status" file or PocketBase collection. The adapter polls this. When the user answers, the answer is written back, and the agent (which is polling for answers) continues.
+  - **Option B (richer):** Use Claude Code's SDK to spawn a custom agent session with bidirectional communication via stdin/stdout pipes.
+- **Progress:** Poll the remote trigger status endpoint, or read the agent's output file for progress updates.
+- **Cancel:** Stop the remote trigger via API.
+- **Activity log:** Available by reading the agent's output stream.
+
+#### Adapter: Generic Webhook (extensibility)
+
+For future agents (Codex, Aider, custom harnesses):
+- **Dispatch:** POST to a user-configured webhook URL with a standard payload `{ request, taskId, callbackUrl }`.
+- **Clarification:** The agent POSTs questions back to the callback URL. The adapter surfaces them to the user.
+- **Progress:** Agent POSTs status updates to the callback URL.
+- **Cancel:** POST to a cancel endpoint.
+
+This generic adapter makes AnyClaw compatible with any agent that can implement the webhook contract.
+
+#### Mobile UI for Task Dispatch
+
+The mobile app's task interface is a **single card** that transitions through states:
+
+- **Input state:** Text input + "Submit" button. Simple, not a chat interface.
+- **Clarifying state:** Shows the agent's question as a card. Text input for the answer + "Reply" button. Multiple rounds stack as a short Q&A thread.
+- **Working state:** Progress spinner + activity log (scrolling list of what the agent is doing). "Cancel" button.
+- **Done state:** Success card with version description. "View" button refreshes the WebView. Auto-dismisses after a few seconds.
+- **Failed state:** Error card with the failure reason. "Retry" or "Dismiss" buttons.
+
+### Layer 4: Agent Integration (Agent-Agnostic)
+
+AnyClaw does not own or bundle a coding agent. It provides two integration points that any compatible agent can use:
 
 #### 4a. MCP Server (Infrastructure Tools)
 
-An MCP server that exposes the AnyClaw infrastructure as tools the agent can call:
+An MCP server that exposes the AnyClaw infrastructure as tools. Any agent that supports MCP (OpenClaw, Claude Code, Codex, Aider, etc.) can use these tools directly.
 
 - **anyclaw_create_page** — Scaffold a new React page with routing
 - **anyclaw_create_api_route** — Add a new endpoint to the Node logic service
@@ -205,6 +306,8 @@ An MCP server that exposes the AnyClaw infrastructure as tools the agent can cal
 - **anyclaw_list_versions** — Show deployment history with descriptions
 - **anyclaw_read_file / anyclaw_write_file** — Read/write source files in the dev environment
 - **anyclaw_run_dev** — Execute commands in the dev environment (for testing, debugging)
+- **anyclaw_ask_user** — Post a clarifying question to the mobile app and wait for the user's answer. This enables the agent to clarify requirements before building.
+- **anyclaw_update_progress** — Post a progress update to the mobile app's task card (e.g., "Creating database collections...", "Running tests...")
 
 The MCP server enforces constraints:
 - All code changes happen in the dev environment only
@@ -213,28 +316,36 @@ The MCP server enforces constraints:
 - DB snapshot is mandatory before any schema migration
 - A user-facing version description is required for every deployment
 
-#### 4b. Skill Suite
+#### 4b. Skill Suite (Agent-Specific Instructions)
 
-OpenClaw skills that teach the agent *how* to use the MCP tools effectively:
+Skills/prompts that teach the agent *how* to use the MCP tools effectively. These are formatted for the target agent's skill/prompt system:
 
-- **anyclaw-build-feature** — High-level skill: given a user request, plan the feature (pages, API routes, collections needed), implement it, test it, deploy it. Orchestrates multiple MCP tool calls.
+**For OpenClaw:** Installed as OpenClaw skills in the standard skill directory.
+**For Claude Code:** Installed as CLAUDE.md instructions or custom slash commands.
+**For other agents:** Provided as system prompt templates or documentation.
+
+The content is the same regardless of format:
+
+- **anyclaw-build-feature** — High-level workflow: given a user request, (1) ask clarifying questions via `anyclaw_ask_user` if needed, (2) plan the feature (pages, API routes, collections), (3) implement it, (4) test it in dev, (5) deploy via `anyclaw_deploy`. Post progress updates throughout.
 - **anyclaw-style-guide** — Conventions for the React frontend: component patterns, CSS approach, responsive layout rules. Keeps the UI consistent across agent-generated features.
-- **anyclaw-refactor** — Periodic skill: review the codebase for growing complexity, extract shared components, clean up dead code. Run on agent's initiative or user request.
-- **anyclaw-describe-version** — Write a clear, non-technical version description that a non-developer can understand and use to decide whether to rollback.
+- **anyclaw-refactor** — Periodic skill: review the codebase for growing complexity, extract shared components, clean up dead code.
+- **anyclaw-describe-version** — Write a clear, non-technical version description that a non-developer can understand.
 
-#### Why Both Modes
+#### Agent Compatibility
 
-**Plugin mode** is ideal for existing OpenClaw users:
-- Users keep their agent's memory, personality, and capabilities
-- No duplicate agent runtime — just add the MCP server and skills
-- Compatible with other harnesses that support MCP (not locked to OpenClaw)
+| Agent | MCP Tools | Skills Format | Dispatch Adapter | Clarification Support |
+|-------|-----------|---------------|------------------|----------------------|
+| **OpenClaw** | Native MCP support | OpenClaw skills directory | Gateway WebSocket/REST | Full (multi-turn via gateway) |
+| **Claude Code** | Native MCP support | CLAUDE.md + slash commands | Remote triggers or headless SDK | Via `anyclaw_ask_user` MCP tool (polls for answer) |
+| **Codex / future** | Via MCP or tool-use API | System prompt template | Generic webhook adapter | Via `anyclaw_ask_user` MCP tool |
 
-**Standalone mode** lowers the barrier for new users:
-- One install script, no prerequisites beyond Docker
-- Bundles a lightweight agent runtime with AnyClaw pre-configured
-- Same capabilities — user can later migrate to a full OpenClaw setup if they want
+#### Why Agent-Agnostic
 
-Both modes produce identical server infrastructure. The MCP server and skills are the same. The only difference is whether the agent harness is pre-existing or bundled.
+- Users keep their preferred agent (OpenClaw, Claude Code, etc.) with its memory, personality, and capabilities
+- No vendor lock-in — switch agents without rebuilding the app
+- The same MCP tools work regardless of which agent uses them
+- Agent ecosystems evolve fast — AnyClaw doesn't need to keep up with every agent's internals, just the MCP interface
+- OpenClaw users can also dispatch work via WhatsApp/Discord — the mobile app is an additional channel, not a replacement
 
 ## Versioning & Rollback
 
@@ -284,9 +395,9 @@ Both modes produce identical server infrastructure. The MCP server and skills ar
 | Database | SQLite (via PocketBase) | Single file, easy to snapshot, zero config, sufficient for single-user |
 | Background jobs | node-cron (in-process) | Simple, no Redis dependency, sufficient for single-user |
 | Versioning | Git | Natural fit — agent commits, tags, describes. Rollback = checkout. |
-| Agent integration | MCP server + OpenClaw skills | Plugin model — no separate agent runtime, leverages existing OpenClaw |
-| Containerization | Docker / docker-compose | PocketBase + Node + Vite + watchdog in one compose file, alongside existing OpenClaw |
-| Chat streaming | SSE via react-native-sse | OpenAI-compatible /v1/chat/completions format, works in Expo managed |
+| Agent integration | MCP server + agent-specific skills | Agent-agnostic — same MCP tools for OpenClaw, Claude Code, or any compatible agent |
+| Agent dispatch | Pluggable adapter interface | OpenClaw adapter (gateway WS/REST), Claude Code adapter (remote triggers/SDK), generic webhook |
+| Containerization | Docker / docker-compose | PocketBase + Node + Vite + MCP server + watchdog in one compose file |
 | Tunnel (phased) | WSS relay → WebRTC P2P → Cloudflare fallback | Phase 1 MVP relay, Phase 2 true P2P via @config-plugins/react-native-webrtc |
 | Broker | Node.js or Go API server | Lightweight signaling service |
 
