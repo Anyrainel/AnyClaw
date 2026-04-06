@@ -260,13 +260,12 @@ interface ActivityEntry {
 
 #### Adapter: Claude Code
 
-- **Dispatch:** Use Claude Code's remote trigger API to start a headless session. The trigger prompt includes the user's request and instructions to use AnyClaw MCP tools.
-- **Clarification:** Claude Code remote triggers don't natively support mid-task Q&A. Two approaches:
-  - **Option A (simpler):** The agent writes clarifying questions to a "task status" file or PocketBase collection. The adapter polls this. When the user answers, the answer is written back, and the agent (which is polling for answers) continues.
-  - **Option B (richer):** Use Claude Code's SDK to spawn a custom agent session with bidirectional communication via stdin/stdout pipes.
-- **Progress:** Poll the remote trigger status endpoint, or read the agent's output file for progress updates.
-- **Cancel:** Stop the remote trigger via API.
-- **Activity log:** Available by reading the agent's output stream.
+- **Dispatch:** Spawn `claude -p` as a subprocess with the user's request as the prompt. MCP server is pre-configured so the agent has access to all AnyClaw tools. Permission mode `--allowedTools` scoped to AnyClaw MCP tools.
+- **Clarification:** Via the `anyclaw_ask_user` MCP tool. The agent calls the tool, which writes the question to PocketBase and polls for the user's answer. The adapter monitors the PocketBase collection for questions to surface to the mobile app.
+- **Progress:** Via `anyclaw_update_progress` MCP tool + monitoring the agent's stdout stream for activity.
+- **Cancel:** Kill the subprocess.
+- **Activity log:** Parse the agent's `--output-format stream-json` stdout.
+- **Future upgrade:** Migrate to `@anthropic-ai/claude-agent-sdk` TypeScript SDK for richer lifecycle control when needed.
 
 #### Adapter: Generic Webhook (extensibility)
 
@@ -407,6 +406,64 @@ The content is the same regardless of format:
 |------|----------------|------|
 | Free (self-hosted) | Mobile app + connection broker + AnyClaw server (Docker image). User provides hardware + LLM API keys. | Free |
 | Cloud-hosted | Everything above, hosted by AnyClaw. One container per user. LLM tokens bundled or BYOK. | Monthly subscription |
+
+## Technical Decisions (Locked)
+
+All open decisions from the subsystem design docs have been resolved. These are binding for implementation.
+
+### Architecture & Agent Integration
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 1 | Concurrent tasks | Single active task + queue. Design with task isolation for future parallelization. | Simplest for MVP, but don't paint ourselves into a corner. |
+| 2 | Clarification timeout | User-configurable: "agent proceeds with best judgment" (default 5 min) OR "pause indefinitely." | Different users have different risk tolerance. |
+| 3 | Claude Code adapter | CLI `-p` mode for MVP. Upgrade to TypeScript SDK later if richer lifecycle control is needed. | Less code, clarification via MCP tool works fine. |
+| 4 | MCP transport | HTTP/SSE from the start. | Cloud-ready from day one. Worth the upfront complexity for long-term flexibility. |
+| 5 | MCP tools philosophy | No scaffolding tools (create_page, etc). Agent runs in the coding folder using its built-in tools. MCP tools only for things agents tend to get wrong — deploy, rollback, DB snapshots, ask_user, update_progress. Robustness over convenience. | Agents can create files with high success rate. MCP tools should guard failure-prone operations. |
+| 6 | run_dev commands | Blocklist for MVP, log all commands, tighten to allowlist later. | Ship fast, observe real agent behavior, then lock down. |
+| 7 | Task persistence across restart | Persist task state. Resume where the agent left off after restart. | Worth the complexity — users expect reliability. |
+
+### Container Architecture
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 8 | Container split | **Three containers:** (1) **App server** — serves the agent-built frontend + PocketBase to the mobile WebView. Can be restarted/stopped by user or agent. (2) **Control plane** — health checks, restart API, agent task dispatch API, all static (non-agent-modifiable) endpoints. Always available, even if app server is down. User can always reach their agent. (3) **Sandbox** — command execution for the coding agent with blocklist sandboxing. Isolated so runaway commands can't affect the other containers. | App server must be restartable without losing agent access. Control plane must be rock-solid. Sandbox must be isolated for security. |
+
+### Mobile App
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 9 | Task dispatch UI | Dedicated "Request" tab + full-screen modal/bottom sheet. | Clear, discoverable, avoids WebView z-index conflicts. |
+| 10 | Min Android API | API 28 (Android 9.0). Drops ~5% of devices. | Better WebView, dark mode support, biometric API. |
+| 11 | Offline native shell | Cache-nothing for MVP. Server down = reconnect screen. | Spec already says no offline requirement. |
+| 12 | WebView auth token | JS bridge injection after page load. | Most secure — token never in URL or logs. |
+| 13 | Realtime communication | PocketBase Realtime SSE + REST. SSE for server→client push (progress, questions). REST POST for client→server (answers, commands). PocketBase handles persistence and state automatically. Task state survives app close/reopen — user can resume clarification questions. | Leverages existing PocketBase infra. Less custom code. Built-in persistence. |
+
+### Frontend & Styling
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 14 | CSS framework | Tailwind v4. | Newer CSS-first config. Agents will learn it quickly, and we define conventions in the style guide skill. |
+
+### Connection & Security
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 15 | Domain | `anyclawapp.com` (purchased). Mobile app uses `broker.anyclawapp.com`. | Already bought. |
+| 16 | OAuth providers | Google + Apple + GitHub at launch. | Apple required by App Store. GitHub for developer early-adopter audience. |
+| 17 | WebRTC Phase 2 timing | Launch with WSS relay only. Begin Phase 2 dev after launch. | Ship faster, accept relay costs initially. |
+| 18 | Broker region | US East (iad). Add regions when user distribution justifies it. | Best peering, largest user base. |
+| 19 | Phase 1 E2E encryption | Yes — NaCl box encryption on top of TLS. Broker cannot read relayed traffic even if compromised. | Privacy-maximalist audience expects this. ~200 lines of crypto code, negligible perf impact. |
+
+### Server & Data
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 20 | PocketBase credentials | PocketBase API tokens (not email/password). | More secure for programmatic access. |
+| 21 | API key storage | Encrypted in PocketBase for both self-hosted and cloud. Settings UI can manage keys in both modes. | Consistent experience. Mobile app settings screen works everywhere. |
+| 22 | Cloud hosting | Single VPS with Docker Compose first. Migrate to Fly.io container-per-user later. Need to host OpenClaw alongside AnyClaw. | Start simple, scale when needed. VPS can host both OpenClaw + AnyClaw. |
+| 23 | Dev workspace isolation | Dedicated sandbox container with blocklist rules. Isolated from app server and control plane. | Security + stability. Agent commands can't starve the app server. |
+| 24 | Skill versioning | Independent with compatibility check. Skills declare minimum server version. Server rejects incompatible skills. | Faster iteration on prompts without requiring full server update. |
 
 ## Out of Scope (for now)
 
