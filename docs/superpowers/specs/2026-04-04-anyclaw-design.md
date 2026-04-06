@@ -34,44 +34,41 @@ Both modes produce the same server infrastructure. The difference is whether the
 
 ```
 +---------------------+         +-------------------+         +----------------------+
-|   Mobile App        |         |  Connection       |         |  User's Server       |
-|   (Expo/RN)         | <-----> |  Broker           | <-----> |  (Self-hosted or     |
-|                     |  auth   |  (Cloud)          |  signal |   Cloud-hosted)      |
+|   Mobile App        |         |  Connection       |         |  User's Host         |
+|   (Expo/RN)         | <-----> |  Broker           | <-----> |  (one Docker container
+|                     |  auth   |  (Cloud)          |  signal |   or native install) |
 |  +---------------+  |         +-------------------+         |                      |
-|  | Native Shell  |  |                                       |  +----------------+  |
-|  | - Task Card   |  |         encrypted tunnel (direct)     |  | PocketBase     |  |
-|  | - Versions    |  | <----------------------------------> |  | (data, auth,   |  |
-|  | - Settings    |  |                                       |  |  files, RT)    |  |
-|  +---------------+  |                                       |  +----------------+  |
-|  +---------------+  |                                       |                      |
-|  | WebView       |  |         task dispatch (via adapter)   |  +----------------+  |
-|  | (agent-built  |  | - - - - - - - - - - - - - - - - - -> |  | Agent Adapter  |  |
-|  |  React app)   |  |                                       |  | (OC / CC /     |  |
-|  +---------------+  |                                       |  |  webhook)      |  |
-+---------------------+                                       |  +----------------+  |
-                                                              |         |            |
-                                                              |         v            |
-                                                              |  +----------------+  |
-                                                              |  | Coding Agent   |  |
-                                                              |  | (OpenClaw,     |  |
-                                                              |  |  Claude Code,  |  |
-                                                              |  |  or other)     |  |
-                                                              |  +----------------+  |
-                                                              |         |            |
-                                                              |         | uses       |
-                                                              |         v            |
-                                                              |  +----------------+  |
-                                                              |  | AnyClaw MCP    |  |
-                                                              |  | Server         |  |
-                                                              |  +----------------+  |
-                                                              |         |            |
-                                                              |    creates/deploys   |
-                                                              |         v            |
-                                                              |  +----------------+  |
-                                                              |  | Vite + React   |  |
-                                                              |  | + Node.js      |  |
-                                                              |  | (agent-built)  |  |
-                                                              |  +----------------+  |
+|  | Native Shell  |  |                                       |  ┌── supervisord ──┐ |
+|  | - Task Card   |  |       NaCl-encrypted relay (E2E)      |  │                 │ |
+|  | - Versions    |  | <----------------------------------> |  │  Tunnel Manager │ |
+|  | - Settings    |  |                                       |  │  PocketBase     │ |
+|  +---------------+  |                                       |  │  Dispatch/MCP   │ |
+|  +---------------+  |                                       |  │  Logic Service  │ |
+|  | WebView       |  |                                       |  │  Prod Static    │ |
+|  | (agent-built  |  |                                       |  └─────────────────┘ |
+|  |  React app)   |  |                                       |                      |
+|  +---------------+  |                                       |  Transient (per task)|
++---------------------+                                       |  ┌─ cgroup limits ─┐ |
+                                                              |  │                 │ |
+                                                              |  │  Coding Agent   │ |
+                                                              |  │  (Claude Code   │ |
+                                                              |  │   or OpenClaw)  │ |
+                                                              |  │       │         │ |
+                                                              |  │       │ uses    │ |
+                                                              |  │       ▼         │ |
+                                                              |  │  AnyClaw MCP    │ |
+                                                              |  │  (HTTP/SSE)     │ |
+                                                              |  │       │         │ |
+                                                              |  │       ▼         │ |
+                                                              |  │  Vite Dev       │ |
+                                                              |  │  (for testing)  │ |
+                                                              |  └─────────────────┘ |
+                                                              |                      |
+                                                              |  Filesystem:         |
+                                                              |  - dev/ (agent rw)   |
+                                                              |  - prod/ (deployed)  |
+                                                              |  - .anyclaw/ (infra, |
+                                                              |    agent read-only)  |
                                                               +----------------------+
 ```
 
@@ -407,6 +404,82 @@ The content is the same regardless of format:
 | Free (self-hosted) | Mobile app + connection broker + AnyClaw server (Docker image). User provides hardware + LLM API keys. | Free |
 | Cloud-hosted | Everything above, hosted by AnyClaw. One container per user. LLM tokens bundled or BYOK. | Monthly subscription |
 
+## Process Architecture
+
+AnyClaw uses **process supervision** for crash isolation, not container splits. All services run as supervised processes on a single host (or inside a single cloud container). Each process has its own restart policy and crash domain.
+
+```
+Host (or single cloud container)
+│
+├── [supervised, restart=always] PocketBase
+│       Data layer. Rock-solid Go binary. Almost never crashes.
+│
+├── [supervised, restart=always] Tunnel Manager
+│       Persistent WSS connection to broker. Survives all other crashes
+│       so the mobile app never loses contact.
+│
+├── [supervised, restart=always] Dispatch / MCP Server
+│       Task dispatch API + MCP HTTP/SSE endpoint + emergency rollback +
+│       app restart endpoint. Source NOT in agent's writable path.
+│       Always available even when logic service is broken.
+│
+├── [supervised, restart=on-failure] Logic Service
+│       Agent-modifiable Node.js service. Custom API routes, background
+│       jobs. Restart-on-crash. If broken by bad agent code, the user
+│       can still rollback via the dispatch API.
+│
+├── [supervised, restart=always] Prod Static Server
+│       Serves the agent-built React app to the WebView. Could be a
+│       small Express process or PocketBase serving static files.
+│
+├── [transient, no auto-restart] Agent Subprocess
+│       Spawned per task by the dispatch server. Runs claude/openclaw
+│       with cgroup limits (CPU, memory). Crashes = task marked failed.
+│       Reads/writes files in dev directory using its own tools.
+│
+└── [transient, no auto-restart] Vite Dev Server
+        Spawned by the agent for testing during a build. Lives only
+        as long as the build/test cycle. Isolated to dev/ directory.
+```
+
+### Crash Isolation Matrix
+
+| What crashes | What survives | User experience |
+|--------------|---------------|-----------------|
+| Agent subprocess | Everything else | Task marked failed; user retries from app |
+| Logic service (agent code) | PocketBase, tunnel, dispatch, prod static | WebView shows API errors; user rollbacks via version history |
+| Vite dev server | Everything else | Current build fails; deploy doesn't happen |
+| PocketBase | Tunnel, dispatch | ~2s restart; WebView and dispatch retry automatically |
+| Tunnel manager | Everything else | App shows reconnecting; comes back when tunnel restarts |
+| Dispatch/MCP server | PocketBase, tunnel, logic | Task submission temporarily unavailable; restarts in seconds |
+| Whole host | Nothing | App shows reconnecting until user fixes the host |
+
+### Why Not Containers
+
+The earlier three-container design (app server / control plane / sandbox) was overengineered. Key realizations:
+
+- **Coding agents already run commands natively** — Claude Code spawns subprocesses, OpenClaw spawns subprocesses. We don't need a sandbox container; we just need cgroup limits on the agent process.
+- **Process supervision gives the same crash isolation** as containers, with much less complexity. systemd/supervisord/pm2 are battle-tested for this.
+- **The "control plane" is just two persistent processes** (tunnel manager + dispatch server). They don't need their own container — just supervisor entries with `restart=always`.
+- **Agent can't break the dispatch server** because the dispatch server's source files are not in the agent's writable path. The MCP `write_file` tool enforces path checks.
+- **Same model as Replit, Codex, Devin** — multiple processes in one isolated environment, supervised independently.
+
+### The Dispatch Server is the "Control Plane"
+
+The dispatch server is the small, stable process that handles everything the user needs to be able to do **even when their app is broken**:
+
+- `POST /tasks` — submit task
+- `POST /tasks/:id/answer` — answer clarification
+- `POST /tasks/:id/cancel` — cancel a running task
+- `POST /rollback` — emergency rollback (always works)
+- `POST /restart-app` — restart logic service (always works)
+- `GET /versions` — version history
+- `GET /health` — health check
+- `POST /mcp` — MCP HTTP/SSE endpoint for the agent
+- PocketBase Realtime SSE proxy for clarification questions and progress updates
+
+This server is part of the AnyClaw infrastructure, not the dev workspace. The agent never modifies it.
+
 ## Technical Decisions (Locked)
 
 All open decisions from the subsystem design docs have been resolved. These are binding for implementation.
@@ -423,11 +496,11 @@ All open decisions from the subsystem design docs have been resolved. These are 
 | 6 | run_dev commands | Blocklist for MVP, log all commands, tighten to allowlist later. | Ship fast, observe real agent behavior, then lock down. |
 | 7 | Task persistence across restart | Persist task state. Resume where the agent left off after restart. | Worth the complexity — users expect reliability. |
 
-### Container Architecture
+### Process Architecture
 
 | # | Decision | Choice | Rationale |
 |---|----------|--------|-----------|
-| 8 | Container split | **Three containers:** (1) **App server** — serves the agent-built frontend + PocketBase to the mobile WebView. Can be restarted/stopped by user or agent. (2) **Control plane** — health checks, restart API, agent task dispatch API, all static (non-agent-modifiable) endpoints. Always available, even if app server is down. User can always reach their agent. (3) **Sandbox** — command execution for the coding agent with blocklist sandboxing. Isolated so runaway commands can't affect the other containers. | App server must be restartable without losing agent access. Control plane must be rock-solid. Sandbox must be isolated for security. |
+| 8 | Process model | **Process supervision, not container split.** All AnyClaw services run as supervised processes (systemd / supervisord / pm2) with independent restart policies. No separate containers. **Self-hosted:** one Docker container with supervisord, OR native install with systemd. **Cloud-hosted:** one container per user with supervisord inside. **Supervised processes (auto-restart):** PocketBase, tunnel manager, dispatch/MCP server, logic service, prod static server. **Transient processes:** agent subprocess (per task), Vite dev server (per build). The dispatch/MCP server source files are NOT in the agent's writable path — agent cannot break it. cgroup limits on the agent process prevent CPU/RAM starvation. | Same crash isolation as three containers, dramatically simpler. The agent already runs commands natively (it's a coding agent — that's what it does). The container is the multi-tenancy boundary; supervisord is the crash-isolation boundary. Same model used by Replit, Codex sandboxes, and Devin. |
 
 ### Mobile App
 
@@ -461,8 +534,8 @@ All open decisions from the subsystem design docs have been resolved. These are 
 |---|----------|--------|-----------|
 | 20 | PocketBase credentials | PocketBase API tokens (not email/password). | More secure for programmatic access. |
 | 21 | API key storage | Encrypted in PocketBase for both self-hosted and cloud. Settings UI can manage keys in both modes. | Consistent experience. Mobile app settings screen works everywhere. |
-| 22 | Cloud hosting | Single VPS with Docker Compose first. Migrate to Fly.io container-per-user later. Need to host OpenClaw alongside AnyClaw. | Start simple, scale when needed. VPS can host both OpenClaw + AnyClaw. |
-| 23 | Dev workspace isolation | Dedicated sandbox container with blocklist rules. Isolated from app server and control plane. | Security + stability. Agent commands can't starve the app server. |
+| 22 | Cloud hosting | Single VPS with Docker Compose first (one container per user with supervisord). Migrate to E2B microVMs or Kubernetes Agent Sandbox later when scale justifies it. | Start simple, scale when needed. Same container layout as self-hosted. |
+| 23 | Agent execution model | Agent runs natively as a transient subprocess. Uses its own built-in tools for files and shell commands. AnyClaw MCP tools only for things the agent can't do natively (deploy, rollback, snapshot, ask_user, update_progress, create_collection). cgroup limits prevent runaway commands from starving supervised processes. | Coding agents already know how to run commands — that's their job. MCP tools should add value, not duplicate native capability. |
 | 24 | Skill versioning | Independent with compatibility check. Skills declare minimum server version. Server rejects incompatible skills. | Faster iteration on prompts without requiring full server update. |
 
 ## Out of Scope (for now)
