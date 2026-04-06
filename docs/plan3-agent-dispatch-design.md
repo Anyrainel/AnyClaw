@@ -8,29 +8,37 @@
 
 ## 1. Where the Adapter Runs
 
-The adapter runs **on the user's server**, inside the Node.js logic service -- not in the mobile app and not in the broker.
+The adapter runs **on the user's server**, inside the **control plane container** -- not in the mobile app, not in the broker, and not in the app server container.
 
-**Rationale:**
+**Three-container architecture (locked decision):**
 
-- The adapter must be able to reach the coding agent. The agent runs on the same machine (or Docker network) as the server. A server-side adapter can connect to OpenClaw's local gateway on `127.0.0.1:18789` or spawn a Claude Code subprocess directly. A mobile-side adapter would need the tunnel to reach back to the agent, doubling latency and adding failure modes.
-- The adapter manages long-running processes (agent sessions can run for minutes). The server stays online; the mobile app can disconnect and reconnect without losing task state.
+1. **App server container** -- serves the agent-built frontend + PocketBase to the mobile WebView. Can be restarted/stopped by the user or agent.
+2. **Control plane container** -- health checks, restart API, **agent task dispatch API**, all static (non-agent-modifiable) endpoints. Always available, even if the app server is down. The agent dispatch layer lives here.
+3. **Sandbox container** -- command execution environment for the coding agent. The agent (Claude Code, OpenClaw) is spawned from the control plane and executes code in the sandbox via MCP tools.
+
+**Rationale for control plane placement:**
+
+- The adapter must be able to spawn and manage the coding agent. The control plane can reach the sandbox container over the Docker network.
+- The adapter manages long-running processes (agent sessions can run for minutes). The control plane stays online even if the app server restarts; the mobile app can disconnect and reconnect without losing task state.
+- Placing the adapter in the control plane (not the app server) means the user can always reach their agent and submit tasks, even if the app server is down or being redeployed by the agent.
 - The broker is a thin signaling relay. Putting dispatch logic there would make it stateful, expensive, and a single point of failure.
 
 **Communication path:**
 
 ```
-Mobile App  --[WSS tunnel]--> AnyClaw Server (Node.js logic service)
+Mobile App  --[WSS tunnel]--> Control Plane Container
                                   |
                                   +--> AdapterManager (picks the right adapter)
                                   |        |
                                   |        +--> OpenClawAdapter --[WS]--> OpenClaw Gateway :18789
                                   |        +--> ClaudeCodeAdapter --[subprocess]--> claude CLI
+                                  |        |      (spawned in sandbox container)
                                   |        +--> WebhookAdapter --[HTTP]--> user-configured URL
                                   |
-                                  +--> PocketBase (task state persistence)
+                                  +--> PocketBase (task state persistence, in app server container)
 ```
 
-The mobile app talks to the logic service over the existing WSS tunnel (established via the broker). The logic service exposes a task dispatch API (REST + realtime SSE via PocketBase). The adapter translates between AnyClaw's task protocol and the specific agent's protocol.
+The mobile app talks to the control plane over the existing WSS tunnel (established via the broker). The control plane exposes a task dispatch API (REST + realtime SSE via PocketBase). PocketBase runs in the app server container; the control plane connects to it over the Docker network. The adapter translates between AnyClaw's task protocol and the specific agent's protocol.
 
 ---
 
@@ -510,29 +518,30 @@ This design means clarification works identically for every adapter: the `anycla
 
 ## 4. Claude Code Adapter
 
-### 4.1 Approach: Agent SDK (TypeScript)
+### 4.1 Approach: CLI `-p` Mode (Locked Decision)
 
-Claude Code provides a TypeScript SDK (`@anthropic-ai/claude-agent-sdk`) that spawns the `claude` CLI as a subprocess and communicates over stdin/stdout via JSON lines. This gives us full lifecycle control: start, stream progress, inject follow-up messages, and cancel.
+The Claude Code adapter uses the CLI's `-p` (print) mode for MVP. This spawns `claude -p` as a subprocess with the user's request as the prompt. The process runs to completion and exits.
 
-**Why the SDK over CLI `-p` mode:** The `-p` flag runs a single prompt to completion and exits. It does not support mid-task interaction (answering clarifying questions). The SDK's `query()` function returns an async generator that streams events, and accepts `AsyncIterable<SDKUserMessage>` as prompt input, enabling multi-turn interaction within a single session.
+**Why CLI `-p` over the TypeScript SDK:** The `-p` flag is simpler to implement and debug. All clarification goes through the `anyclaw_ask_user` MCP tool (which blocks inside the MCP server, not in the adapter), so the SDK's multi-turn `AsyncIterable<SDKUserMessage>` capability is not needed. The adapter's job is to spawn, monitor, and kill a subprocess. Upgrade to the TypeScript SDK (`@anthropic-ai/claude-agent-sdk`) later if richer lifecycle control is needed (e.g., user wants to steer the agent mid-task beyond answering questions).
+
+**Subprocess execution model:** The control plane spawns the `claude` CLI process, but the agent executes its file operations and shell commands inside the **sandbox container** via MCP tools. The control plane does NOT give the claude process direct access to the app server filesystem. The MCP tools (`anyclaw_read_file`, `anyclaw_write_file`, `anyclaw_run_dev`) proxy all operations into the sandbox.
 
 ### 4.2 Implementation
 
 ```typescript
-import { query, type Query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { spawn, ChildProcess } from "child_process";
 
 class ClaudeCodeAdapter implements AgentAdapter {
   readonly name = "Claude Code";
-  private activeSessions = new Map<string, {
-    query: Query;
-    controller: AbortController;
-    inputStream: AsyncPushStream<SDKUserMessage>;
+  private activeProcesses = new Map<string, {
+    proc: ChildProcess;
     status: TaskStatus;
+    sessionId?: string;  // Claude Code session ID for resume
   }>();
 
   constructor(private config: {
-    /** Path to claude binary, or undefined to use the SDK's built-in. */
-    executablePath?: string;
+    /** Path to claude binary. Default: "claude" (from PATH). */
+    executablePath: string;
     /** Model override, e.g. "claude-sonnet-4-20250514". */
     model?: string;
     /** Max budget per task in USD. Default: 5.00 */
@@ -541,21 +550,14 @@ class ClaudeCodeAdapter implements AgentAdapter {
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {
     try {
-      // Spawn a minimal query to verify the agent is reachable
-      const q = query({
-        prompt: "Reply with OK",
-        options: {
-          maxTurns: 1,
-          permissionMode: "plan",  // no tool execution
-          abortController: AbortController.timeout(8_000)
-        }
-      });
-      for await (const msg of q) {
-        if (msg.type === "result") {
-          return { ok: true };
-        }
-      }
-      return { ok: false, detail: "No result received" };
+      const proc = spawn(this.config.executablePath, [
+        "-p", "Reply with OK",
+        "--max-turns", "1",
+        "--output-format", "json"
+      ], { timeout: 10_000 });
+
+      const result = await collectStdout(proc);
+      return { ok: result.includes("OK") };
     } catch (err) {
       return { ok: false, detail: String(err) };
     }
@@ -567,78 +569,57 @@ class ClaudeCodeAdapter implements AgentAdapter {
     systemContext: SystemContext,
     signal: AbortSignal
   ): Promise<TaskHandle> {
-    const controller = new AbortController();
-    // Link external signal to our controller
-    signal.addEventListener("abort", () => controller.abort(signal.reason));
+    const args = [
+      "-p", request,
+      "--output-format", "stream-json",
+      "--mcp-config", systemContext.mcpConfigPath,
+      "--allowedTools", systemContext.allowedTools.join(","),
+      "--max-budget", String(this.config.maxBudgetUsd),
+    ];
 
-    // Create a push-based input stream for multi-turn interaction
-    const inputStream = new AsyncPushStream<SDKUserMessage>();
+    if (this.config.model) {
+      args.push("--model", this.config.model);
+    }
 
-    // Push the initial user request
-    inputStream.push({
-      type: "user",
-      content: request
-    });
+    // Retrieve API key from PocketBase (encrypted storage)
+    const apiKey = await this.getApiKey();
 
-    const q = query({
-      prompt: inputStream,
-      options: {
-        cwd: systemContext.cwd,
-        abortController: controller,
-        permissionMode: "acceptEdits",
-        allowedTools: [
-          ...systemContext.allowedTools,
-          "Read", "Edit", "Write", "Bash", "Glob", "Grep"
-        ],
-        mcpServers: {
-          anyclaw: {
-            type: "stdio",
-            command: "node",
-            args: [systemContext.mcpConfigPath],
-            env: { ANYCLAW_TASK_ID: taskId }
-          }
-        },
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append: systemContext.systemPrompt
-        },
-        maxBudgetUsd: this.config.maxBudgetUsd,
-        model: this.config.model,
-        pathToClaudeCodeExecutable: this.config.executablePath,
-        settingSources: ["project"],  // load CLAUDE.md
-      }
+    const proc = spawn(this.config.executablePath, args, {
+      cwd: systemContext.cwd,
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: apiKey,
+        ANYCLAW_TASK_ID: taskId,
+      },
+      signal
     });
 
     const session = {
-      query: q,
-      controller,
-      inputStream,
+      proc,
       status: {
         state: "working" as TaskState,
         seq: 0,
         updatedAt: new Date().toISOString()
-      }
+      } as TaskStatus,
+      sessionId: undefined as string | undefined
     };
-    this.activeSessions.set(taskId, session);
+    this.activeProcesses.set(taskId, session);
 
-    // Start consuming the query stream in the background
-    this.consumeStream(taskId);
+    // Parse the stream-json stdout in the background
+    this.consumeOutputStream(taskId);
 
     return { taskId, adapterRef: taskId };
   }
 
   async *subscribe(handle: TaskHandle, signal: AbortSignal): AsyncIterable<TaskStatus> {
-    const session = this.activeSessions.get(handle.taskId);
+    const session = this.activeProcesses.get(handle.taskId);
     if (!session) throw new AdapterError("Task not found", "TASK_NOT_FOUND", false);
 
     const statusQueue = new AsyncQueue<TaskStatus>();
-    // Yield current status immediately
     statusQueue.push(session.status);
 
-    // Watch for changes
     const watcher = setInterval(() => {
-      const s = this.activeSessions.get(handle.taskId);
+      const s = this.activeProcesses.get(handle.taskId);
       if (s && s.status.seq > (statusQueue.lastSeq ?? -1)) {
         statusQueue.push(s.status);
         if (isTerminal(s.status.state)) {
@@ -659,48 +640,57 @@ class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   async answerQuestion(handle: TaskHandle, answer: string): Promise<void> {
-    const session = this.activeSessions.get(handle.taskId);
-    if (!session) throw new AdapterError("Task not found", "TASK_NOT_FOUND", false);
-
-    // Push the user's answer into the input stream.
-    // The SDK will deliver it to the running claude subprocess.
-    session.inputStream.push({
-      type: "user",
-      content: answer
-    });
+    // In CLI -p mode, clarification is handled entirely by the
+    // anyclaw_ask_user MCP tool. The adapter does not need to inject
+    // messages into the subprocess. The MCP tool writes the question
+    // to PocketBase, the mobile app writes the answer back, and the
+    // MCP tool picks it up via PocketBase realtime subscription.
+    // No adapter-specific action needed.
   }
 
   async cancel(handle: TaskHandle): Promise<void> {
-    const session = this.activeSessions.get(handle.taskId);
-    if (!session) return;
-    session.controller.abort();
-    session.query.close();
+    const session = this.activeProcesses.get(handle.taskId);
+    if (!session || session.proc.killed) return;
+    session.proc.kill("SIGTERM");
+    setTimeout(() => {
+      if (!session.proc.killed) session.proc.kill("SIGKILL");
+    }, 5000);
   }
 
   async dispose(): Promise<void> {
-    for (const [, session] of this.activeSessions) {
-      session.controller.abort();
-      session.query.close();
+    for (const [, session] of this.activeProcesses) {
+      if (!session.proc.killed) session.proc.kill("SIGTERM");
     }
-    this.activeSessions.clear();
+    this.activeProcesses.clear();
   }
 
   // --- Internal ---
 
-  private async consumeStream(taskId: string): Promise<void> {
-    const session = this.activeSessions.get(taskId);
+  private async consumeOutputStream(taskId: string): Promise<void> {
+    const session = this.activeProcesses.get(taskId);
     if (!session) return;
 
+    const rl = createReadlineInterface(session.proc.stdout!);
+
     try {
-      for await (const message of session.query) {
-        this.updateStatusFromMessage(taskId, message);
+      for await (const line of rl) {
+        const event = JSON.parse(line);
+        this.updateStatusFromStreamEvent(taskId, event);
+
+        // Capture session ID for resume capability
+        if (event.type === "system" && event.session_id) {
+          session.sessionId = event.session_id;
+          // Persist session ID to PocketBase for resume after restart
+          await this.persistSessionId(taskId, event.session_id);
+        }
       }
-      // Stream completed normally -- mark done if not already terminal
+
+      // Process exited -- check exit code
+      const exitCode = await waitForExit(session.proc);
       if (!isTerminal(session.status.state)) {
-        session.status = {
-          state: "done", seq: ++session.status.seq,
-          updatedAt: new Date().toISOString()
-        };
+        session.status = exitCode === 0
+          ? { state: "done", seq: ++session.status.seq, updatedAt: new Date().toISOString() }
+          : { state: "failed", error: `claude exited with code ${exitCode}`, seq: ++session.status.seq, updatedAt: new Date().toISOString() };
       }
     } catch (err) {
       session.status = {
@@ -710,20 +700,22 @@ class ClaudeCodeAdapter implements AgentAdapter {
         updatedAt: new Date().toISOString()
       };
     } finally {
+      // Persist final state to PocketBase
+      await this.persistTaskState(taskId, session.status);
       // Clean up after terminal state, but keep status accessible for 5 min
-      setTimeout(() => this.activeSessions.delete(taskId), 5 * 60 * 1000);
+      setTimeout(() => this.activeProcesses.delete(taskId), 5 * 60 * 1000);
     }
   }
 
-  private updateStatusFromMessage(taskId: string, msg: SDKMessage): void {
-    const session = this.activeSessions.get(taskId);
+  private updateStatusFromStreamEvent(taskId: string, event: any): void {
+    const session = this.activeProcesses.get(taskId);
     if (!session) return;
     const now = new Date().toISOString();
     const seq = ++session.status.seq;
 
-    // Detect MCP tool calls by inspecting the message stream
-    if (msg.type === "assistant" && msg.message?.content) {
-      for (const block of msg.message.content) {
+    // Detect MCP tool calls in the stream-json output
+    if (event.type === "assistant" && event.message?.content) {
+      for (const block of event.message.content) {
         if (block.type === "tool_use") {
           if (block.name === "anyclaw_ask_user") {
             session.status = {
@@ -753,32 +745,102 @@ class ClaudeCodeAdapter implements AgentAdapter {
       }
     }
 
-    if (msg.type === "result") {
+    if (event.type === "result") {
       session.status = {
         state: "done",
-        versionDescription: msg.result,
+        versionDescription: event.result,
         seq, updatedAt: now
       };
     }
+  }
+
+  /**
+   * Resume a task after server restart.
+   * Uses Claude Code's --resume flag with the persisted session ID.
+   */
+  async resumeTask(
+    taskId: string,
+    sessionId: string,
+    systemContext: SystemContext,
+    signal: AbortSignal
+  ): Promise<TaskHandle> {
+    const apiKey = await this.getApiKey();
+
+    const args = [
+      "-p", "--resume", sessionId,
+      "--output-format", "stream-json",
+      "--mcp-config", systemContext.mcpConfigPath,
+      "--allowedTools", systemContext.allowedTools.join(","),
+    ];
+
+    const proc = spawn(this.config.executablePath, args, {
+      cwd: systemContext.cwd,
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: apiKey,
+        ANYCLAW_TASK_ID: taskId,
+      },
+      signal
+    });
+
+    const session = {
+      proc,
+      status: {
+        state: "working" as TaskState,
+        progressSummary: "Resuming after restart...",
+        seq: 0,
+        updatedAt: new Date().toISOString()
+      } as TaskStatus,
+      sessionId
+    };
+    this.activeProcesses.set(taskId, session);
+    this.consumeOutputStream(taskId);
+
+    return { taskId, adapterRef: taskId };
+  }
+
+  private async getApiKey(): Promise<string> {
+    // Retrieve encrypted API key from PocketBase settings collection
+    const pb = getPocketBase();
+    const settings = await pb.collection("settings").getFirstListItem("");
+    return decrypt(settings.claudeCodeConfig.apiKey);
+  }
+
+  private async persistSessionId(taskId: string, sessionId: string): Promise<void> {
+    const pb = getPocketBase();
+    await pb.collection("tasks").update(taskId, { sessionId });
+  }
+
+  private async persistTaskState(taskId: string, status: TaskStatus): Promise<void> {
+    const pb = getPocketBase();
+    await pb.collection("tasks").update(taskId, {
+      state: status.state,
+      progressSummary: status.progressSummary,
+      versionDescription: status.versionDescription,
+      error: status.error,
+      seq: status.seq,
+    });
   }
 }
 ```
 
 ### 4.3 Key Design Decisions for Claude Code
 
-**Multi-turn via `AsyncIterable<SDKUserMessage>` prompt.** The SDK's `query()` accepts an async iterable as the prompt parameter. We create an `AsyncPushStream` -- a simple async iterable backed by a queue -- and push the initial request. When the user answers a clarifying question, we push the answer into the same stream. The SDK delivers it to the running subprocess as a follow-up user message. This avoids the polling-via-PocketBase approach (Option A from the spec) and uses a direct in-process channel instead.
+**CLI `-p` mode (locked decision).** The adapter spawns `claude -p <request>` as a subprocess with `--output-format stream-json` for progress tracking. This is simpler than the TypeScript SDK and sufficient for MVP because all clarification is handled by the `anyclaw_ask_user` MCP tool (blocking inside the MCP server process, not the adapter).
 
-**Permission mode: `acceptEdits`.** The adapter pre-approves file reads/writes and the AnyClaw MCP tools. Bash commands that match the allowed patterns run without prompting. This enables fully non-interactive execution.
+**Sandbox execution.** The `claude` process is spawned from the control plane but its file operations and shell commands execute in the sandbox container via MCP tools. The `cwd` in `SystemContext` points to the sandbox workspace mount.
 
-**Budget cap: `maxBudgetUsd`.** Prevents runaway token spend. Default $5 per task.
+**Budget cap: `maxBudgetUsd`.** Passed via `--max-budget`. Prevents runaway token spend. Default $5 per task.
 
-**MCP server injection.** The adapter passes the AnyClaw MCP server config directly via `mcpServers` in the SDK options. The SDK loads it automatically -- no need to write `.mcp.json` to disk.
+**MCP server injection.** The adapter passes `--mcp-config` pointing to the AnyClaw MCP server configuration. The MCP tools are pre-listed in `--allowedTools` so the agent can call them without permission prompts.
 
-**Session persistence.** Set `persistSession: true` (the default). This lets us resume a task if the server restarts mid-execution, using `resume: sessionId`.
+**Task state persistence and resume (locked decision).** The adapter persists the Claude Code session ID to PocketBase as soon as it appears in the stream-json output. On server restart, the AdapterManager queries PocketBase for any tasks in a non-terminal state and calls `resumeTask()` with the persisted session ID. Claude Code's `--resume <sessionId>` flag restores the agent's conversation context and continues where it left off. See Section 6.5 for the full resume protocol.
+
+**API key from PocketBase (locked decision).** The `ANTHROPIC_API_KEY` is stored encrypted in PocketBase (not in environment variables). The adapter decrypts it at dispatch time and passes it to the subprocess environment. This enables the mobile app settings screen to manage keys consistently across self-hosted and cloud deployments.
 
 ### 4.4 Authentication
 
-For server-side (headless) usage, Claude Code authenticates via the `ANTHROPIC_API_KEY` environment variable. No browser OAuth flow is needed. The user configures this key during AnyClaw setup.
+Claude Code authenticates via the `ANTHROPIC_API_KEY` environment variable, which the adapter injects into the subprocess from the encrypted PocketBase store. No browser OAuth flow is needed. The user configures this key through the mobile app settings screen or during initial AnyClaw setup.
 
 ---
 
@@ -957,8 +1019,12 @@ const askUserTool = tool(
       answer: null
     });
 
-    // Wait for the answer (with timeout)
-    const answer = await waitForAnswer(pb, record.id, 300_000); // 5 min timeout
+    // Wait for the answer (with user-configurable timeout behavior)
+    const settings = await pb.collection("settings").getFirstListItem("");
+    const timeoutMode = settings.dispatch?.clarificationTimeoutMode ?? "best_judgment";
+    const timeoutMs = settings.dispatch?.clarificationTimeoutMs ?? 300_000; // default 5 min
+
+    const answer = await waitForAnswer(pb, record.id, taskId, timeoutMs, timeoutMode);
 
     return {
       content: [{ type: "text", text: answer }]
@@ -969,19 +1035,26 @@ const askUserTool = tool(
 async function waitForAnswer(
   pb: PocketBase,
   clarificationId: string,
-  timeoutMs: number
+  taskId: string,
+  timeoutMs: number,
+  timeoutMode: "best_judgment" | "pause_indefinitely"
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      unsubscribe();
-      reject(new Error("User did not respond within timeout"));
-    }, timeoutMs);
+    // User-configurable timeout behavior (locked decision):
+    // - "best_judgment": after timeoutMs (default 5 min), tell the agent to proceed
+    // - "pause_indefinitely": no timeout, wait forever for user response
+    const timer = timeoutMode === "pause_indefinitely"
+      ? null  // no timer -- wait indefinitely
+      : setTimeout(() => {
+          unsubscribe();
+          resolve("The user is unavailable. Use your best judgment and proceed.");
+        }, timeoutMs);
 
     // PocketBase realtime subscription
     const unsubscribe = pb.collection("task_clarifications")
       .subscribe(clarificationId, (event) => {
         if (event.action === "update" && event.record.status === "answered") {
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
           unsubscribe();
           resolve(event.record.answer);
         }
@@ -1025,15 +1098,23 @@ Agent receives the answer and continues its reasoning loop
 ```typescript
 // Collection: tasks
 {
-  id: string;          // PocketBase auto-ID
-  taskId: string;      // AnyClaw UUID (indexed, unique)
-  request: string;     // original user request
+  id: string;              // PocketBase auto-ID
+  taskId: string;          // AnyClaw UUID (indexed, unique)
+  request: string;         // original user request
   state: TaskState;
+  adapterType: string;     // "openclaw" | "claude-code" | "webhook"
   adapterRef: string;
   progressSummary?: string;
   versionDescription?: string;
   error?: string;
   seq: number;
+
+  // --- Resume state (locked decision: persist for restart recovery) ---
+  sessionId?: string;      // Agent session ID for resume (Claude Code: session ID, OpenClaw: run ID)
+  systemContext: string;    // JSON-serialized SystemContext used at dispatch time
+  conversationHistory?: string;  // JSON-serialized array of clarification Q&A pairs completed so far
+  lastCheckpoint?: string; // Adapter-specific checkpoint data (e.g., last tool call completed)
+
   createdAt: string;
   updatedAt: string;
 }
@@ -1041,7 +1122,7 @@ Agent receives the answer and continues its reasoning loop
 // Collection: task_clarifications
 {
   id: string;
-  taskId: string;      // relation to tasks.taskId
+  taskId: string;          // relation to tasks.taskId
   question: string;
   answer?: string;
   status: "pending" | "answered";
@@ -1058,9 +1139,142 @@ Agent receives the answer and continues its reasoning loop
   seq: number;
   createdAt: string;
 }
+
+// Collection: task_queue
+// Single active task + queue (locked decision).
+// New tasks go to "queued" state. AdapterManager dequeues the next
+// task when the active one reaches a terminal state.
+{
+  id: string;
+  taskId: string;          // relation to tasks.taskId
+  priority: number;        // lower = higher priority, default 0
+  position: number;        // queue order (auto-increment)
+  createdAt: string;
+}
 ```
 
-The mobile app subscribes to PocketBase realtime on the `tasks` collection (filtered by `taskId`) to get live status updates. This works through the existing WSS tunnel without any additional protocol.
+The mobile app subscribes to PocketBase realtime on the `tasks` collection (filtered by `taskId`) to get live status updates. PocketBase Realtime SSE + REST is the sole communication mechanism between the server and mobile app (locked decision). SSE for server-to-client push (progress, questions). REST POST for client-to-server (answers, commands). Task state survives app close/reopen -- the user can resume clarification questions.
+
+### 6.5 Task Persistence and Resume After Restart
+
+**Locked decision:** Task state is persisted to PocketBase with enough context to resume after a server restart.
+
+#### What Gets Persisted
+
+For each active task, the adapter persists to PocketBase:
+
+1. **Task request** -- the original user request text (already stored at dispatch time).
+2. **System context** -- the `SystemContext` used at dispatch time (cwd, MCP config path, system prompt, allowed tools). Serialized as JSON.
+3. **Session ID** -- the agent's session identifier. For Claude Code, this is the session ID from the `--output-format stream-json` output. For OpenClaw, this is the gateway run ID. For webhooks, this is the external task ID.
+4. **Conversation history** -- all completed clarification Q&A pairs. Stored as a JSON array of `{ question, answer }` objects.
+5. **Last checkpoint** -- adapter-specific data about where the agent was. For Claude Code, the session ID is sufficient (Claude Code maintains its own conversation state on disk). For OpenClaw, the gateway maintains session state server-side.
+
+#### Resume Protocol on Startup
+
+When the control plane starts (or restarts), the AdapterManager runs this sequence:
+
+```typescript
+class AdapterManager {
+  async onStartup(): Promise<void> {
+    const pb = getPocketBase();
+
+    // Find all tasks that were in a non-terminal state when the server stopped
+    const activeTasks = await pb.collection("tasks").getFullList({
+      filter: 'state != "done" && state != "failed" && state != "cancelled"'
+    });
+
+    for (const task of activeTasks) {
+      if (task.state === "queued") {
+        // Re-queue: these never started, just re-add to the queue
+        continue;
+      }
+
+      if (task.state === "clarifying") {
+        // Was waiting for user input. Check if answer arrived while server was down.
+        const pending = await pb.collection("task_clarifications").getFullList({
+          filter: `taskId = "${task.taskId}" && status = "pending"`
+        });
+        if (pending.length === 0) {
+          // No pending questions -- answer was provided. Resume the agent.
+          await this.resumeTask(task);
+        } else {
+          // Still waiting for user. Re-publish the question via SSE.
+          // The mobile app will show it again when it reconnects.
+          // No agent resume needed yet.
+        }
+        continue;
+      }
+
+      // state === "working" or "deploying"
+      // Attempt to resume the agent session.
+      if (task.sessionId) {
+        try {
+          await this.resumeTask(task);
+        } catch (err) {
+          // Resume failed -- mark as failed so user can retry
+          await pb.collection("tasks").update(task.id, {
+            state: "failed",
+            error: `Failed to resume after restart: ${err}`
+          });
+        }
+      } else {
+        // No session ID -- cannot resume. Mark as failed.
+        await pb.collection("tasks").update(task.id, {
+          state: "failed",
+          error: "Server restarted and task could not be resumed (no session ID)."
+        });
+      }
+    }
+
+    // Start processing the queue
+    this.processQueue();
+  }
+
+  private async resumeTask(task: TaskRecord): Promise<void> {
+    const systemContext: SystemContext = JSON.parse(task.systemContext);
+
+    switch (task.adapterType) {
+      case "claude-code": {
+        const adapter = this.adapter as ClaudeCodeAdapter;
+        await adapter.resumeTask(
+          task.taskId,
+          task.sessionId!,
+          systemContext,
+          this.createSignal(task.taskId)
+        );
+        break;
+      }
+      case "openclaw": {
+        // OpenClaw gateway maintains session state server-side.
+        // Reconnect to the gateway and re-subscribe to the existing run.
+        const adapter = this.adapter as OpenClawAdapter;
+        await adapter.reconnectToRun(task.taskId, task.sessionId!);
+        break;
+      }
+      case "webhook": {
+        // Webhook agents manage their own state. POST a resume signal.
+        const adapter = this.adapter as WebhookAdapter;
+        await adapter.notifyResume(task.taskId);
+        break;
+      }
+    }
+  }
+}
+```
+
+#### Resume Behavior Per Adapter
+
+| Adapter | Resume mechanism | What the agent sees |
+|---------|-----------------|---------------------|
+| **Claude Code** | `claude -p --resume <sessionId>`. Claude Code restores conversation context from its local session storage (in the sandbox container's filesystem). | Agent continues from where it left off. If it was mid-tool-call, the tool result may be lost and the agent retries the tool call. |
+| **OpenClaw** | Reconnect WebSocket to gateway, re-subscribe to `sessions.subscribe({ runId })`. Gateway keeps session state in memory/DB. | If the gateway also restarted, the session may be gone. Fall back to re-dispatching the original request with conversation history prepended. |
+| **Webhook** | POST to dispatch URL with `{ taskId, action: "resume" }`. | External agent is responsible for its own resume logic. |
+
+#### Edge Cases
+
+- **Resume fails:** Mark the task as `failed` with an explanatory error. The user can retry from the mobile app, which re-dispatches the original request.
+- **Agent was mid-deployment:** The `anyclaw_deploy` MCP tool is idempotent. If the agent resumes and calls deploy again, it re-runs validation and promotion. No double-deploy risk.
+- **Answer arrived during downtime:** The clarification answer is in PocketBase. On resume, the `anyclaw_ask_user` MCP tool will find the answered record immediately and return it to the agent without blocking.
 
 ### 6.4 Push Notifications for Clarification
 
@@ -1140,26 +1354,34 @@ The user configures which adapter to use during AnyClaw setup. The configuration
 {
   activeAdapter: "openclaw" | "claude-code" | "webhook";
   openclawConfig?: {
-    gatewayUrl: string;        // default "ws://127.0.0.1:18789"
-    gatewayToken: string;      // OPENCLAW_GATEWAY_TOKEN
-    workspace: string;         // workspace name
+    gatewayUrl: string;            // default "ws://127.0.0.1:18789"
+    gatewayToken: string;          // OPENCLAW_GATEWAY_TOKEN -- encrypted at rest in PocketBase
+    workspace: string;             // workspace name
   };
   claudeCodeConfig?: {
-    executablePath?: string;   // path to claude binary
-    model?: string;            // model override
-    maxBudgetUsd: number;      // default 5.00
-    apiKey: string;            // ANTHROPIC_API_KEY (encrypted at rest)
+    executablePath?: string;       // path to claude binary
+    model?: string;                // model override
+    maxBudgetUsd: number;          // default 5.00
+    apiKey: string;                // ANTHROPIC_API_KEY -- encrypted at rest in PocketBase
   };
   webhookConfig?: {
-    dispatchUrl: string;       // POST URL for task dispatch
-    callbackBaseUrl: string;   // base URL the agent will POST back to
-    authHeader?: string;       // optional auth header value
+    dispatchUrl: string;           // POST URL for task dispatch
+    callbackBaseUrl: string;       // base URL the agent will POST back to
+    authHeader?: string;           // optional auth header value -- encrypted at rest
   };
   dispatch: {
-    maxTaskDurationMs: number; // default 900000 (15 min)
-    stallTimeoutMs: number;    // default 120000 (2 min)
+    maxTaskDurationMs: number;     // default 900000 (15 min)
+    stallTimeoutMs: number;        // default 120000 (2 min)
+    clarificationTimeoutMode: "best_judgment" | "pause_indefinitely";  // default: "best_judgment"
+    clarificationTimeoutMs: number;  // default 300000 (5 min), only used in "best_judgment" mode
   };
 }
+
+// NOTE (locked decision): All API keys and tokens are stored encrypted in PocketBase,
+// not in environment variables. This applies to both self-hosted and cloud deployments.
+// The mobile app settings screen can manage keys in both modes via the REST API.
+// Encryption uses application-level AES-256-GCM. The encryption key is derived from
+// the PocketBase admin password (self-hosted) or a per-tenant secret (cloud).
 ```
 
 The AdapterManager reads this config on startup and instantiates the appropriate adapter:
@@ -1180,17 +1402,22 @@ class AdapterManager {
       case "openclaw":
         return new OpenClawAdapter({
           gatewayUrl: settings.openclawConfig!.gatewayUrl,
-          token: settings.openclawConfig!.gatewayToken,
+          token: decrypt(settings.openclawConfig!.gatewayToken),
           workspace: settings.openclawConfig!.workspace,
         });
       case "claude-code":
         return new ClaudeCodeAdapter({
-          executablePath: settings.claudeCodeConfig?.executablePath,
+          executablePath: settings.claudeCodeConfig?.executablePath ?? "claude",
           model: settings.claudeCodeConfig?.model,
           maxBudgetUsd: settings.claudeCodeConfig?.maxBudgetUsd ?? 5.0,
         });
       case "webhook":
-        return new WebhookAdapter(settings.webhookConfig!);
+        return new WebhookAdapter({
+          ...settings.webhookConfig!,
+          authHeader: settings.webhookConfig?.authHeader
+            ? decrypt(settings.webhookConfig.authHeader)
+            : undefined,
+        });
       default:
         throw new Error(`Unknown adapter: ${settings.activeAdapter}`);
     }
@@ -1299,58 +1526,75 @@ class WebhookAdapter implements AgentAdapter {
 
 ---
 
-## 10. Technical Decisions Needed
+## 10. Technical Decisions (Resolved)
 
-### Decision 1: Concurrent task limit
+All open decisions from the original draft have been resolved per the locked decisions in the main spec. These are binding for implementation.
 
-Should AnyClaw allow multiple tasks to run simultaneously? The spec implies one task at a time (the "task card" UI is singular), but users may want to queue requests.
+| # | Decision | Resolution | Notes |
+|---|----------|-----------|-------|
+| 1 | Concurrent task limit | **Single active task + queue.** Design with task isolation for future parallelization. User can submit while one is running; it queues and starts when the current one finishes. | `task_queue` collection added in Section 6.3. |
+| 2 | Clarification timeout | **User-configurable.** Two modes: (a) "best_judgment" -- agent proceeds after timeout (default 5 min), (b) "pause_indefinitely" -- wait forever for user response. Configured in dispatch settings. | Updated `waitForAnswer()` in Section 6.1 and `dispatch` config in Section 8. |
+| 3 | API key storage | **Encrypted in PocketBase for both self-hosted and cloud.** All API keys (ANTHROPIC_API_KEY, OPENCLAW_GATEWAY_TOKEN, webhook auth headers) are stored with AES-256-GCM encryption. Mobile app settings screen manages keys via REST. No environment variables for secrets. | Updated Section 8 config and adapter constructors. |
+| 4 | Claude Code adapter approach | **CLI `-p` mode for MVP.** Simpler, clarification via MCP tool works fine. Upgrade to TypeScript SDK later if richer lifecycle control is needed. | Section 4 fully rewritten. |
+| 5 | Task persistence across restart | **Persist task state and resume.** Adapter persists session ID, system context, and conversation history to PocketBase. On restart, attempt to resume via adapter-specific mechanism (Claude Code: `--resume`; OpenClaw: reconnect to run; Webhook: POST resume signal). Fall back to marking as failed if resume is not possible. | Section 6.5 added with full resume protocol. |
 
-**Options:**
-- (A) Single task at a time. Queue additional requests. Simplest, lowest cost.
-- (B) Allow N concurrent tasks (N=2-3). Agent may interleave work. Higher complexity.
-- (C) Single task at a time, but allow the user to submit while one is running -- it queues and starts when the current one finishes.
+---
 
-**Recommendation:** Option C. Single active task, with a queue. The UI stays simple but users are not blocked from typing their next idea.
+## New Gaps
 
-### Decision 2: Clarification timeout behavior
+These are new technical questions that emerged from integrating the locked decisions. Each needs resolution before implementation.
 
-When the agent asks a question and the user does not respond, what happens after the timeout?
+### Gap 1: Encryption key management for PocketBase secrets
 
-**Options:**
-- (A) The task fails with "User did not respond."
-- (B) The agent is told "The user is unavailable. Make your best judgment and proceed."
-- (C) The task pauses indefinitely. The agent subprocess/session stays alive until the user returns.
+All API keys are now stored encrypted in PocketBase (locked decision). The encryption key itself needs to come from somewhere.
 
-**Recommendation:** Option B with a configurable timeout (default: 5 minutes). Failing is frustrating; indefinite pausing wastes resources. Letting the agent proceed with its best guess matches how most humans would want this to work.
-
-### Decision 3: API key storage
-
-The Claude Code adapter needs `ANTHROPIC_API_KEY`. The OpenClaw adapter needs `OPENCLAW_GATEWAY_TOKEN`.
+**Question:** Where does the AES-256-GCM encryption key live, and how is it provisioned?
 
 **Options:**
-- (A) Store in PocketBase (encrypted at rest via application-level encryption).
-- (B) Store in environment variables only (set during Docker compose setup).
-- (C) Store in a `.env` file on the server filesystem, outside PocketBase.
+- (A) **Derived from PocketBase admin password** using PBKDF2/scrypt. The admin password is set during setup and stored nowhere else. Pro: no additional secret to manage. Con: changing the admin password requires re-encrypting all secrets; if the admin password is lost, all keys are unrecoverable.
+- (B) **Generated at install time, stored in a file** on the host filesystem (e.g., `/data/anyclaw.key`), mounted into the control plane container. Pro: independent of PocketBase credentials. Con: another file to protect; if the volume is lost, keys are unrecoverable.
+- (C) **Generated at install time, stored as a Docker secret** (or Kubernetes secret for cloud). Pro: standard secret management pattern. Con: Docker secrets are only available in swarm mode; for docker-compose, falls back to a bind-mounted file (same as B).
 
-**Recommendation:** Option B for self-hosted (env vars in docker-compose), Option A for cloud-hosted (PocketBase with encryption, since we manage the container). The mobile app settings screen should be able to update these, which argues for Option A in both cases, but env vars are more secure for self-hosted users who are comfortable with the terminal.
+### Gap 2: Claude Code session storage across containers
 
-### Decision 4: Claude Code SDK vs CLI `-p` mode
+Claude Code's `--resume` relies on session state stored on disk (typically in `~/.claude/`). The `claude` process is spawned from the control plane but may need its session data to persist across container restarts.
 
-The design above uses the TypeScript SDK for the Claude Code adapter, because it supports multi-turn interaction via `AsyncIterable<SDKUserMessage>`. However, if we decide that all clarification goes through the `anyclaw_ask_user` MCP tool (which blocks in the MCP server, not in the adapter), then the simpler CLI `-p` mode would work too.
-
-**Options:**
-- (A) TypeScript SDK with `query()`. Full lifecycle control, multi-turn via input stream. More code.
-- (B) CLI `-p --output-format stream-json`. Simpler. Clarification via MCP tool only. No mid-session follow-up messages. Resume via `--resume`.
-
-**Recommendation:** Start with Option B for MVP. The `anyclaw_ask_user` MCP tool handles clarification regardless of adapter, so the SDK's multi-turn capability is not strictly needed. Upgrade to Option A later if we need richer interaction (e.g., user wants to steer the agent mid-task beyond answering questions).
-
-### Decision 5: Task state persistence across server restarts
-
-If the server restarts while a task is running, what happens?
+**Question:** Where is the Claude Code session directory mounted, and how do we ensure it survives container recreation?
 
 **Options:**
-- (A) Task is lost. User must re-submit. Simple but frustrating.
-- (B) Task state is in PocketBase. On restart, attempt to resume the agent session (Claude Code: `--resume`; OpenClaw: reconnect to gateway with the same workspace).
-- (C) Task state is in PocketBase. On restart, mark any "working" tasks as "failed" with "Server restarted" error. User can retry.
+- (A) **Named Docker volume** mounted at `/home/anyclaw/.claude/` in the control plane container. Survives container recreation. Simple.
+- (B) **Shared volume between control plane and sandbox containers.** The claude process runs in the control plane but its session data is on a volume that both containers can access. Needed if the sandbox needs to read session context.
+- (C) **Don't rely on disk-based resume.** Instead, persist the full conversation as messages in PocketBase and replay them as a new prompt if resume fails. More resilient but higher token cost on resume.
 
-**Recommendation:** Option C for MVP, with Option B as a future enhancement. Resuming agent sessions reliably is complex (the agent's in-memory context may be lost). Marking as failed and letting the user retry is honest and simple.
+### Gap 3: Cross-container process spawning model
+
+The locked architecture says the agent is "spawned from the control plane and executes code in the sandbox container." The exact mechanism needs to be defined.
+
+**Question:** How does the control plane spawn and manage the `claude` CLI process inside (or targeting) the sandbox container?
+
+**Options:**
+- (A) **`claude` runs in the control plane container, sandbox access via MCP tools only.** The claude subprocess lives in the control plane. All file reads/writes and shell commands go through AnyClaw MCP tools that proxy into the sandbox via Docker exec or a thin RPC service. Pro: simple process management. Con: MCP tools must proxy everything; Claude Code's built-in file tools (Read, Write, Bash) would operate on the control plane filesystem, not the sandbox.
+- (B) **`docker exec` into the sandbox container.** The control plane spawns `docker exec sandbox-container claude -p ...`. The claude process runs inside the sandbox with direct filesystem access. Pro: Claude Code's built-in tools work naturally on the sandbox filesystem. Con: control plane needs Docker socket access; process management is indirect.
+- (C) **`claude` runs in the sandbox container as a long-running service.** The control plane communicates with it via HTTP/WebSocket. Pro: clean separation. Con: more infrastructure to maintain; doesn't match the "spawn on demand" model of CLI `-p`.
+
+### Gap 4: Queue processing and task isolation boundaries
+
+The locked decision is "single task + queue with task isolation for future parallelization." The isolation boundaries need definition.
+
+**Question:** What exactly is isolated between tasks, and how does the queue interact with the resume mechanism?
+
+**Options:**
+- (A) **Git branch per task.** Each task works on a separate branch. On completion, merge to the main dev branch. Pro: clean isolation, easy rollback of individual tasks. Con: merge conflicts if tasks touch the same files; agent needs to handle merges.
+- (B) **Sequential execution, shared workspace.** Tasks run one at a time in the same workspace. Isolation is purely temporal -- the next task sees the result of the previous one. Pro: simplest, no merge issues. Con: no isolation if we later add parallelism.
+- (C) **Copy-on-write workspace snapshots.** Before each task, snapshot the workspace (via git stash or filesystem snapshot). On failure, restore. On success, the workspace moves forward. Pro: rollback granularity per task. Con: snapshot overhead.
+
+### Gap 5: OpenClaw gateway session persistence across gateway restarts
+
+The resume protocol assumes the OpenClaw gateway maintains session state. If the gateway also restarts (e.g., as part of a full server restart), the session may be lost.
+
+**Question:** How does the OpenClaw adapter handle gateway restart when a task was in progress?
+
+**Options:**
+- (A) **Replay conversation.** Persist the full conversation (original request + all clarification Q&A) in PocketBase. On gateway restart, re-dispatch the original request with conversation history prepended as context. The agent starts fresh but with full context. Pro: reliable. Con: re-does work the agent already completed; higher token cost.
+- (B) **Gateway-side persistence.** Rely on OpenClaw's gateway to persist sessions to its own database. On reconnect, the gateway restores the session. Pro: no extra work in AnyClaw. Con: depends on OpenClaw gateway capabilities that may not exist yet.
+- (C) **Mark as failed, let user retry.** If the gateway session cannot be recovered, mark the task as failed. The user retries from the mobile app. Pro: simplest, honest. Con: frustrating for long tasks that were nearly done.

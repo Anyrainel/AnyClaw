@@ -16,43 +16,14 @@ The AnyClaw MCP server exposes the AnyClaw infrastructure (PocketBase, Node.js l
 - **Schema validation:** `zod` (v3) for tool input/output schemas, as required by the SDK.
 - **Runtime:** Node.js 18+ with TypeScript (ESM, `NodeNext` module resolution per SDK requirements).
 
-### Transport: Dual Mode
+### Transport: HTTP/SSE Only
 
-The MCP server supports two transports to cover both plugin and standalone deployment modes:
+The MCP server uses HTTP/SSE (Streamable HTTP) as its sole transport. This is a locked decision — no stdio mode.
 
-**stdio (primary, for local agents):**
-Used when the coding agent runs on the same machine as the AnyClaw server. This is the standard integration path for Claude Code, OpenClaw, and other local agents. The agent spawns the MCP server as a child process and communicates over stdin/stdout.
+**Rationale:** The MCP server runs inside the **control plane container**, which is always available even when the app server or sandbox container is down. HTTP/SSE makes the server cloud-ready from day one, works naturally with the three-container architecture (agents connect over the network, not via parent-child process spawning), and avoids the coupling that stdio creates between the agent process and the MCP server lifecycle.
 
 ```typescript
 // src/mcp-server/index.ts
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerAllTools } from "./tools/index.js";
-
-const server = new McpServer(
-  { name: "anyclaw", version: "1.0.0" },
-  {
-    instructions: [
-      "AnyClaw MCP server. All code changes happen in the dev environment only.",
-      "You MUST call anyclaw_deploy to promote changes to production.",
-      "A version description is required for every deployment.",
-      "Use anyclaw_ask_user to clarify requirements before building.",
-      "Use anyclaw_update_progress to keep the user informed.",
-    ].join(" "),
-  }
-);
-
-registerAllTools(server);
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
-```
-
-**Streamable HTTP (secondary, for remote/cloud agents):**
-Used when the agent runs remotely (cloud-hosted AnyClaw, or a remote agent connecting over the network). The MCP server exposes an HTTP endpoint that the agent connects to.
-
-```typescript
-// src/mcp-server/http.ts
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -65,7 +36,15 @@ app.use(express.json());
 app.post("/mcp", async (req, res) => {
   const server = new McpServer(
     { name: "anyclaw", version: "1.0.0" },
-    { instructions: "..." }
+    {
+      instructions: [
+        "AnyClaw MCP server. All code changes happen in the dev environment only.",
+        "You MUST call anyclaw_deploy to promote changes to production.",
+        "A version description is required for every deployment.",
+        "Use anyclaw_ask_user to clarify requirements before building.",
+        "Use anyclaw_update_progress to keep the user informed.",
+      ].join(" "),
+    }
   );
   registerAllTools(server);
 
@@ -81,6 +60,10 @@ app.listen(4100, () => {
 });
 ```
 
+### Container Placement
+
+The MCP server runs in the **control plane container** (container 2 of the three-container architecture). This guarantees the MCP endpoint is always reachable, even if the app server is restarting or the sandbox is recycled. The control plane container also hosts the health check API, restart API, and agent task dispatch API.
+
 ### Agent Registration
 
 **Claude Code:** Add to `.mcp.json` or `~/.claude/mcp_servers.json`:
@@ -88,19 +71,16 @@ app.listen(4100, () => {
 {
   "mcpServers": {
     "anyclaw": {
-      "command": "node",
-      "args": ["<path>/anyclaw-server/packages/mcp-server/dist/index.js"],
-      "env": {
-        "ANYCLAW_PROJECT_ROOT": "<path>/anyclaw-server"
-      }
+      "type": "http",
+      "url": "http://<control-plane-host>:4100/mcp"
     }
   }
 }
 ```
 
-**OpenClaw:** Register via the OpenClaw MCP configuration (same stdio pattern — the agent spawns the process).
+**OpenClaw:** Register via OpenClaw MCP configuration using the HTTP URL.
 
-**Generic agents (HTTP):** Point the agent's MCP client at `http://localhost:4100/mcp`.
+**Generic agents:** Point the agent's MCP client at `http://<control-plane-host>:4100/mcp`.
 
 ---
 
@@ -131,90 +111,22 @@ export const PATHS = {
 
 ---
 
-### 2.1 anyclaw_create_page
+### Tool Philosophy: Robustness Over Convenience
 
-Scaffolds a new React page in the dev frontend with routing.
+Per the locked technical decisions, the MCP server does **not** include scaffolding tools (create_page, create_api_route, create_job). Agents already have high success rates at creating files using their built-in tools (`anyclaw_write_file` or native file operations). MCP tools exist only for operations that agents tend to get wrong or that require infrastructure coordination: deploy, rollback, DB snapshots, PocketBase collection management, ask_user, and update_progress.
 
-```typescript
-server.registerTool(
-  "anyclaw_create_page",
-  {
-    title: "Create Page",
-    description:
-      "Scaffold a new React page component in the dev frontend and register it in the router. " +
-      "Creates the page file in dev/frontend/src/pages/ and adds a route entry in App.tsx.",
-    inputSchema: z.object({
-      name: z.string().describe("PascalCase page component name, e.g. 'MoodTracker'"),
-      route: z.string().describe("URL path for the page, e.g. '/mood-tracker'"),
-      title: z.string().describe("Page title shown in browser tab and navigation"),
-      initialContent: z
-        .string()
-        .optional()
-        .describe("Optional initial JSX content for the page body. If omitted, a placeholder is generated."),
-    }),
-    outputSchema: z.object({
-      filePath: z.string(),
-      route: z.string(),
-    }),
-    annotations: { destructiveHint: false, idempotentHint: false },
-  },
-  async ({ name, route, title, initialContent }) => {
-    // 1. Validate name is PascalCase
-    // 2. Check page doesn't already exist
-    // 3. Write page file to dev/frontend/src/pages/{name}.tsx
-    // 4. Add route entry to dev/frontend/src/App.tsx
-    // Returns the created file path and registered route
-    const filePath = path.join(PATHS.devFrontend, "src/pages", `${name}.tsx`);
-    // ... implementation ...
-    return {
-      content: [{ type: "text", text: `Created page ${name} at route ${route}` }],
-      structuredContent: { filePath, route },
-    };
-  }
-);
-```
+The retained tools are:
+- `anyclaw_deploy` — validation + commit + promote pipeline
+- `anyclaw_rollback` — atomic code + DB revert
+- `anyclaw_snapshot_db` — manual DB backup
+- `anyclaw_list_versions` — deployment history
+- `anyclaw_read_file` / `anyclaw_write_file` — dev workspace file I/O with path guards
+- `anyclaw_run_dev` — sandboxed command execution
+- `anyclaw_ask_user` — clarifying questions to mobile app
+- `anyclaw_update_progress` — progress updates to mobile app
+- `anyclaw_create_collection` — PocketBase collection management (kept because the PocketBase admin API is error-prone for agents)
 
-### 2.2 anyclaw_create_api_route
-
-Adds a new Express endpoint to the Node.js logic service.
-
-```typescript
-server.registerTool(
-  "anyclaw_create_api_route",
-  {
-    title: "Create API Route",
-    description:
-      "Add a new Express route handler to the dev logic service. " +
-      "Creates a route file in dev/logic/src/routes/ and registers it in the route index.",
-    inputSchema: z.object({
-      name: z.string().describe("kebab-case route name, e.g. 'get-mood-entries'"),
-      method: z.enum(["get", "post", "put", "patch", "delete"]).describe("HTTP method"),
-      path: z.string().describe("Express route path, e.g. '/api/mood-entries'"),
-      description: z.string().describe("What this endpoint does — used as a code comment"),
-      handlerCode: z.string().describe(
-        "TypeScript handler function body. Has access to (req, res) and all primitives " +
-        "(getPocketBase, callLLM, fetchUrl, sendNotification). Must call res.json() or res.status()."
-      ),
-    }),
-    outputSchema: z.object({
-      filePath: z.string(),
-      endpoint: z.string(),
-    }),
-  },
-  async ({ name, method, path: routePath, description, handlerCode }) => {
-    // 1. Validate route name and path format
-    // 2. Write route file to dev/logic/src/routes/{name}.ts
-    // 3. Register route in dev/logic/src/routes/index.ts
-    const filePath = path.join(PATHS.devLogic, "src/routes", `${name}.ts`);
-    return {
-      content: [{ type: "text", text: `Created ${method.toUpperCase()} ${routePath}` }],
-      structuredContent: { filePath, endpoint: `${method.toUpperCase()} ${routePath}` },
-    };
-  }
-);
-```
-
-### 2.3 anyclaw_create_collection
+### 2.1 anyclaw_create_collection
 
 Defines a new PocketBase collection (database table) via the PocketBase admin API. The agent never touches PocketBase files directly.
 
@@ -266,43 +178,7 @@ server.registerTool(
 );
 ```
 
-### 2.4 anyclaw_create_job
-
-Registers a background scheduled task in the Node.js logic service.
-
-```typescript
-server.registerTool(
-  "anyclaw_create_job",
-  {
-    title: "Create Background Job",
-    description:
-      "Register a background scheduled task (node-cron) in the dev logic service. " +
-      "Creates a job file in dev/logic/src/jobs/ and registers it in the job index.",
-    inputSchema: z.object({
-      name: z.string().describe("kebab-case job name, e.g. 'daily-news-scout'"),
-      cron: z.string().describe("Cron expression, e.g. '0 8 * * *' for daily at 8am"),
-      description: z.string().describe("What this job does — used as a code comment"),
-      handlerCode: z.string().describe(
-        "TypeScript async function body. Has access to all primitives " +
-        "(getPocketBase, callLLM, fetchUrl, sendNotification). No return value needed."
-      ),
-    }),
-    outputSchema: z.object({
-      filePath: z.string(),
-      schedule: z.string(),
-    }),
-  },
-  async ({ name, cron, description, handlerCode }) => {
-    const filePath = path.join(PATHS.devLogic, "src/jobs", `${name}.ts`);
-    return {
-      content: [{ type: "text", text: `Created job '${name}' scheduled at '${cron}'` }],
-      structuredContent: { filePath, schedule: cron },
-    };
-  }
-);
-```
-
-### 2.5 anyclaw_deploy
+### 2.2 anyclaw_deploy
 
 The most critical tool. Runs the full validation-commit-promote pipeline.
 
@@ -379,7 +255,7 @@ server.registerTool(
 );
 ```
 
-### 2.6 anyclaw_rollback
+### 2.3 anyclaw_rollback
 
 Reverts to a specific version (code + database atomically).
 
@@ -414,7 +290,7 @@ server.registerTool(
 );
 ```
 
-### 2.7 anyclaw_snapshot_db
+### 2.4 anyclaw_snapshot_db
 
 Creates a manual database backup.
 
@@ -445,7 +321,7 @@ server.registerTool(
 );
 ```
 
-### 2.8 anyclaw_list_versions
+### 2.5 anyclaw_list_versions
 
 Shows deployment history with descriptions.
 
@@ -480,7 +356,7 @@ server.registerTool(
 );
 ```
 
-### 2.9 anyclaw_read_file
+### 2.6 anyclaw_read_file
 
 Reads a source file from the dev environment.
 
@@ -523,7 +399,7 @@ server.registerTool(
 );
 ```
 
-### 2.10 anyclaw_write_file
+### 2.7 anyclaw_write_file
 
 Writes a source file in the dev environment.
 
@@ -562,9 +438,9 @@ server.registerTool(
 );
 ```
 
-### 2.11 anyclaw_run_dev
+### 2.8 anyclaw_run_dev
 
-Executes a command in the dev environment for testing/debugging.
+Executes a command in the **sandbox container** (container 3) for testing/debugging. The MCP server (running in the control plane container) sends the command to the sandbox over the internal Docker network. This isolation ensures that runaway commands cannot affect the control plane or app server.
 
 ```typescript
 server.registerTool(
@@ -572,9 +448,10 @@ server.registerTool(
   {
     title: "Run in Dev",
     description:
-      "Execute a shell command in the dev environment. For testing, debugging, and running dev scripts. " +
-      "Commands run with cwd set to the dev workspace root. " +
-      "BLOCKED commands: rm -rf, anything touching prod/, anything touching pocketbase/pb_data/.",
+      "Execute a shell command in the sandbox container's dev environment. For testing, debugging, " +
+      "and running dev scripts. Commands run with cwd set to the dev workspace root. " +
+      "Commands are validated against a blocklist before execution. " +
+      "BLOCKED: rm -rf, anything touching prod/, pocketbase/pb_data/, direct sqlite access, dangerous git ops.",
     inputSchema: z.object({
       command: z.string().describe("Shell command to execute, e.g. 'npm test' or 'npx tsc --noEmit'"),
       timeoutMs: z.number().default(30000).describe("Command timeout in milliseconds (max 120000)"),
@@ -587,9 +464,10 @@ server.registerTool(
   },
   async ({ command, timeoutMs }) => {
     // 1. Validate command against blocklist (see Section 3)
-    // 2. Spawn child process with cwd = dev/, timeout
-    // 3. Capture stdout/stderr
-    // 4. Return exit code and output
+    // 2. Send command to sandbox container via internal API (HTTP POST to sandbox:4200/exec)
+    // 3. Sandbox executes with cwd = dev/, timeout
+    // 4. Capture stdout/stderr from sandbox response
+    // 5. Return exit code and output
     return {
       content: [{ type: "text", text: `Exit code 0\n<stdout>...</stdout>` }],
       structuredContent: { exitCode: 0, stdout: "...", stderr: "" },
@@ -598,7 +476,7 @@ server.registerTool(
 );
 ```
 
-### 2.12 anyclaw_ask_user
+### 2.9 anyclaw_ask_user
 
 Posts a clarifying question to the mobile app and waits for the user's answer. This is the bridge between the agent and the user during task execution.
 
@@ -638,7 +516,7 @@ server.registerTool(
 );
 ```
 
-### 2.13 anyclaw_update_progress
+### 2.10 anyclaw_update_progress
 
 Posts a progress update to the mobile app's task card.
 
@@ -712,7 +590,7 @@ export function assertDevPath(relPath: string): string {
 }
 ```
 
-Applied in: `anyclaw_write_file`, `anyclaw_read_file`, `anyclaw_create_page`, `anyclaw_create_api_route`, `anyclaw_create_job`.
+Applied in: `anyclaw_write_file`, `anyclaw_read_file`.
 
 ### 3.2 PocketBase Admin API Only
 
@@ -729,10 +607,8 @@ let pbAdmin: PocketBase | null = null;
 export async function getPocketBaseAdmin(): Promise<PocketBase> {
   if (!pbAdmin) {
     pbAdmin = new PocketBase(process.env.POCKETBASE_URL ?? "http://127.0.0.1:8090");
-    await pbAdmin.admins.authWithPassword(
-      process.env.PB_ADMIN_EMAIL!,
-      process.env.PB_ADMIN_PASSWORD!
-    );
+    // Use API token auth (not email/password) — more secure for programmatic access
+    pbAdmin.authStore.save(process.env.PB_ADMIN_TOKEN!);
   }
   return pbAdmin;
 }
@@ -742,7 +618,7 @@ The `anyclaw_create_collection` tool uses this client exclusively. The `anyclaw_
 
 ### 3.3 Command Blocklist for anyclaw_run_dev
 
-**Rule:** Shell commands are restricted to prevent the agent from bypassing safety rails.
+**Rule:** Shell commands are validated against a blocklist before being sent to the sandbox container. The blocklist is enforced in the MCP server (control plane) before the command ever reaches the sandbox. This is the MVP approach — all commands are logged, and the blocklist can be tightened to an allowlist later based on observed real agent behavior.
 
 ```typescript
 // src/mcp-server/guards.ts
@@ -753,6 +629,9 @@ const COMMAND_BLOCKLIST = [
   /sqlite3?\s/,                         // direct SQLite CLI access
   /\bgit\s+(push|reset|rebase)\b/,     // dangerous git operations (deploy manager handles git)
   /\bcurl\b.*localhost:8090/,           // direct PocketBase API bypass
+  /\bkill\b/,                           // process management
+  /\bpkill\b/,                          // process management
+  /\bdocker\b/,                         // container escape attempts
 ];
 
 export function assertSafeCommand(command: string): void {
@@ -763,8 +642,12 @@ export function assertSafeCommand(command: string): void {
       );
     }
   }
+  // Log all commands for future allowlist analysis
+  commandLogger.log(command);
 }
 ```
+
+**Execution path:** The MCP server validates the command, then POSTs it to the sandbox container's internal exec API (`sandbox:4200/exec`). The sandbox container runs the command with the dev workspace as cwd and returns stdout/stderr/exitCode. The sandbox is a separate Docker container with limited resources and no network access to PocketBase or the control plane's internal APIs.
 
 ### 3.4 Validation Before Deploy
 
@@ -870,11 +753,13 @@ Mobile app updates task card progress spinner and message
 MCP Server returns { delivered: true } immediately (non-blocking)
 ```
 
-### Why PocketBase Realtime (Not a Separate WebSocket)
+### Why PocketBase Realtime SSE + REST
+
+This is a locked decision. PocketBase Realtime SSE handles server-to-client push (progress updates, clarifying questions), and REST POST handles client-to-server responses (answers, commands). This applies to both `anyclaw_ask_user` and `anyclaw_update_progress`.
 
 1. **Already exists.** PocketBase runs as part of the infrastructure. No additional server to maintain.
 2. **SSE is firewall-friendly.** Works through HTTP proxies, no special port needed.
-3. **Single source of truth.** Messages are persisted in the database. If the mobile app disconnects and reconnects, it can query for missed messages.
+3. **Single source of truth.** Messages are persisted in the database. If the mobile app disconnects and reconnects, it can query for missed messages. Task state survives app close/reopen.
 4. **The mobile app already uses PocketBase** for data fetching. Adding a subscription is a single SDK call:
 
 ```typescript
@@ -895,20 +780,52 @@ pb.collection("_agent_messages").subscribe("*", (event) => {
 
 ### Task ID Propagation
 
-The MCP server receives the `taskId` from the agent adapter layer. When the adapter dispatches a task, it generates a `taskId` and passes it as an environment variable (`ANYCLAW_TASK_ID`) to the MCP server process. All tools that communicate with the mobile app use this task ID to associate messages with the correct task card.
+Since the MCP server uses HTTP/SSE transport (not stdio), the task ID is passed per-request rather than as a process environment variable. The agent adapter includes the `taskId` in the MCP session metadata when establishing the connection. The MCP server extracts it from the session context and makes it available to all tool handlers.
 
 ```typescript
 // src/mcp-server/task-context.ts
-export function getTaskId(): string {
-  const taskId = process.env.ANYCLAW_TASK_ID;
+
+// Task ID is extracted from the MCP session metadata set by the agent adapter.
+// The adapter sets it when creating the StreamableHTTP session.
+const sessionTaskMap = new Map<string, string>();
+
+export function setTaskIdForSession(sessionId: string, taskId: string): void {
+  sessionTaskMap.set(sessionId, taskId);
+}
+
+export function getTaskId(sessionId: string): string {
+  const taskId = sessionTaskMap.get(sessionId);
   if (!taskId) {
     throw new ToolError(
-      "ANYCLAW_TASK_ID not set. The MCP server must be launched with a task context."
+      "No task context for this session. The agent adapter must provide a taskId."
     );
   }
   return taskId;
 }
 ```
+
+### Task State Persistence and Resume
+
+Task state is persisted in PocketBase so that tasks survive MCP server restarts and container recycling. The control plane writes task state transitions (queued, clarifying, working, deploying, done, failed) to a `_tasks` collection. When the MCP server starts, it checks for any task in an incomplete state and resumes it.
+
+```
+Collection: _tasks
+Fields:
+  - taskId       (text, required, unique)  — task identifier
+  - request      (text, required)          — original user request
+  - state        (select: "queued" | "clarifying" | "working" | "deploying" | "done" | "failed", required)
+  - agentType    (text, required)          — which adapter dispatched this task
+  - checkpoint   (json, optional)          — agent-specific resume data (e.g., conversation history, last completed step)
+  - error        (text, optional)          — failure reason if state is "failed"
+  - createdAt    (auto)
+  - updatedAt    (auto)
+```
+
+**Resume flow:**
+1. On startup, the control plane queries `_tasks` for records where `state` is not "done" or "failed".
+2. For each incomplete task, the adapter re-dispatches the agent with the original request and checkpoint data.
+3. The agent uses the checkpoint to skip already-completed work (e.g., if collections were already created, it proceeds to implementation).
+4. If resume fails, the task is marked "failed" with a reason, and the user is notified.
 
 ---
 
@@ -1014,19 +931,15 @@ anyclaw-server/
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── src/
-│   │       ├── index.ts               # stdio entrypoint
-│   │       ├── http.ts                # Streamable HTTP entrypoint
+│   │       ├── index.ts               # HTTP/SSE entrypoint (sole transport)
 │   │       ├── env.ts                 # Project paths and config
-│   │       ├── task-context.ts        # Task ID management
+│   │       ├── task-context.ts        # Task ID management (per-session)
 │   │       ├── errors.ts             # ToolError class
-│   │       ├── pocketbase-client.ts  # PB admin client singleton
+│   │       ├── pocketbase-client.ts  # PB admin client singleton (API token auth)
 │   │       ├── guards.ts            # Path validation, command blocklist
 │   │       └── tools/
 │   │           ├── index.ts           # registerAllTools()
-│   │           ├── create-page.ts
-│   │           ├── create-api-route.ts
 │   │           ├── create-collection.ts
-│   │           ├── create-job.ts
 │   │           ├── deploy.ts
 │   │           ├── rollback.ts
 │   │           ├── snapshot-db.ts
@@ -1048,13 +961,10 @@ anyclaw-server/
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
-  "bin": {
-    "anyclaw-mcp": "dist/index.js"
-  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "start:http": "tsx src/http.ts"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -1073,55 +983,73 @@ anyclaw-server/
 
 ---
 
-## 7. Open Questions Requiring Human Input
+## 7. Resolved Questions
 
-### Q1: Task ID Lifecycle — Per-Process or Per-Session?
+The following questions from the original design are now resolved by the locked technical decisions in the main spec:
 
-The current design passes `ANYCLAW_TASK_ID` as an environment variable, which means one MCP server process handles one task. This is natural for stdio transport (agent spawns a fresh process per task). But for HTTP transport, the server is long-lived and handles multiple tasks.
+- **Q1 (Task ID lifecycle):** Resolved. HTTP/SSE is the only transport. Task ID is passed via MCP session metadata (see Section 4, Task ID Propagation).
+- **Q2 (ask_user polling vs. realtime):** Resolved. PocketBase Realtime SSE + REST is the locked communication mechanism. The MCP server still polls `_agent_messages` internally (polling in the control plane, SSE push to the mobile app), but PocketBase SSE subscription in Node.js is also viable.
+- **Q3 (Scaffold vs. raw file tools):** Resolved. No scaffold tools. Agents use `anyclaw_write_file` or their built-in file tools. Convention enforcement is via the skill suite.
+- **Q4 (Allowlist vs. blocklist):** Resolved. Blocklist for MVP, log all commands, tighten to allowlist later.
+- **Q5 (PocketBase credentials):** Resolved. PocketBase API tokens (not email/password). Stored as environment variable `PB_ADMIN_TOKEN`.
 
-**Options:**
-- **(A)** For HTTP transport, pass `taskId` as a field in each tool call's input schema (adding it to every tool).
-- **(B)** For HTTP transport, use the MCP session ID to look up the task ID from a mapping maintained by the agent adapter.
-- **(C)** Always use stdio (one process per task) and skip HTTP for MVP.
+---
 
-**Recommendation:** Option C for MVP, migrate to B when HTTP transport is needed for cloud hosting.
+## 8. New Gaps
 
-### Q2: anyclaw_ask_user Polling vs. PocketBase Realtime in the MCP Server
+Technical decisions that emerged from incorporating the locked decisions above. Each needs resolution before implementation.
 
-The MCP server currently polls `_agent_messages` for the user's answer. An alternative is to use PocketBase's realtime subscription inside the MCP server process (Node.js SSE client). This would be more responsive but requires an EventSource polyfill for Node.js.
+### G1: Sandbox Container Exec API Design
 
-**Options:**
-- **(A)** Polling with exponential backoff (250ms to 2s). Simple, no extra dependencies.
-- **(B)** PocketBase realtime subscription in Node.js using `eventsource` polyfill. More responsive, slightly more complex.
+The MCP server (control plane) sends commands to the sandbox container via an internal HTTP API. The design of this API affects security and observability.
 
-**Recommendation:** Start with A (polling). The 250ms-2s latency range is imperceptible since the user is typing a response. Revisit if latency becomes an issue.
-
-### Q3: Scaffold Tools vs. Raw File Tools
-
-The current design has both scaffold tools (`anyclaw_create_page`, `anyclaw_create_api_route`, `anyclaw_create_job`) and raw file tools (`anyclaw_read_file`, `anyclaw_write_file`). Sophisticated agents (Claude Code, OpenClaw) may prefer to write files directly rather than using scaffolders.
-
-**Question:** Should the scaffold tools be mandatory, or should agents be allowed to use `anyclaw_write_file` to create pages/routes/jobs directly? If scaffold tools are optional, they become convenience tools that enforce conventions but are not the only path.
-
-**Recommendation:** Make scaffold tools optional conveniences. Enforce conventions via the skill suite (prompts) rather than hard tool requirements. The constraint enforcement (dev-only writes, validation gate) still applies regardless of which tool creates the file.
-
-### Q4: anyclaw_run_dev — Allowlist vs. Blocklist
-
-The current design uses a blocklist (block known-dangerous commands). An allowlist (only allow known-safe commands like `npm test`, `npx tsc`, `npx eslint`) would be more restrictive but might break agent workflows that need flexibility.
+**Question:** What does the sandbox exec API look like? How does the control plane authenticate to it?
 
 **Options:**
-- **(A)** Blocklist (current design). More flexible, risk of missing dangerous patterns.
-- **(B)** Allowlist of known-safe prefixes (`npm`, `npx`, `node`, `cat`, `ls`, `grep`). Safer, but agents may need escape hatches.
-- **(C)** Blocklist for MVP, migrate to allowlist after observing real agent behavior for a few weeks.
+- **(A)** Simple HTTP POST to `sandbox:4200/exec` with a shared secret in the `Authorization` header. Request body: `{ command, cwd, timeoutMs }`. Response: `{ exitCode, stdout, stderr }`. Minimal, fast to build.
+- **(B)** gRPC bidirectional stream for real-time stdout/stderr streaming. More complex, but allows the agent to see output as it happens (useful for long builds).
+- **(C)** Docker exec API — the control plane uses the Docker socket to execute commands in the sandbox container directly, bypassing a custom API. Simpler deployment but couples to Docker and requires socket access.
 
-**Recommendation:** Option C. Ship with the blocklist, log all commands for audit, then tighten to an allowlist once the common command patterns are understood.
+### G2: Task Checkpoint Schema for Resume
 
-### Q5: PocketBase Admin Credentials — Storage and Rotation
+Task persistence requires saving enough state to resume after restart. The `checkpoint` field in `_tasks` is typed as JSON, but the actual schema depends on what agents need.
 
-The MCP server needs PocketBase admin credentials to create collections and manage data. Where do these credentials live, and how are they rotated?
+**Question:** What goes in the checkpoint? How agent-specific is it?
 
 **Options:**
-- **(A)** Environment variables (`PB_ADMIN_EMAIL`, `PB_ADMIN_PASSWORD`). Simple, standard.
-- **(B)** Auto-generated on first run and stored in an encrypted config file.
-- **(C)** PocketBase API key (if supported in the PocketBase version being used) instead of email/password.
+- **(A)** Agent-agnostic minimal checkpoint: `{ lastCompletedStep: "collections_created" | "implementation" | "testing" | "deploying", filesModified: string[] }`. The agent uses this as a hint to skip work, but re-reads the actual file state on resume.
+- **(B)** Agent-specific opaque blob: the adapter serializes whatever the agent needs (e.g., Claude Code conversation history, OpenClaw session state). The control plane stores it but does not interpret it.
+- **(C)** Hybrid: agent-agnostic step tracking (A) plus an optional agent-specific blob (B). The control plane uses the step tracking for UI, the agent uses the blob for internal state.
 
-**Recommendation:** Option A for MVP. The MCP server runs on the same machine as PocketBase, so environment variables are secure enough. Auto-rotation can be added later.
+### G3: Dev Workspace Volume Sharing Across Containers
+
+The sandbox container executes commands against the dev workspace, the control plane reads/writes dev files via `anyclaw_read_file`/`anyclaw_write_file`, and the app server serves prod artifacts. All three need access to overlapping parts of the filesystem.
+
+**Question:** How are the dev workspace and prod artifacts shared across the three containers?
+
+**Options:**
+- **(A)** Single Docker named volume mounted into all three containers at different mount points. Simple, but requires careful permission management.
+- **(B)** Two volumes: one for `dev/` (shared between control plane and sandbox), one for `prod/` (shared between control plane and app server). Better isolation — sandbox cannot see prod.
+- **(C)** NFS or similar network filesystem for cloud deployments, bind mounts for local Docker Compose. Adds complexity but works across hosts.
+
+### G4: MCP Authentication for HTTP/SSE Endpoint
+
+With HTTP/SSE as the sole transport, the MCP endpoint is a network service that needs authentication. Without it, any process on the Docker network (or anyone with network access in cloud deployments) could call MCP tools.
+
+**Question:** How do agents authenticate to the MCP HTTP/SSE endpoint?
+
+**Options:**
+- **(A)** Bearer token in the `Authorization` header. The control plane generates a token on startup, and the agent adapter receives it via environment variable or config file.
+- **(B)** mTLS between the agent process and the MCP server. Stronger security, more complex certificate management.
+- **(C)** Docker network isolation only (no auth). Rely on the fact that only containers in the same Docker network can reach the MCP endpoint. Simple for self-hosted, insufficient for cloud.
+
+### G5: anyclaw_ask_user Behavior on Timeout with Task Persistence
+
+The locked decision says clarification timeout is user-configurable: either "agent proceeds with best judgment" (default 5 min) or "pause indefinitely." With task persistence, "pause indefinitely" means the task survives a restart and the question re-appears when the user opens the app.
+
+**Question:** When the user has configured "pause indefinitely" and the MCP server restarts, how does the resumed agent know it was waiting for a user answer?
+
+**Options:**
+- **(A)** The `_agent_messages` collection already has the unanswered question. On resume, the agent adapter checks for pending questions before re-dispatching the agent. If a question is pending, it waits for the answer first, then re-dispatches with the answer included.
+- **(B)** The checkpoint stores `waitingForAnswer: true` and the question ID. On resume, the control plane polls for the answer before continuing.
+- **(C)** The agent is re-dispatched with the full conversation history (including the unanswered question). The agent re-asks if needed, which may create a duplicate question in the mobile app. Simpler but worse UX.

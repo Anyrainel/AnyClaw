@@ -2,9 +2,11 @@
 
 **Goal:** Build the AnyClaw companion mobile app -- a thin Expo (React Native) shell that wraps the agent-built web UI in a WebView, manages server connections, dispatches tasks to the coding agent, and provides version history with rollback.
 
-**Architecture:** The app has two layers: (1) a native shell built with Expo Router (tabs + stack navigation) that handles connection setup, task dispatch, version history, and settings; (2) a full-screen WebView that loads the agent-built React frontend from the user's server. The native shell and WebView communicate via a postMessage/onMessage JS bridge.
+**Architecture:** The app has two layers: (1) a native shell built with Expo Router (tabs + stack navigation) that handles connection setup, task dispatch, version history, and settings; (2) a full-screen WebView that loads the agent-built React frontend from the user's server. The native shell and WebView communicate via a postMessage/onMessage JS bridge. The app authenticates via the broker at `broker.anyclawapp.com`, then communicates with two server-side containers: the **control plane** (task dispatch, health checks, restart API) and the **app server** (WebView content, PocketBase data). All traffic is NaCl-encrypted on top of TLS.
 
-**Tech Stack:** Expo SDK 52, expo-router v4, react-native-webview, expo-secure-store, expo-notifications, zustand (state management), React Native Reanimated (animations).
+**Tech Stack:** Expo SDK 52, expo-router v4, react-native-webview, expo-secure-store, expo-notifications, zustand (state management), React Native Reanimated (animations), tweetnacl (NaCl encryption).
+
+**Locked decisions applied:** Task dispatch UI is a dedicated "Request" tab + full-screen modal/bottom sheet (not FAB). Min Android API 28 (Android 9.0). WebView auth via JS bridge injection. Realtime via PocketBase SSE + REST. NaCl E2E encryption. OAuth: Google + Apple + GitHub. Domain: `anyclawapp.com`, broker at `broker.anyclawapp.com`. Three-container server architecture (app server, control plane, sandbox).
 
 ---
 
@@ -34,7 +36,12 @@
     "@react-native-async-storage/async-storage": "2.x",
     "react-native-safe-area-context": "~5.0.0",
     "react-native-gesture-handler": "~2.20.0",
-    "date-fns": "^4.0.0"
+    "date-fns": "^4.0.0",
+    "pocketbase": "^0.25.0",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "expo-auth-session": "~6.0.0",
+    "expo-web-browser": "~14.0.0"
   },
   "devDependencies": {
     "typescript": "~5.6.0",
@@ -44,6 +51,23 @@
   }
 }
 ```
+
+### Platform Requirements
+
+- **iOS:** 15.1+ (Expo SDK 52 default)
+- **Android:** API 28 / Android 9.0+ (override Expo's default API 23 minimum). Set in `app.json`:
+
+```json
+{
+  "expo": {
+    "android": {
+      "minSdkVersion": 28
+    }
+  }
+}
+```
+
+Rationale: API 28+ provides a modern WebView with reliable SSE support, dark mode APIs, and biometric authentication. Drops ~5% of Android devices.
 
 ### Project Structure
 
@@ -56,7 +80,7 @@ anyclaw-mobile/
 │   ├── _layout.tsx                   # Root layout (auth gate + providers)
 │   ├── (auth)/                       # Unauthenticated screens
 │   │   ├── _layout.tsx               # Stack navigator for auth flow
-│   │   ├── login.tsx                 # Login / signup
+│   │   ├── login.tsx                 # Login / signup (OAuth: Google, Apple, GitHub)
 │   │   └── server-setup.tsx          # Server discovery + connection
 │   ├── (main)/                       # Authenticated screens
 │   │   ├── _layout.tsx               # Tab navigator
@@ -77,9 +101,11 @@ anyclaw-mobile/
 │   ├── ConnectionStatus.tsx          # Header badge: connected/reconnecting/offline
 │   └── EmptyState.tsx                # Placeholder for no-content screens
 ├── lib/
-│   ├── api.ts                        # HTTP/WS client for server communication
+│   ├── api.ts                        # HTTP/REST client for server communication
 │   ├── bridge.ts                     # WebView JS bridge helpers
-│   ├── auth.ts                       # Auth token management
+│   ├── auth.ts                       # Auth token management (OAuth: Google/Apple/GitHub)
+│   ├── crypto.ts                     # NaCl key generation, key exchange, encrypt/decrypt
+│   ├── pocketbase.ts                # PocketBase client init + SSE subscription helpers
 │   └── notifications.ts             # Push notification registration + handling
 ├── stores/
 │   ├── connection.ts                 # Server connection state (zustand)
@@ -109,7 +135,7 @@ Root Layout (_layout.tsx)
 │
 └── (main) — Tab Navigator (authenticated + connected)
     ├── Home tab       — Full-screen WebView (agent-built UI)
-    ├── Task tab       — Task dispatch card (input/clarify/working/done/failed)
+    ├── Request tab    — Task dispatch (full-screen modal/bottom sheet for input/clarify/working/done/failed)
     ├── Versions tab   — Version history list with rollback
     └── Settings tab   — Server status, adapter config, logs, account
 ```
@@ -119,12 +145,12 @@ Root Layout (_layout.tsx)
 The tab bar uses four icons and sits at the bottom of the screen. The Home tab is the default. A small badge on the Task tab appears when the agent has a pending clarifying question.
 
 ```
-  [Home]    [Task]    [Versions]    [Settings]
-    o        o (!)        o             o
+  [Home]    [Request]    [Versions]    [Settings]
+    o        o (!)           o             o
 ```
 
 - **Home** -- Globe or app icon. The WebView fills the entire safe area above the tab bar. No header.
-- **Task** -- Sparkle or wand icon. Shows the task card. Header: "New Request" or the current task's short title.
+- **Request** -- Sparkle or wand icon. Opens a full-screen modal/bottom sheet for task dispatch. Header: "New Request" or the current task's short title. Badge appears when agent has a pending clarifying question.
 - **Versions** -- Clock/history icon. Scrollable list. Header: "Version History".
 - **Settings** -- Gear icon. Grouped settings list. Header: "Settings".
 
@@ -188,7 +214,7 @@ export default function MainLayout() {
       <Tabs.Screen
         name="task"
         options={{
-          title: "Task",
+          title: "Request",
           tabBarBadge: hasPendingQuestion ? "!" : undefined,
           tabBarIcon: ({ color }) => <WandIcon color={color} />,
         }}
@@ -218,13 +244,15 @@ export default function MainLayout() {
 
 ### Loading the Agent-Built UI
 
-The WebView loads the production frontend from the user's server. The URL is constructed from the stored connection credentials:
+The WebView loads the production frontend from the user's server. The URL does **not** include the auth token -- tokens are injected via the JS bridge after page load to avoid exposing them in URLs, server logs, or referrer headers.
 
 ```
-https://<tunnel-host>/app?token=<session-token>
+https://<tunnel-host>/app
 ```
 
-In Phase 1 (broker relay), the tunnel host is a subdomain on the broker (e.g., `abc123.relay.anyclaw.io`). In Phase 2 (WebRTC), the WebView connects to a local HTTP server that proxies over the data channel -- but this is transparent to the WebView component.
+In Phase 1 (broker relay), the tunnel host is a subdomain on the broker (e.g., `abc123.relay.anyclawapp.com`). In Phase 2 (WebRTC), the WebView connects to a local HTTP server that proxies over the data channel -- but this is transparent to the WebView component.
+
+**Auth flow:** The native shell loads the page without a token. The page's JS waits for the bridge to inject a `session-token` message. Once received, the frontend uses the token for all API calls. This is the most secure option -- the token never appears in URLs, logs, or browser history.
 
 ### WebViewShell Component
 
@@ -242,13 +270,21 @@ export function WebViewShell() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const uri = `${serverUrl}/app?token=${sessionToken}`;
+  // Auth token is NOT in the URL -- injected via JS bridge after page load
+  const uri = `${serverUrl}/app`;
 
   const onMessage = useCallback((event: WebViewMessageEvent) => {
     const msg = parseBridgeMessage(event.nativeEvent.data);
     if (!msg) return;
 
     switch (msg.type) {
+      case "bridge-ready":
+        // Inject auth token via JS bridge (never in URL)
+        sendBridgeMessage(webViewRef, {
+          type: "session-token",
+          token: sessionToken!,
+        });
+        break;
       case "deploy-complete":
         // Agent deployed a new version -- reload the WebView
         webViewRef.current?.reload();
@@ -261,7 +297,7 @@ export function WebViewShell() {
         sendBridgeMessage(webViewRef, { type: "health-check-ack" });
         break;
     }
-  }, []);
+  }, [sessionToken]);
 
   if (loadError) {
     return (
@@ -582,26 +618,49 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
 ### Server Communication for Tasks
 
-Tasks are dispatched and monitored through the server's agent adapter REST API. The mobile app does NOT communicate directly with the coding agent -- it goes through the server's adapter layer.
+Tasks are dispatched and monitored through the **control plane** container's REST API. The mobile app does NOT communicate directly with the coding agent -- it goes through the control plane's adapter layer. The app server (separate container) serves WebView content and PocketBase data.
 
-**Endpoints (served by the Node.js logic service):**
+**Three-container model (from mobile app's perspective):**
+- **Control plane** -- always available, handles task dispatch, health checks, restart API. The mobile app sends task requests here.
+- **App server** -- serves the agent-built frontend (WebView content) and runs PocketBase. Can be restarted by user or agent without losing task dispatch capability.
+- **Sandbox** -- runs agent commands. Mobile app never talks to this directly.
+
+**Endpoints (served by the control plane):**
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/tasks` | Submit a new task. Body: `{ request: string }`. Returns `{ taskId: string }`. |
-| GET | `/api/tasks/:id` | Get current task status. Returns `TaskStatus`. |
 | POST | `/api/tasks/:id/answer` | Answer a clarifying question. Body: `{ answer: string }`. |
 | POST | `/api/tasks/:id/cancel` | Cancel a running task. |
-| GET | `/api/tasks/:id/activity` | Get the activity log. Returns `ActivityEntry[]`. |
+| GET | `/api/health` | Health check for app server + sandbox status. |
+| POST | `/api/server/restart` | Restart the app server container. |
 
-**Polling vs WebSocket vs SSE:**
+**Realtime communication: PocketBase SSE + REST**
 
-For Phase 1, use **SSE (Server-Sent Events)** via PocketBase realtime subscriptions. The mobile app subscribes to the `_tasks` collection for the active task ID. When the adapter updates the task record in PocketBase, the change streams to the mobile app in real time.
+All realtime updates flow through **PocketBase Realtime SSE** (server-to-client push). Client-to-server actions use **REST POST**. This covers:
+
+- **Progress updates** -- SSE subscription on the `_tasks` collection. When the adapter updates the task record in PocketBase, the change streams to the mobile app in real time.
+- **Clarification questions** -- Agent writes a question to the task record in PocketBase. SSE pushes it to the mobile app. User answers via REST POST to the control plane.
+- **Task history** -- Fetched via PocketBase REST API. Past tasks persist in PocketBase and can be browsed offline if cached.
+
+**Task state persistence:** Task state lives in PocketBase. If the user closes the app during a clarification question, the question persists in PocketBase. When the user reopens the app, it reconnects to PocketBase SSE and resumes where it left off -- the pending question reappears immediately.
 
 ```typescript
-// lib/api.ts — task status subscription
-function subscribeToTask(taskId: string, onUpdate: (status: TaskStatus) => void) {
-  const pb = getPocketBaseClient();
+// lib/pocketbase.ts — task status subscription
+import PocketBase from "pocketbase";
+
+let pb: PocketBase;
+
+export function initPocketBase(serverUrl: string, authToken: string) {
+  pb = new PocketBase(`${serverUrl}/pb`);
+  pb.authStore.save(authToken, null);
+  return pb;
+}
+
+export function subscribeToTask(
+  taskId: string,
+  onUpdate: (status: TaskStatus) => void
+) {
   pb.collection("_tasks").subscribe(taskId, (event) => {
     onUpdate(event.record as unknown as TaskStatus);
   });
@@ -609,9 +668,37 @@ function subscribeToTask(taskId: string, onUpdate: (status: TaskStatus) => void)
   // Return unsubscribe function
   return () => pb.collection("_tasks").unsubscribe(taskId);
 }
+
+export function subscribeToDeployments(onDeploy: (event: any) => void) {
+  pb.collection("_deployments").subscribe("*", onDeploy);
+  return () => pb.collection("_deployments").unsubscribe("*");
+}
 ```
 
-Fallback: if the SSE connection drops, the app polls GET `/api/tasks/:id` every 3 seconds until the SSE connection is re-established.
+**Reconnection on SSE drop:** If the SSE connection drops, the PocketBase JS SDK automatically reconnects. On reconnect, the app fetches the latest task state via REST GET to catch any missed updates, then resumes SSE streaming.
+
+**Resume after app close/reopen:**
+
+```typescript
+// In task store initialization (called on app launch)
+async function resumeActiveTask() {
+  const pb = getPocketBaseClient();
+  // Query for any task in a non-terminal state
+  const activeTasks = await pb.collection("_tasks").getList(1, 1, {
+    filter: 'state != "done" && state != "failed" && state != "cancelled"',
+    sort: "-created",
+  });
+  if (activeTasks.items.length > 0) {
+    const task = activeTasks.items[0];
+    // Restore task into the zustand store
+    useTaskStore.getState()._updateFromServer(task);
+    // Re-subscribe to SSE for this task
+    subscribeToTask(task.id, (status) => {
+      useTaskStore.getState()._updateFromServer(status);
+    });
+  }
+}
+```
 
 ### TaskCard Component
 
@@ -908,13 +995,15 @@ export function RollbackConfirm({ version, visible, onConfirm, onCancel, isLoadi
 
 ### Login Screen
 
-The login screen authenticates the user against the AnyClaw connection broker. This is the user's AnyClaw account, not their server credentials.
+The login screen authenticates the user against the AnyClaw connection broker at `broker.anyclawapp.com`. This is the user's AnyClaw account, not their server credentials.
+
+**OAuth providers:** Google, Apple, and GitHub. Apple is required by the App Store for apps that offer third-party sign-in. GitHub targets the developer early-adopter audience.
 
 **Flow:**
 1. User opens app for the first time.
-2. Login screen shows email + password fields and a "Sign Up" link.
-3. On submit, the app calls the broker's auth endpoint: POST `https://broker.anyclaw.io/api/auth/login`.
-4. Broker returns a JWT + refresh token.
+2. Login screen shows three OAuth buttons: "Continue with Google", "Continue with Apple", "Continue with GitHub".
+3. Tapping a button opens the OAuth flow via `expo-auth-session` + `expo-web-browser`. The OAuth redirect URI points to the broker at `https://broker.anyclawapp.com/api/auth/callback/{provider}`.
+4. Broker validates the OAuth token, creates or looks up the user, and returns a JWT + refresh token.
 5. Both tokens are stored in `expo-secure-store` (encrypted keychain on iOS, encrypted SharedPreferences on Android).
 
 ```typescript
@@ -946,7 +1035,7 @@ export async function clearAuth() {
 After login, the app queries the broker for the user's registered servers:
 
 ```
-GET https://broker.anyclaw.io/api/servers
+GET https://broker.anyclawapp.com/api/servers
 Authorization: Bearer <jwt>
 
 Response:
@@ -971,21 +1060,21 @@ If the user has one server and it is online, the app auto-connects. If multiple 
 
 1. App sends a connect request to the broker:
    ```
-   POST https://broker.anyclaw.io/api/connect
+   POST https://broker.anyclawapp.com/api/connect
    Body: { serverId: "srv_abc123" }
    ```
-2. Broker allocates a relay subdomain (e.g., `abc123.relay.anyclaw.io`) and opens a WSS tunnel to the server.
+2. Broker allocates a relay subdomain (e.g., `abc123.relay.anyclawapp.com`) and opens a WSS tunnel to the server.
 3. Broker returns the relay URL and a session token:
    ```json
    {
-     "relayUrl": "https://abc123.relay.anyclaw.io",
+     "relayUrl": "https://abc123.relay.anyclawapp.com",
      "sessionToken": "sess_xyz789",
      "pbAuthToken": "pb_token_for_pocketbase_client"
    }
    ```
 4. The app stores these in the connection store and in `expo-secure-store` for reconnection on app restart.
-5. The WebView loads `https://abc123.relay.anyclaw.io/app?token=sess_xyz789`.
-6. The PocketBase client connects to `https://abc123.relay.anyclaw.io/pb` for realtime subscriptions.
+5. The WebView loads `https://abc123.relay.anyclawapp.com/app` (auth token injected via JS bridge, not URL).
+6. The PocketBase client connects to `https://abc123.relay.anyclawapp.com/pb` for realtime subscriptions.
 
 ### Connection Store
 
@@ -1067,7 +1156,100 @@ When the connection drops:
 
 ---
 
-## 7. Push Notifications
+## 7. NaCl E2E Encryption
+
+All traffic between the mobile app and the user's server is NaCl-encrypted on top of TLS. This ensures the broker relay (Phase 1) cannot read traffic even if compromised.
+
+### Key Management
+
+The mobile app uses `tweetnacl` (NaCl) for key generation, key exchange, and encrypt/decrypt operations.
+
+**Key generation (on first connection):**
+
+```typescript
+// lib/crypto.ts
+import nacl from "tweetnacl";
+import { encodeBase64, decodeBase64 } from "tweetnacl-util";
+import * as SecureStore from "expo-secure-store";
+
+const KEYPAIR_KEY = "anyclaw_nacl_keypair";
+
+export async function getOrCreateKeyPair(): Promise<nacl.BoxKeyPair> {
+  const stored = await SecureStore.getItemAsync(KEYPAIR_KEY);
+  if (stored) {
+    const parsed = JSON.parse(stored);
+    return {
+      publicKey: decodeBase64(parsed.publicKey),
+      secretKey: decodeBase64(parsed.secretKey),
+    };
+  }
+
+  const keyPair = nacl.box.keyPair();
+  await SecureStore.setItemAsync(
+    KEYPAIR_KEY,
+    JSON.stringify({
+      publicKey: encodeBase64(keyPair.publicKey),
+      secretKey: encodeBase64(keyPair.secretKey),
+    })
+  );
+  return keyPair;
+}
+```
+
+**Key exchange via broker:**
+
+1. On first connection to a server, the mobile app generates a NaCl keypair and stores it in `expo-secure-store`.
+2. The app sends its public key to the broker: POST `https://broker.anyclawapp.com/api/key-exchange` with `{ serverId, clientPublicKey }`.
+3. The broker relays the client's public key to the server and returns the server's public key.
+4. Both sides now have each other's public keys and can compute a shared secret for NaCl box encryption.
+5. Public keys are cached locally. Re-exchange only happens if the server's key changes (server reinstall).
+
+**Encrypt/decrypt:**
+
+```typescript
+export function encryptMessage(
+  message: string,
+  theirPublicKey: Uint8Array,
+  mySecretKey: Uint8Array
+): { encrypted: string; nonce: string } {
+  const nonce = nacl.randomBytes(nacl.box.nonceLength);
+  const messageBytes = new TextEncoder().encode(message);
+  const encrypted = nacl.box(messageBytes, nonce, theirPublicKey, mySecretKey);
+  return {
+    encrypted: encodeBase64(encrypted),
+    nonce: encodeBase64(nonce),
+  };
+}
+
+export function decryptMessage(
+  encrypted: string,
+  nonce: string,
+  theirPublicKey: Uint8Array,
+  mySecretKey: Uint8Array
+): string {
+  const decrypted = nacl.box.open(
+    decodeBase64(encrypted),
+    decodeBase64(nonce),
+    theirPublicKey,
+    mySecretKey
+  );
+  if (!decrypted) throw new Error("Decryption failed");
+  return new TextDecoder().decode(decrypted);
+}
+```
+
+### Integration with API Layer
+
+The `lib/api.ts` module wraps all HTTP requests and PocketBase SSE traffic with NaCl encryption:
+
+- **Outgoing REST requests:** Request body is encrypted with `encryptMessage()` before sending. The `Content-Type` header is set to `application/x-nacl-box`.
+- **Incoming REST responses:** Response body is decrypted with `decryptMessage()`.
+- **SSE events:** Each SSE event payload is NaCl-encrypted by the server. The PocketBase subscription handler decrypts before passing to the zustand store.
+- **WebView traffic:** The WebView loads content over TLS from the relay. The JS bridge injects the NaCl keys so the agent-built frontend can also encrypt/decrypt API calls to PocketBase. Alternatively, the native shell can proxy PocketBase requests through the bridge with encryption handled natively.
+
+---
+
+## 8. Push Notifications
 
 ### Setup
 
@@ -1203,34 +1385,82 @@ export async function sendNotification(
 
 ---
 
-## 8. Technical Decisions Needed
+## 9. Technical Decisions (Resolved)
 
-### 8.1. Tab bar vs bottom sheet for task dispatch
+All open questions from the original design have been resolved by the locked decisions in the main spec.
 
-The current design places task dispatch in a dedicated tab. An alternative is a floating action button (FAB) that opens a bottom sheet overlay, keeping the WebView always visible behind it. The FAB approach feels more natural for a "quick request" interaction pattern and avoids navigating away from the agent-built UI. The tab approach is simpler and avoids z-index / gesture conflicts with the WebView.
+| # | Question | Resolution | Reference |
+|---|----------|------------|-----------|
+| 8.1 | Tab bar vs FAB for task dispatch | **Dedicated "Request" tab + full-screen modal/bottom sheet.** Clear, discoverable, avoids WebView z-index conflicts. Not FAB. | Spec decision #9 |
+| 8.2 | Minimum Android API level | **API 28 (Android 9.0).** Drops ~5% of devices. Better WebView, dark mode, biometric API. | Spec decision #10 |
+| 8.3 | Offline native shell behavior | **Cache-nothing for MVP.** Server down = reconnect screen. No offline cache. | Spec decision #11 |
+| 8.4 | Concurrent tasks | **Single active task + queue.** Design with task isolation for future parallelization. | Spec decision #1 |
+| 8.5 | WebView auth token model | **JS bridge injection after page load.** Most secure -- token never in URL or logs. Frontend waits for bridge `session-token` message before making API calls. | Spec decision #12 |
 
-**Decision needed:** Tab bar with dedicated Task tab, or FAB + bottom sheet overlay on top of the WebView?
+---
 
-### 8.2. Minimum supported OS versions
+## New Gaps
 
-Expo SDK 52 supports iOS 15.1+ and Android 6.0+ (API 23+). However, targeting older Android versions increases testing burden significantly. WebView behavior (especially around WebSocket and SSE support) varies across Android WebView versions.
+Technical decisions that emerged from applying the locked decisions to this design. These need resolution before implementation.
 
-**Decision needed:** Should we raise the Android minimum to API 26+ (Android 8.0) to avoid older WebView quirks? This would drop roughly 2% of active Android devices.
+### 1. NaCl encryption for WebView traffic
 
-### 8.3. Offline behavior for the native shell
+The locked decision requires NaCl E2E encryption on all traffic through the broker relay. For native REST/SSE calls, this is straightforward (encrypt in `lib/crypto.ts`). But the WebView loads HTML/CSS/JS assets and makes its own PocketBase API calls. **Options:**
 
-Currently, the spec says "server down = app shows reconnect screen." But the native screens (version history, past task list) could work with cached data. Should the app persist the version list and past tasks to local storage so they're visible even when disconnected?
+- **(a) Proxy all WebView API calls through the native shell via JS bridge.** The agent-built frontend calls `window.AnyClaw.fetch()` instead of `fetch()`. The native shell encrypts, sends, receives, decrypts, and returns the result. Assets are fetched natively and injected. High complexity, but true E2E for everything.
+- **(b) NaCl encrypt only the relay tunnel at the transport layer.** The broker relay decrypts TLS, then re-encrypts with NaCl for the hop to the server (or vice versa). Simpler, but the broker momentarily sees plaintext.
+- **(c) Inject NaCl keys into the WebView and let the frontend encrypt its own PocketBase calls.** Less secure (keys in JS memory) but simpler. Asset loading remains unencrypted through the relay.
+- **(d) Accept that WebView asset traffic goes through TLS-only relay, and only NaCl-encrypt sensitive API payloads (task data, user content).** Pragmatic middle ground.
 
-**Decision needed:** Cache-nothing (always show reconnect screen), or cache-with-staleness-indicator (show cached data with a banner: "Last updated 2 hours ago")?
+**Decision needed:** Which approach for WebView traffic encryption?
 
-### 8.4. How to handle multiple concurrent tasks
+### 2. NaCl key rotation and revocation
 
-The current design assumes one active task at a time. But a user might want to submit a second request while the first is still working (e.g., "fix the color on the header" while a larger feature is building). Supporting concurrent tasks adds complexity to the state machine, the task tab UI, and the server adapter.
+The current design generates a keypair on first connection and caches it. **Questions:**
 
-**Decision needed:** Strict single-task (queue additional requests), or allow up to N concurrent tasks with a task list UI?
+- How often should keys rotate? On every new relay session? Periodically? Never (until server reinstall)?
+- If a user loses their phone, how do they revoke the old keypair? Does the broker need a key revocation endpoint?
+- Should there be a "re-pair" flow in the app settings for manually triggering key exchange?
 
-### 8.5. Auth model for the WebView session token
+**Decision needed:** Key rotation policy and revocation mechanism.
 
-The WebView loads the agent-built frontend with a session token in the URL query parameter. This token is visible in the URL bar (if any) and in server logs. Alternatives: (a) inject the token via the JS bridge after page load instead of the URL, (b) use an HTTP-only cookie set by the relay, (c) accept the query parameter approach since the relay URL is already scoped to the user.
+### 3. Control plane vs app server URL routing
 
-**Decision needed:** Query parameter token (simplest), JS bridge injection (more secure, but requires the frontend to wait for the bridge), or HTTP-only cookie (requires cookie support in the relay)?
+The mobile app now talks to two separate containers (control plane for task dispatch, app server for WebView/PocketBase). Through the broker relay, these are behind a single relay subdomain. **Questions:**
+
+- Does the relay use path-based routing (`/cp/*` for control plane, `/app/*` for app server, `/pb/*` for PocketBase)?
+- Or does each container get its own relay subdomain (`cp.abc123.relay.anyclawapp.com` vs `app.abc123.relay.anyclawapp.com`)?
+- The control plane must remain reachable even when the app server is down (restarting). How does the relay handle this?
+
+**Decision needed:** URL routing scheme for multi-container relay.
+
+### 4. OAuth token storage and refresh
+
+With OAuth (Google/Apple/GitHub) replacing email/password, the auth flow changes. **Questions:**
+
+- Does the broker issue its own JWT after OAuth validation, or does the app store the OAuth provider's tokens directly?
+- If the broker issues its own JWT, what is the refresh token strategy? The broker needs its own refresh endpoint.
+- Apple Sign In requires handling the "user info only provided on first login" quirk -- the broker must persist user details from the first OAuth callback.
+
+**Decision needed:** Broker JWT strategy and OAuth token lifecycle.
+
+### 5. Task dispatch: control plane REST vs PocketBase
+
+Task dispatch goes to the control plane, but task state lives in PocketBase (on the app server). **Questions:**
+
+- Does the control plane write task state to PocketBase, or does it maintain its own task state store?
+- If PocketBase is on the app server and the app server is down, the control plane can still accept tasks -- but where does it store them until the app server comes back?
+- Should the control plane have its own lightweight PocketBase instance for task state, separate from the app server's PocketBase?
+
+**Decision needed:** Task state ownership between control plane and app server.
+
+### 6. Full-screen modal/bottom sheet interaction for task dispatch
+
+The locked decision says "dedicated Request tab + full-screen modal/bottom sheet" but the current code shows the task card inline in the tab. **Questions:**
+
+- Is the modal/bottom sheet triggered by a "New Request" button on the Task tab, opening over the tab content?
+- Or does the Task tab itself present as a bottom sheet overlaying the Home tab (WebView)?
+- For the clarification Q&A flow, does each round stay within the same modal, or does the modal dismiss and re-present?
+- On small screens, should the modal be a full-screen modal (iOS style) or a draggable bottom sheet (Material style)?
+
+**Decision needed:** Exact modal/bottom sheet UX for the task dispatch flow.

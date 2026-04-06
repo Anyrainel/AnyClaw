@@ -23,7 +23,7 @@ Alternative considered: **Managed auth (Clerk, Auth0)** -- rejected for Phase 1 
 2. `POST /auth/login` -- email, password. Validates credentials, creates session, returns token.
 3. Email verification via a signed link (`POST /auth/verify-email?token=...`). Use Resend (transactional email API, free tier: 100 emails/day) for sending.
 
-**OAuth (Google, GitHub, Apple):**
+**OAuth (Google, Apple, GitHub — all three at launch):**
 1. `GET /auth/oauth/:provider` -- redirects to provider's consent screen.
 2. `GET /auth/oauth/:provider/callback` -- receives authorization code, exchanges for ID token, upserts user by provider+subject, creates session.
 3. On mobile: use `expo-auth-session` (Expo's managed OAuth flow with AuthSession.startAsync). The mobile app opens the broker's OAuth URL in an in-app browser, receives the callback redirect with the session token.
@@ -149,11 +149,23 @@ CREATE TABLE servers (
   name            TEXT NOT NULL,
   version         TEXT,
   status          TEXT DEFAULT 'offline',  -- 'online', 'degraded', 'offline'
+  server_pk       TEXT,                    -- X25519 public key (base64url), set during registration
   last_heartbeat  TIMESTAMPTZ,
   registered_at   TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX idx_servers_user ON servers(user_id);
+
+CREATE TABLE device_keys (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+  server_id   UUID REFERENCES servers(id) ON DELETE CASCADE,
+  session_id  TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  mobile_pk   TEXT NOT NULL,              -- X25519 public key (base64url) for this device-server pair
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_device_keys_server ON device_keys(server_id);
 ```
 
 ---
@@ -176,14 +188,14 @@ Mobile App          Connection Broker              User's Server
 
 The broker runs two WebSocket listener endpoints:
 
-1. **`wss://broker.anyclaw.io/relay/client`** -- mobile app connects here. Auth via `Authorization: Bearer <session_token>` in the WebSocket upgrade request headers (supported by all WS clients).
-2. **`wss://broker.anyclaw.io/relay/server`** -- AnyClaw server connects here. Auth via `server_token` query parameter in the upgrade URL (since the server-side WS client controls the URL).
+1. **`wss://broker.anyclawapp.com/relay/client`** -- mobile app connects here. Auth via `Authorization: Bearer <session_token>` in the WebSocket upgrade request headers (supported by all WS clients).
+2. **`wss://broker.anyclawapp.com/relay/server`** -- AnyClaw server connects here. Auth via `server_token` query parameter in the upgrade URL (since the server-side WS client controls the URL).
 
 ### 3.2 Connection Establishment
 
 1. Mobile app authenticates with the broker REST API, receives list of user's servers via `GET /servers` (returns server_id, name, status).
 2. User selects a server (or auto-selects the only one).
-3. Mobile app opens a WebSocket to `wss://broker.anyclaw.io/relay/client?server_id=srv_abc123`.
+3. Mobile app opens a WebSocket to `wss://broker.anyclawapp.com/relay/client?server_id=srv_abc123`.
 4. Broker validates the session token and checks that `server_id` belongs to the authenticated user.
 5. Broker looks up the server's existing WebSocket connection. If found and `status=online`:
    - Broker sends a `connection_request` message to the server's WebSocket.
@@ -233,7 +245,7 @@ All messages are JSON. Binary payloads (file uploads, images) are sent as binary
 
 - **Single hop:** The broker does not parse or transform data frames. It reads from one WS and writes to the other. The relay loop is ~100 lines of code.
 - **Binary frames preferred:** For PocketBase API calls (which are HTTP-over-WS), the mobile app sends binary frames containing the serialized HTTP request. The server deserializes and routes to PocketBase locally. This avoids JSON parsing overhead in the relay.
-- **Broker placement:** Deploy the broker on a provider with good peering (Fly.io or Cloudflare Workers with Durable Objects). Fly.io allows multi-region deployment so the broker instance is geographically close to the user.
+- **Broker placement:** Initial deployment on a single VPS in US East (iad) for best peering with the largest user base. Migrate to Fly.io for multi-region when user distribution justifies it.
 - **Backpressure:** If the server WS buffer exceeds 1 MB, the broker pauses reading from the client WS (TCP backpressure propagates naturally). Resume when buffer drains below 512 KB.
 - **Ping/pong:** Both client and server WS connections use WebSocket protocol-level pings every 15 seconds. If a pong is not received within 10 seconds, the connection is considered dead and torn down.
 
@@ -373,9 +385,9 @@ Each mobile device establishes its own independent WebRTC peer connection to the
 
 ### 5.1 TLS Everywhere
 
-- **Broker REST API:** HTTPS only. TLS termination at the load balancer (Fly.io provides automatic Let's Encrypt certs for `*.fly.dev` and custom domains).
+- **Broker REST API:** HTTPS only. TLS termination via Let's Encrypt (certbot/Caddy on the VPS, or at the load balancer after migrating to Fly.io).
 - **Broker WebSocket:** WSS (WebSocket over TLS). Same TLS termination.
-- **Phase 1 relay:** Both legs (client-to-broker and broker-to-server) are WSS. The broker sees the decrypted frames but does not inspect or log them. For defense-in-depth, the client and server can negotiate an additional encryption layer (NaCl box with a shared secret derived during pairing), but this is a Phase 2+ enhancement -- TLS is sufficient for MVP.
+- **Phase 1 relay:** Both legs (client-to-broker and broker-to-server) are WSS. On top of TLS, all relayed traffic is encrypted end-to-end using NaCl box (Curve25519 + XSalsa20 + Poly1305). The broker cannot read relayed content even if compromised. See section 5.6 for the key exchange protocol.
 - **Phase 2 WebRTC:** DTLS is mandatory in the WebRTC spec. All data channel traffic is encrypted peer-to-peer. The broker never sees the plaintext.
 
 ### 5.2 Authorization Model
@@ -435,9 +447,9 @@ Estimate per active user:
 | 10,000 | 3.6 TB | $72.00 |
 | 100,000 | 36 TB | $720.00 |
 
-Fly.io includes 100 GB free outbound per month. At 1,000 users, Phase 1 relay is very affordable. At 100,000 users it costs $720/mo in bandwidth alone -- still manageable but Phase 2 should be live well before then.
+At 1,000 users, Phase 1 relay bandwidth is very affordable. At 100,000 users it costs ~$720/mo in bandwidth alone -- still manageable but Phase 2 should be live well before then.
 
-**Compute cost:** The relay is CPU-cheap (it is just copying bytes between sockets). A single Fly.io machine (shared-cpu-1x, 256 MB RAM, $1.94/mo) can handle ~500 concurrent WebSocket connections. At 1,000 users with ~30% concurrent, that is 300 connections -- one machine suffices.
+**Compute cost:** The relay is CPU-cheap (it is just copying bytes between sockets). A single VPS (2 vCPU, 2 GB RAM, US East) can handle ~500 concurrent WebSocket connections. At 1,000 users with ~30% concurrent, that is 300 connections -- one machine suffices. After migrating to Fly.io, a shared-cpu-1x machine ($1.94/mo) handles the same load.
 
 ### 6.2 Phase 2 Cost Reduction
 
@@ -448,7 +460,9 @@ With WebRTC P2P, the broker handles only signaling:
 
 ### 6.3 Horizontal Scaling Strategy
 
-Phase 1 (MVP, <1,000 users): single broker instance on Fly.io. Postgres on Fly.io (single instance, daily backups).
+Phase 1 (MVP, <1,000 users): single VPS in US East (iad) running Docker Compose (broker + Postgres). Postgres with daily backups. TLS via Let's Encrypt (Caddy or certbot). Domain: `broker.anyclawapp.com`.
+
+Phase 1.5 (scaling trigger): Migrate to Fly.io when the single VPS becomes a bottleneck or multi-region is needed. Fly.io provides anycast routing, automatic TLS, and easy multi-region deployment. The Docker-based setup makes this migration straightforward.
 
 Phase 2 (1,000-10,000 users):
 - Multiple broker instances behind Fly.io's anycast routing.
@@ -501,11 +515,13 @@ When scaling to multiple instances, add Redis (Fly.io Upstash, or self-hosted on
 
 ### 7.4 Deployment
 
-- **Platform:** Fly.io. Reasons: WebSocket-friendly (no timeout limits), multi-region, cheap, good CLI/CD integration.
-- **Container:** Single Dockerfile. Node.js 22 LTS Alpine image. The broker binary is ~50 MB including node_modules.
-- **CI/CD:** GitHub Actions. On push to `main`: build Docker image, run tests, deploy to Fly.io via `flyctl deploy`.
-- **Monitoring:** Fly.io built-in metrics + Prometheus endpoint in Fastify. Key metrics: active WS connections, relay bytes/sec, auth requests/sec, P95 latency, error rate.
-- **Logging:** Structured JSON logs (pino, Fastify's default logger). Ship to Fly.io log drain or Axiom (free tier: 500 MB/mo).
+- **Platform (initial):** Single VPS in US East (iad) with Docker Compose. Reasons: simplest to operate, cheapest to start, need to co-host with OpenClaw. Migrate to Fly.io when multi-region or auto-scaling is needed.
+- **Platform (future):** Fly.io. WebSocket-friendly (no timeout limits), multi-region, cheap, good CLI/CD integration.
+- **Container:** Single Dockerfile. Node.js 22 LTS Alpine image. The broker binary is ~50 MB including node_modules. Docker Compose orchestrates broker + Postgres on the VPS.
+- **TLS:** Caddy as reverse proxy (automatic Let's Encrypt for `broker.anyclawapp.com`). On Fly.io migration, TLS moves to the load balancer.
+- **CI/CD:** GitHub Actions. On push to `main`: build Docker image, run tests, deploy via SSH to VPS (later: `flyctl deploy`).
+- **Monitoring:** Prometheus endpoint in Fastify. Key metrics: active WS connections, relay bytes/sec, auth requests/sec, P95 latency, error rate. On VPS: Grafana Cloud free tier or Axiom.
+- **Logging:** Structured JSON logs (pino, Fastify's default logger). Ship to Axiom (free tier: 500 MB/mo).
 
 ### 7.5 File Structure
 
@@ -514,7 +530,9 @@ anyclaw-broker/
 ├── package.json
 ├── tsconfig.json
 ├── Dockerfile
-├── fly.toml
+├── docker-compose.yml              # Broker + Postgres for VPS deployment
+├── Caddyfile                       # Reverse proxy + auto TLS for broker.anyclawapp.com
+├── fly.toml                        # For future Fly.io migration
 ├── src/
 │   ├── index.ts                  # Fastify server entrypoint
 │   ├── config.ts                 # Environment variables, defaults
@@ -525,7 +543,8 @@ anyclaw-broker/
 │   │       ├── 001_users.sql
 │   │       ├── 002_sessions.sql
 │   │       ├── 003_servers.sql
-│   │       └── 004_server_tokens.sql
+│   │       ├── 004_server_tokens.sql
+│   │       └── 005_device_keys.sql
 │   ├── auth/
 │   │   ├── routes.ts             # /auth/* REST endpoints
 │   │   ├── lucia.ts              # Lucia auth setup
@@ -543,6 +562,10 @@ anyclaw-broker/
 │   ├── signaling/
 │   │   ├── handler.ts            # WebRTC signaling message routing
 │   │   └── turn-credentials.ts   # Short-lived TURN credential generation
+│   ├── crypto/
+│   │   ├── nacl.ts               # NaCl box encrypt/decrypt helpers
+│   │   ├── key-exchange.ts       # X25519 key generation + shared secret derivation
+│   │   └── nonce.ts              # Counter-based nonce management
 │   └── middleware/
 │       ├── rate-limit.ts         # Sliding window rate limiter
 │       └── error-handler.ts      # Centralized error handling
@@ -555,52 +578,208 @@ anyclaw-broker/
 │   │   ├── connect.test.ts
 │   │   ├── forward.test.ts
 │   │   └── reconnect.test.ts
-│   └── signaling/
-│       └── webrtc.test.ts
+│   ├── signaling/
+│   │   └── webrtc.test.ts
+│   └── crypto/
+│       ├── nacl.test.ts
+│       └── key-exchange.test.ts
 └── .env.example
 ```
 
 ---
 
-## 8. Technical Decisions Needed
+## 8. Technical Decisions (Resolved)
 
-### Decision 1: Domain and TLS Certificate Strategy
+All five open decisions from the original design have been resolved by the main spec's locked decisions.
 
-The broker needs a stable domain (e.g., `broker.anyclaw.io`). Do we purchase `anyclaw.io` now and use Cloudflare for DNS, or use a `*.fly.dev` subdomain for MVP and add a custom domain later? Custom domain adds trust (mobile app hardcodes the broker URL) but costs ~$12/year and requires DNS management.
+| # | Decision | Resolution | Source |
+|---|----------|------------|--------|
+| 1 | Domain and TLS | `anyclawapp.com` purchased. Broker at `broker.anyclawapp.com`. TLS via Let's Encrypt (Caddy on VPS, load balancer on Fly.io). | Spec decision #15 |
+| 2 | OAuth providers | Google + Apple + GitHub at launch. Apple required by App Store. GitHub for developer early-adopter audience. | Spec decision #16 |
+| 3 | Phase 2 timing | Launch with WSS relay only. Begin Phase 2 (WebRTC P2P) development after launch. | Spec decision #17 |
+| 4 | Broker region | US East (iad). Add regions when user distribution justifies it. | Spec decision #18 |
+| 5 | E2E encryption | YES -- NaCl box encryption on top of TLS in Phase 1. Broker cannot read relayed traffic. See section 5.6 for protocol. | Spec decision #19 |
 
-**Recommendation:** Buy the domain now. The mobile app will hardcode `broker.anyclaw.io` and changing it later requires an app update.
+Additional locked decision affecting this design:
 
-### Decision 2: OAuth Provider Priority
+| # | Decision | Resolution | Source |
+|---|----------|------------|--------|
+| 6 | Cloud hosting | Single VPS with Docker Compose first. Migrate to Fly.io later. VPS needs to host OpenClaw alongside AnyClaw. | Spec decision #22 |
 
-Which OAuth providers to support at launch? Options:
-- **Google only** -- covers ~70% of mobile users. Simplest to implement.
-- **Google + Apple** -- Apple Sign-In is required by App Store policy if any OAuth is offered. So if we ship Google, we must also ship Apple.
-- **Google + Apple + GitHub** -- GitHub appeals to the developer audience likely to self-host.
+---
 
-**Recommendation:** Google + Apple at launch (App Store compliance), GitHub in the first update.
+## 5.6 NaCl End-to-End Encryption (Phase 1)
 
-### Decision 3: Phase 2 Timing
+### 5.6.1 Goal
 
-When do we invest in WebRTC P2P? Options:
-- **Build Phase 2 before launch** -- more engineering work upfront, but lower operating costs from day one.
-- **Launch with Phase 1 only, add Phase 2 at 500 users** -- ship faster, accept relay costs early.
-- **Launch with Phase 1, begin Phase 2 development immediately after launch** -- overlap approach.
+All data relayed through the broker in Phase 1 is encrypted end-to-end using NaCl box (Curve25519 key agreement + XSalsa20-Poly1305 authenticated encryption). The broker forwards opaque ciphertext. Even a compromised broker learns nothing about the content of relayed messages.
 
-The answer depends on how long Phase 2 development takes (estimate: 2-3 weeks for signaling + react-native-webrtc integration + fallback logic + TURN setup) and whether the early user base will be small enough that relay costs are negligible.
+### 5.6.2 Cryptographic Primitives
 
-### Decision 4: Broker Hosting Region
+- **Key agreement:** Curve25519 (X25519 ECDH)
+- **Authenticated encryption:** XSalsa20-Poly1305 (NaCl `crypto_box`)
+- **Nonce:** 24 bytes, incremented per message (see 5.6.5)
+- **Library (mobile/client):** `tweetnacl` (npm, pure JS, audited, 0 dependencies) or `libsodium-wrappers` (npm, WASM build of libsodium)
+- **Library (server):** `libsodium-wrappers` (npm) or `sodium-native` (npm, native binding, faster)
 
-Where to deploy the initial broker instance? Options:
-- **`iad` (Ashburn, Virginia)** -- lowest latency for US East users, good peering.
-- **`ord` (Chicago)** -- central US, balanced latency.
-- **Multi-region from day one** -- Fly.io makes this easy but adds operational complexity (database replication, connection routing).
+### 5.6.3 Key Exchange Protocol
 
-**Recommendation:** Start with `iad`. Add regions when user distribution data justifies it.
+The key exchange happens during the server pairing step (when the user adds a self-hosted server to their account). The broker facilitates the exchange but never learns the shared secret.
 
-### Decision 5: End-to-End Encryption in Phase 1
+**Pairing flow (extended with key exchange):**
 
-Should Phase 1 implement an additional encryption layer on top of TLS, so the broker cannot read relayed traffic even in principle? This would use a shared secret established during the server pairing step (derive a NaCl box keypair, store the public key on both sides).
+```
+Mobile App                    Broker                     User's Server
+    |                           |                              |
+    |  1. POST /servers/        |                              |
+    |     create-token          |                              |
+    |  (authenticated)          |                              |
+    |                           |                              |
+    |  <- server_token +        |                              |
+    |     broker_relay_pubkey   |                              |
+    |                           |                              |
+    |  2. Generate ephemeral    |                              |
+    |     X25519 keypair:       |                              |
+    |     (mobile_pk, mobile_sk)|                              |
+    |                           |                              |
+    |  3. Display to user:      |                              |
+    |     server_token +        |                              |
+    |     mobile_pk (QR/copy)   |                              |
+    |                           |                              |
+    |                           |   4. User pastes/scans       |
+    |                           |      server_token + mobile_pk|
+    |                           |      into server config      |
+    |                           |                              |
+    |                           |   5. Server generates its own|
+    |                           |      X25519 keypair:         |
+    |                           |      (server_pk, server_sk)  |
+    |                           |                              |
+    |                           |   6. Server computes shared  |
+    |                           |      secret:                 |
+    |                           |      shared = X25519(        |
+    |                           |        server_sk, mobile_pk) |
+    |                           |                              |
+    |                           |   7. POST /servers/register  |
+    |                           |      { server_token,         |
+    |                           |        server_pk, ... }      |
+    |                           |                              |
+    |  8. GET /servers          |                              |
+    |     (includes server_pk   |                              |
+    |      for each server)     |                              |
+    |                           |                              |
+    |  9. Mobile computes       |                              |
+    |     shared secret:        |                              |
+    |     shared = X25519(      |                              |
+    |       mobile_sk, server_pk)|                             |
+    |                           |                              |
+    |  (shared secrets match    |                              |
+    |   via Diffie-Hellman)     |                              |
+```
 
-**Tradeoff:** Adds ~200 lines of crypto code on both client and server, negligible performance impact (NaCl is fast), but adds complexity to debugging (can't inspect relay traffic for diagnostics). In Phase 2, WebRTC provides E2E encryption by default, making this moot.
+**Why the broker cannot learn the shared secret:**
+- The broker sees `mobile_pk` (in step 3, embedded in the pairing token/QR) and `server_pk` (in step 7, sent during registration).
+- The broker never sees `mobile_sk` or `server_sk` (private keys that never leave the devices).
+- Computing the shared secret requires one private key + the other's public key (X25519 Diffie-Hellman). The broker has neither private key.
 
-**Recommendation:** Skip for Phase 1. TLS is sufficient and the broker is our own infrastructure. Prioritize shipping speed. Phase 2's DTLS provides true E2E without extra work.
+**Key storage:**
+- **Mobile app:** `mobile_sk` is stored in `expo-secure-store` (iOS Keychain / Android Keystore), keyed by `server_id`. `mobile_pk` can be derived from `mobile_sk` or stored alongside it.
+- **Server:** `server_sk` is stored in the server's config directory with filesystem permissions restricted to the server process. Not stored in PocketBase (which the agent can access).
+- **Broker:** Stores only `mobile_pk` and `server_pk` (public keys). These are not secret.
+
+### 5.6.4 Encrypted Message Format
+
+All data frames in the Phase 1 relay are encrypted before being sent over the WebSocket:
+
+```
+Encrypted frame layout:
+[nonce: 24 bytes][ciphertext: N bytes (includes 16-byte Poly1305 MAC)]
+```
+
+The sender:
+1. Serializes the plaintext message (JSON for control messages, raw bytes for binary frames).
+2. Generates the next nonce (see 5.6.5).
+3. Calls `nacl.box(plaintext, nonce, recipientPublicKey, senderSecretKey)` to produce ciphertext.
+4. Sends `nonce || ciphertext` as a binary WebSocket frame.
+
+The receiver:
+1. Reads the first 24 bytes as the nonce.
+2. Calls `nacl.box.open(ciphertext, nonce, senderPublicKey, recipientSecretKey)` to recover plaintext.
+3. If decryption fails (MAC check), drops the frame and logs a warning. Does not close the connection (could be a transient corruption).
+
+**Overhead:** 24 bytes (nonce) + 16 bytes (MAC) = 40 bytes per frame. Negligible for typical messages (1-10 KB).
+
+### 5.6.5 Nonce Management
+
+Nonces must never repeat for the same key pair. Strategy: **counter-based nonces with direction prefix.**
+
+- Mobile-to-server nonces: first byte = `0x01`, remaining 23 bytes = big-endian counter starting at 0.
+- Server-to-mobile nonces: first byte = `0x02`, remaining 23 bytes = big-endian counter starting at 0.
+
+The direction prefix ensures that even if both sides start their counters at 0, nonces never collide. The 23-byte counter space (2^184) will never overflow in practice.
+
+Counters reset to 0 each time a new WebSocket connection is established (reconnect). This is safe because the same key pair is reused, but nonce reuse is avoided because the counters always increment within a connection, and a reconnect resets both sides' counters simultaneously.
+
+### 5.6.6 Multi-Device Considerations
+
+Each mobile device generates its own X25519 keypair during pairing. The server stores multiple `(device_id, mobile_pk)` pairs. When the server receives an encrypted frame from the broker, the broker's multiplexing envelope (`client_id`) identifies which device sent it, and the server uses the corresponding `mobile_pk` for decryption.
+
+### 5.6.7 Control Messages vs. Data Messages
+
+**Control messages** (broker <-> client, broker <-> server) such as `connection_request`, `server_offline`, and `heartbeat` are NOT encrypted with NaCl. They are broker-level protocol messages that the broker must read to function. These travel over TLS only.
+
+**Data messages** (client <-> server, relayed through broker) are always NaCl-encrypted. The broker forwards them as opaque binary blobs. The multiplexing envelope (`type: "data"` + `client_id`) is kept in the clear so the broker can route, but the `payload` field is replaced with the encrypted blob:
+
+```typescript
+// What the broker sees for a data message:
+{
+  type: "data",
+  client_id: "c_abc123",
+  encrypted: true,
+  payload: <binary: nonce || ciphertext>
+}
+```
+
+---
+
+## 9. New Gaps
+
+The following new technical decisions emerged from the locked decisions above, particularly from the NaCl E2E encryption requirement.
+
+### Gap 1: NaCl Key Rotation
+
+The current design generates one X25519 keypair per device-server pair during the initial pairing step. These keys are used indefinitely. Questions:
+
+- **Should keys rotate?** Long-lived keys mean a compromised `mobile_sk` exposes all future traffic. Periodic rotation (e.g., weekly) limits the window.
+- **Rotation mechanism:** If keys rotate, how does the new public key reach the other side? The broker can relay public keys, but the old shared secret should be used to authenticate the rotation (sign the new public key with the old key to prevent MITM during rotation).
+- **Forward secrecy:** NaCl box with static keys does not provide forward secrecy. A compromised private key exposes all past traffic that was recorded. Should we add an ephemeral key exchange per session (like a double-ratchet or just ephemeral X25519 per connection)?
+
+### Gap 2: Key Backup and Recovery
+
+- **What happens if the user loses their phone?** The `mobile_sk` is in the Keychain/Keystore and may not survive a device wipe. The user would need to re-pair the server (generate new keys). Is this acceptable UX, or do we need encrypted key backup?
+- **Multi-device key independence:** Each device has its own keypair. Losing one device does not affect others. But a server-side key loss (disk failure) requires ALL devices to re-pair. Should the server key be included in the server backup strategy?
+
+### Gap 3: Pairing Token Transport Security
+
+- The pairing flow sends `mobile_pk` via QR code or copyable string. If the user copies it through a compromised clipboard (clipboard sniffing malware), an attacker could substitute their own public key (MITM).
+- **Mitigation options:** (a) Display a short verification code on both sides (derived from the shared secret) that the user visually confirms. (b) Accept the risk -- clipboard MITM is a local-device-compromise scenario where the attacker likely has broader access anyway.
+
+### Gap 4: NaCl Library Choice
+
+- `tweetnacl` (pure JS) vs. `libsodium-wrappers` (WASM) vs. `sodium-native` (native binding). Need to decide per platform:
+  - Mobile (React Native): `tweetnacl` is simplest (no native code), but is it fast enough for encrypting every relayed frame? Benchmarking needed.
+  - Server (Node.js): `sodium-native` is fastest but adds a native dependency to the Docker image. `libsodium-wrappers` is WASM and works everywhere.
+
+### Gap 5: Debugging Encrypted Relay Traffic
+
+- With NaCl encryption, the broker cannot inspect relay traffic for diagnostics. How do we debug connectivity issues?
+- **Options:** (a) A debug mode flag that temporarily disables E2E encryption (opted in by the user). (b) Client-side and server-side logging of decrypted traffic (local only, never on the broker). (c) Rely on connection-level metrics (frame counts, byte counts, error rates) without content inspection.
+
+### Gap 6: Nonce Counter Persistence Across Reconnects
+
+- Section 5.6.5 says counters reset to 0 on reconnect. If the same WebSocket connection drops and reconnects very quickly, there is a theoretical risk of nonce reuse if frames were in-flight during the drop.
+- **Safer alternative:** Persist the last-used nonce counter and always start above it. But this adds state management complexity. Need to evaluate whether the theoretical risk justifies the complexity.
+
+### Gap 7: VPS Provider Selection
+
+- The locked decision says "single VPS first" but does not specify the provider. Options: Hetzner (cheapest, EU and US datacenters), DigitalOcean, Linode/Akamai, Vultr, OVH.
+- Selection criteria: US East availability, Docker support, bandwidth pricing, reliability, SSH-based deploy simplicity.

@@ -21,7 +21,13 @@ This is the primary workflow skill. It governs the entire lifecycle of a user fe
 
 You are building a feature for a personal web application running on AnyClaw infrastructure.
 The app uses PocketBase (SQLite DB with auto REST API), a Node.js/TypeScript logic service,
-and a Vite+React+TypeScript frontend. You have MCP tools to interact with all layers.
+and a Vite+React+TypeScript+Tailwind v4 frontend.
+
+You write code directly using your built-in file tools (read, write, edit).
+You do NOT use MCP tools for creating files -- you write them yourself.
+MCP tools are only for robustness-critical operations that agents tend to get wrong:
+`anyclaw_deploy`, `anyclaw_rollback`, `anyclaw_snapshot_db`, `anyclaw_ask_user`,
+`anyclaw_update_progress`, and `anyclaw_create_collection`.
 
 Follow this workflow exactly. Do not skip steps.
 
@@ -99,7 +105,7 @@ Order matters: create collections that others depend on first.
 If API routes or background jobs are needed:
 
 For API routes:
-1. Use `anyclaw_write_file` to create the route file in `packages/logic/src/routes/`
+1. Create the route file directly in `packages/logic/src/routes/` using your file tools
 2. Follow this pattern exactly:
 
 ```typescript
@@ -125,7 +131,7 @@ export default router;
 3. Register the route in `packages/logic/src/index.ts` by importing and mounting it.
 
 For background jobs:
-1. Use `anyclaw_write_file` to create the job file in `packages/logic/src/jobs/`
+1. Create the job file directly in `packages/logic/src/jobs/` using your file tools
 2. Follow this pattern:
 
 ```typescript
@@ -149,8 +155,8 @@ Update progress: "Implementing backend for [feature name]..."
 Build the UI. Follow the anyclaw-style-guide skill for all CSS and component conventions.
 
 For each new page:
-1. Use `anyclaw_create_page` to scaffold the page with routing
-2. Use `anyclaw_write_file` to implement the page component
+1. Create the page component file in `packages/frontend/src/pages/` using your file tools
+2. Add the route to the router configuration
 3. Add the page to navigation
 
 For components:
@@ -194,17 +200,17 @@ Update progress: "Building UI for [feature name]..."
 
 Run the validation suite in the dev environment:
 
-1. Use `anyclaw_run_dev` to execute: `npm run lint`
+1. Use `anyclaw_run_command` to execute: `npm run lint`
    - Fix any lint errors before proceeding
-2. Use `anyclaw_run_dev` to execute: `npm run typecheck`
+2. Use `anyclaw_run_command` to execute: `npm run typecheck`
    - Fix any type errors before proceeding
-3. Use `anyclaw_run_dev` to execute: `npm run build`
+3. Use `anyclaw_run_command` to execute: `npm run build`
    - Fix any build errors before proceeding
-4. Use `anyclaw_run_dev` to execute: `npm run test`
+4. Use `anyclaw_run_command` to execute: `npm run test`
    - Fix any failing tests before proceeding
 
 If you created new API routes, manually test them:
-- Use `anyclaw_run_dev` to curl the endpoints and verify responses
+- Use `anyclaw_run_command` to curl the endpoints and verify responses
 
 If you modified existing features, verify they still work:
 - Check that existing pages still render (no import errors)
@@ -248,7 +254,7 @@ Update progress: "Deployed! [feature name] is live."
   automatically, but if you are doing manual testing with schema changes, snapshot first).
 - ALWAYS post progress updates so the user knows what is happening.
 - If a feature request would require installing new npm packages, use
-  `anyclaw_run_dev` to run `npm install <package>` in the appropriate workspace.
+  `anyclaw_run_command` to run `npm install <package>` in the appropriate workspace.
   Prefer well-known, maintained packages. Avoid packages with fewer than 1000
   weekly downloads unless there is no alternative.
 ```
@@ -265,20 +271,24 @@ This style guide defines the exact conventions you must follow for all
 React components and CSS. Consistency matters -- the user sees every
 feature you build side by side, so they must look like they belong together.
 
-## CSS Approach: Tailwind CSS
+## CSS Approach: Tailwind CSS v4
 
-Use Tailwind CSS utility classes for all styling. Do not use:
+Use Tailwind CSS v4 utility classes for all styling. Tailwind v4 uses
+CSS-first configuration -- theme tokens are defined in `packages/frontend/src/app.css`
+using `@theme`, not in a JS/TS config file. Do not use:
 - Inline style objects (`style={{ }}`)
 - CSS Modules
 - Styled-components or CSS-in-JS libraries
-- Separate .css files (except for Tailwind's base imports)
+- Separate .css files (except for the main `app.css` with Tailwind's `@theme` block)
+- A `tailwind.config.ts` file (Tailwind v4 does not use one)
 
 Tailwind is already configured in the project. Use utility classes directly
 on JSX elements.
 
 ## Color System
 
-Use the following semantic color tokens defined in `tailwind.config.ts`.
+Use the following semantic color tokens defined in `packages/frontend/src/app.css`
+via `@theme`.
 NEVER use raw color values (no `bg-blue-500`). Always use semantic names:
 
 ```
@@ -741,9 +751,11 @@ project, follow these rules:
 3. After every 5 deployments, run `/anyclaw-refactor`
 4. When writing version descriptions, follow `/anyclaw-describe-version`
 
-Use the AnyClaw MCP tools (anyclaw_create_page, anyclaw_create_collection,
-anyclaw_deploy, etc.) for all infrastructure operations. Do not manually edit
-PocketBase files or the prod/ directory.
+Write code directly using your built-in file tools (read, write, edit).
+Use AnyClaw MCP tools only for robustness-critical operations:
+`anyclaw_deploy`, `anyclaw_rollback`, `anyclaw_snapshot_db`,
+`anyclaw_create_collection`, `anyclaw_ask_user`, `anyclaw_update_progress`.
+Do not manually edit PocketBase files or the prod/ directory.
 ```
 
 **Slash commands:**
@@ -789,7 +801,47 @@ instructions for all work on this project.
 
 This file is passed as the system prompt (or prepended to the first user message) by the agent adapter when dispatching tasks. The generic webhook adapter includes a `systemPrompt` field in its dispatch payload.
 
-#### 5e. Packaging Script
+#### 5e. Skill Versioning and Compatibility
+
+Skills are versioned independently from the AnyClaw server. This allows faster iteration on agent prompts without requiring a full server update. The server enforces compatibility at task dispatch time.
+
+**Version format:** Each skill declares a version and a minimum compatible server version in a YAML frontmatter block at the top of the file:
+
+```yaml
+---
+skill_version: "1.3.0"
+min_server_version: "0.5.0"
+---
+# anyclaw-build-feature
+...
+```
+
+The frontmatter is stripped before the skill content is passed to the agent. It is only read by the AnyClaw system.
+
+**Server version:** The AnyClaw server exposes its version via `GET /api/version` on the control plane (port 3004). The response includes:
+
+```json
+{
+  "server_version": "0.7.2",
+  "min_skill_version": "1.0.0"
+}
+```
+
+**Compatibility check flow:**
+
+1. At task dispatch time, the control plane reads the skill file that will be used (e.g., `anyclaw-build-feature.md`).
+2. It parses the frontmatter to extract `skill_version` and `min_server_version`.
+3. It compares `min_server_version` against the running server version using semver. If the server is too old, the task is rejected with an error: "Skill anyclaw-build-feature v1.3.0 requires server >= 0.5.0, but server is 0.4.1. Please update AnyClaw."
+4. It also compares `skill_version` against the server's `min_skill_version`. If the skill is too old, the task is rejected: "Skill anyclaw-build-feature v0.9.0 is outdated. Server requires skill >= 1.0.0. Please update skills."
+5. If both checks pass, the skill content (without frontmatter) is passed to the agent.
+
+**Update mechanism:**
+
+- Skills are distributed as files in the AnyClaw release package. Running the install script (or `docker compose pull` for updates) fetches new skill files alongside server images.
+- The packaging script (`package-skills.sh`) preserves frontmatter during copying so that the version metadata is available at the destination.
+- Users are notified of skill updates via the mobile app settings screen ("Skills update available") but the update is applied automatically on the next `docker compose pull` / install script run.
+
+#### 5f. Packaging Script
 
 A script at `anyclaw-server/scripts/package-skills.sh` handles all three formats:
 
@@ -843,136 +895,137 @@ echo "Skills packaged for all platforms."
 
 ### 6. Docker Compose
 
-The self-hosted deployment runs as a single `docker compose` stack. All services share a Docker network and communicate via internal hostnames.
+The self-hosted deployment runs as a single `docker compose` stack with three containers, matching the locked architecture decision. All services share a Docker network and communicate via internal hostnames.
+
+**Three-container architecture:**
+
+1. **App server** -- serves the agent-built frontend + PocketBase + Node.js logic service to the mobile WebView. Can be restarted/stopped by the user or agent without losing access to the control plane.
+2. **Control plane** -- health checks, restart API for the app server, agent task dispatch API, MCP server, tunnel client. Always available, even if the app server is down. The user can always reach their agent.
+3. **Sandbox** -- isolated command execution environment for the coding agent. Runs build commands, linting, tests, npm install, etc. with a blocklist. Isolated so runaway commands cannot affect the app server or control plane.
 
 ```yaml
 # docker-compose.yml
 
-version: "3.8"
-
 services:
-  pocketbase:
-    image: ghcr.io/anyclaw/pocketbase:latest
-    container_name: anyclaw-pocketbase
+  # -------------------------------------------------------
+  # Container 1: App Server
+  # Serves the agent-built frontend + PocketBase + logic service.
+  # Restartable by user or agent without losing control plane access.
+  # -------------------------------------------------------
+  app:
+    image: ghcr.io/anyclaw/app-server:latest
+    container_name: anyclaw-app
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      - "8090:8090"   # PocketBase
+      - "3001:3001"   # Node.js logic service
+      - "5173:5173"   # Frontend (prod static server)
     volumes:
       - pb_data:/app/pb_data
       - pb_migrations:/app/pb_migrations
+      - logic_data:/app/logic_data
+      - prod_workspace:/app/prod
+      - dev_workspace:/app/dev
+      - git_repo:/app/repo
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/api/health"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
-    environment:
-      - ANYCLAW_ADMIN_EMAIL=${ANYCLAW_ADMIN_EMAIL}
-      - ANYCLAW_ADMIN_PASSWORD=${ANYCLAW_ADMIN_PASSWORD}
-
-  logic:
-    image: ghcr.io/anyclaw/logic:latest
-    container_name: anyclaw-logic
-    restart: unless-stopped
-    ports:
-      - "3001:3001"
-    volumes:
-      - logic_data:/app/data
-      - dev_workspace:/app/dev
-      - prod_workspace:/app/prod
-      - git_repo:/app/repo
-    depends_on:
-      pocketbase:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
       start_period: 15s
     environment:
-      - POCKETBASE_URL=http://pocketbase:8090
-      - POCKETBASE_ADMIN_EMAIL=${ANYCLAW_ADMIN_EMAIL}
-      - POCKETBASE_ADMIN_PASSWORD=${ANYCLAW_ADMIN_PASSWORD}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - POCKETBASE_URL=http://localhost:8090
+      - POCKETBASE_API_TOKEN=${POCKETBASE_API_TOKEN}
       - NODE_ENV=production
-
-  frontend:
-    image: ghcr.io/anyclaw/frontend:latest
-    container_name: anyclaw-frontend
-    restart: unless-stopped
-    ports:
-      - "5173:5173"
-    volumes:
-      - dev_workspace:/app/dev
-      - prod_workspace:/app/prod
-    depends_on:
-      logic:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5173/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    environment:
-      - VITE_POCKETBASE_URL=http://pocketbase:8090
-      - VITE_LOGIC_URL=http://logic:3001
       - SERVE_MODE=prod
 
-  mcp:
-    image: ghcr.io/anyclaw/mcp-server:latest
-    container_name: anyclaw-mcp
+  # -------------------------------------------------------
+  # Container 2: Control Plane
+  # Health checks, restart API, agent task dispatch, MCP server,
+  # tunnel client. Always available -- never restarted by the agent.
+  # -------------------------------------------------------
+  control:
+    image: ghcr.io/anyclaw/control-plane:latest
+    container_name: anyclaw-control
     restart: unless-stopped
     ports:
-      - "3002:3002"
+      - "3002:3002"   # MCP server (HTTP/SSE)
+      - "3003:3003"   # Tunnel client
+      - "3004:3004"   # Control plane API (health, restart, dispatch)
     volumes:
       - dev_workspace:/app/dev
       - prod_workspace:/app/prod
       - git_repo:/app/repo
-      - pb_data:/app/pb_data
-      - pb_migrations:/app/pb_migrations
+      - pb_data:/app/pb_data:ro
       - snapshots:/app/snapshots
     depends_on:
-      pocketbase:
-        condition: service_healthy
-      logic:
+      app:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3002/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3004/health"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
     environment:
-      - POCKETBASE_URL=http://pocketbase:8090
-      - POCKETBASE_ADMIN_EMAIL=${ANYCLAW_ADMIN_EMAIL}
-      - POCKETBASE_ADMIN_PASSWORD=${ANYCLAW_ADMIN_PASSWORD}
-      - LOGIC_URL=http://logic:3001
-      - FRONTEND_URL=http://frontend:5173
+      - POCKETBASE_URL=http://app:8090
+      - POCKETBASE_API_TOKEN=${POCKETBASE_API_TOKEN}
+      - APP_CONTAINER_NAME=anyclaw-app
+      - LOGIC_URL=http://app:3001
+      - FRONTEND_URL=http://app:5173
       - DEV_WORKSPACE=/app/dev
       - PROD_WORKSPACE=/app/prod
       - GIT_REPO=/app/repo
       - SNAPSHOTS_DIR=/app/snapshots
-
-  tunnel:
-    image: ghcr.io/anyclaw/tunnel:latest
-    container_name: anyclaw-tunnel
-    restart: unless-stopped
-    ports:
-      - "3003:3003"
-    depends_on:
-      frontend:
-        condition: service_healthy
-      mcp:
-        condition: service_healthy
-    environment:
-      - BROKER_URL=${BROKER_URL:-https://broker.anyclaw.com}
+      - BROKER_URL=${BROKER_URL:-https://broker.anyclawapp.com}
       - ANYCLAW_USER_TOKEN=${ANYCLAW_USER_TOKEN}
-      - FRONTEND_URL=http://frontend:5173
-      - POCKETBASE_URL=http://pocketbase:8090
-      - MCP_URL=http://mcp:3002
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    # Docker socket access for restarting the app container
+    # and dispatching commands to the sandbox container
+    volumes_extra:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # -------------------------------------------------------
+  # Container 3: Sandbox
+  # Isolated command execution for the coding agent.
+  # Blocklist prevents dangerous commands. Resource-limited.
+  # -------------------------------------------------------
+  sandbox:
+    image: ghcr.io/anyclaw/sandbox:latest
+    container_name: anyclaw-sandbox
+    restart: unless-stopped
+    volumes:
+      - dev_workspace:/app/dev
+      - git_repo:/app/repo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3005/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "3005:3005"   # Sandbox command API (internal only)
+    environment:
+      - DEV_WORKSPACE=/app/dev
+      - GIT_REPO=/app/repo
+      - COMMAND_BLOCKLIST=rm -rf /,mkfs,dd,shutdown,reboot,systemctl,docker,mount
+      - COMMAND_TIMEOUT_SECONDS=300
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    # No network access to PocketBase or external services
+    # Only the dev workspace and git repo are mounted
+    networks:
+      - sandbox_net
+
+networks:
+  default:
+    name: anyclaw-net
+  sandbox_net:
+    name: anyclaw-sandbox-net
+    internal: true  # No external network access from sandbox
 
 volumes:
   pb_data:
@@ -991,27 +1044,27 @@ volumes:
     driver: local
 ```
 
-**Service summary:**
+**Container summary:**
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| `pocketbase` | 8090 | Database, auth, file storage, real-time subscriptions |
-| `logic` | 3001 | Node.js logic service (custom API routes, background jobs, LLM calls) |
-| `frontend` | 5173 | Vite dev server (dev mode) or static file server (prod mode) |
-| `mcp` | 3002 | MCP server exposing AnyClaw tools to the coding agent |
-| `tunnel` | 3003 | Tunnel client connecting to the connection broker for mobile access |
+| Container | Ports | Purpose | Restartable by agent? |
+|-----------|-------|---------|-----------------------|
+| `app` | 8090, 3001, 5173 | PocketBase + Node.js logic + frontend static server | Yes (via control plane restart API) |
+| `control` | 3002, 3003, 3004 | MCP server, tunnel client, health checks, restart API, agent task dispatch | No (always available) |
+| `sandbox` | 3005 | Command execution (lint, typecheck, build, tests, npm install) with blocklist | No (managed by control plane) |
 
 **Volume purposes:**
 
 | Volume | Shared By | Purpose |
 |--------|-----------|---------|
-| `pb_data` | pocketbase, mcp | PocketBase data directory (SQLite DB, uploaded files) |
-| `pb_migrations` | pocketbase, mcp | PocketBase migration files (tracked in git) |
-| `dev_workspace` | logic, frontend, mcp | The agent's working copy of frontend + logic source |
-| `prod_workspace` | logic, frontend, mcp | Production build artifacts |
-| `git_repo` | logic, mcp | Git repository for version tracking |
-| `snapshots` | mcp | SQLite DB snapshots for rollback |
-| `logic_data` | logic | Persistent data for background jobs (caches, state files) |
+| `pb_data` | app, control (read-only) | PocketBase data directory (SQLite DB, uploaded files) |
+| `pb_migrations` | app | PocketBase migration files |
+| `dev_workspace` | app, control, sandbox | The agent's working copy of frontend + logic source |
+| `prod_workspace` | app, control | Production build artifacts |
+| `git_repo` | app, control, sandbox | Git repository for version tracking |
+| `snapshots` | control | SQLite DB snapshots for rollback |
+| `logic_data` | app | Persistent data for background jobs (caches, state files) |
+
+**How `anyclaw_run_command` works:** The MCP server (in the control plane) dispatches commands to the sandbox container via its API on port 3005. The sandbox executes the command in the dev workspace, applies the blocklist, enforces resource limits, and streams stdout/stderr back. The sandbox has no access to PocketBase, no access to the external network, and cannot affect the app server or control plane.
 
 ---
 
@@ -1137,37 +1190,34 @@ echo "[4/7] Configuring AnyClaw..."
 if [ ! -f .env ]; then
   cp .env.template .env
 
-  # Generate PocketBase admin credentials
-  ADMIN_EMAIL="admin@localhost"
-  ADMIN_PASSWORD=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+  # Generate a PocketBase API token for programmatic access (not email/password)
+  PB_API_TOKEN=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)
 
-  sed -i.bak "s|ANYCLAW_ADMIN_EMAIL=.*|ANYCLAW_ADMIN_EMAIL=$ADMIN_EMAIL|" .env
-  sed -i.bak "s|ANYCLAW_ADMIN_PASSWORD=.*|ANYCLAW_ADMIN_PASSWORD=$ADMIN_PASSWORD|" .env
+  sed -i.bak "s|POCKETBASE_API_TOKEN=.*|POCKETBASE_API_TOKEN=$PB_API_TOKEN|" .env
   rm -f .env.bak
 
   echo ""
-  echo "  PocketBase Admin Credentials (saved in $INSTALL_DIR/.env):"
-  echo "    Email:    $ADMIN_EMAIL"
-  echo "    Password: $ADMIN_PASSWORD"
+  echo "  PocketBase API Token (saved in $INSTALL_DIR/.env):"
+  echo "    Token: $PB_API_TOKEN"
   echo ""
 
-  # Prompt for LLM API key
+  # Collect LLM API key -- will be stored encrypted in PocketBase after boot
   echo "AnyClaw needs an LLM API key for AI-powered features."
   echo "Supported providers: anthropic, openai"
   read -rp "LLM provider (anthropic/openai) [anthropic]: " LLM_PROVIDER
   LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
 
   read -rp "API key for $LLM_PROVIDER: " LLM_API_KEY
-  if [ -n "$LLM_API_KEY" ]; then
-    sed -i.bak "s|LLM_PROVIDER=.*|LLM_PROVIDER=$LLM_PROVIDER|" .env
-    sed -i.bak "s|LLM_API_KEY=.*|LLM_API_KEY=$LLM_API_KEY|" .env
-    rm -f .env.bak
-  else
-    echo "Warning: No API key provided. LLM features will not work until configured."
-    echo "Edit $INSTALL_DIR/.env to add your key later."
-  fi
+
+  # API keys are NOT stored in .env. They will be written to PocketBase
+  # (encrypted at rest) after the services start. Store temporarily for
+  # the bootstrap phase only.
+  BOOTSTRAP_LLM_PROVIDER="$LLM_PROVIDER"
+  BOOTSTRAP_LLM_KEY="$LLM_API_KEY"
 else
   echo "Existing .env found, keeping current configuration."
+  BOOTSTRAP_LLM_PROVIDER=""
+  BOOTSTRAP_LLM_KEY=""
 fi
 
 # ----------------------------------------------------------
@@ -1197,6 +1247,45 @@ done
 if [ $ELAPSED -ge $TIMEOUT ]; then
   echo "Warning: Some services did not become healthy within ${TIMEOUT}s."
   echo "Run 'docker compose -f $INSTALL_DIR/docker-compose.yml logs' to debug."
+fi
+
+# ----------------------------------------------------------
+# Phase 5b: Store API Keys in PocketBase (encrypted)
+# ----------------------------------------------------------
+
+# API keys are stored encrypted in PocketBase, not in .env files.
+# The PocketBase `api_keys` collection uses an encrypted JSON field.
+# The control plane reads keys from PocketBase at runtime.
+
+if [ -n "$BOOTSTRAP_LLM_KEY" ]; then
+  echo "Storing API key in PocketBase (encrypted)..."
+  PB_URL="http://localhost:8090"
+
+  # Wait for PocketBase to be ready
+  for i in $(seq 1 10); do
+    if wget -q --spider "$PB_URL/api/health" 2>/dev/null; then break; fi
+    sleep 1
+  done
+
+  # Use the API token to authenticate and store the key
+  curl -s -X POST "$PB_URL/api/collections/api_keys/records" \
+    -H "Authorization: Bearer $PB_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"provider\": \"$BOOTSTRAP_LLM_PROVIDER\",
+      \"key\": \"$BOOTSTRAP_LLM_KEY\",
+      \"active\": true
+    }" > /dev/null
+
+  echo "API key stored. You can manage keys from the mobile app Settings screen."
+  # Clear the key from shell memory
+  unset BOOTSTRAP_LLM_KEY
+else
+  if [ -z "$BOOTSTRAP_LLM_PROVIDER" ]; then
+    echo "No new API key to store."
+  else
+    echo "Warning: No API key provided. Add one later via the mobile app Settings screen."
+  fi
 fi
 
 # ----------------------------------------------------------
@@ -1265,76 +1354,57 @@ echo "Open the AnyClaw mobile app and sign in to connect."
 
 ### 8. Cloud-Hosted Setup
 
-#### Architecture: Container-per-user on Fly.io
+#### Phase 1: Single VPS with Docker Compose
 
-**Why Fly.io over Kubernetes/ECS:**
-- Fly.io Machines are individual containers that can be started/stopped independently -- natural fit for per-user isolation
-- No cluster management overhead (no node pools, no control plane costs)
-- Built-in global anycast networking and automatic TLS
-- Machines can be stopped when idle and started on-demand (cost savings)
-- Simpler than ECS (no task definitions, no ALB config) and far simpler than Kubernetes
-- Pricing is per-machine-second -- idle users cost near zero when machines are stopped
+Start simple. A single VPS runs Docker Compose for all cloud-hosted users, with user isolation via separate compose projects. This VPS also hosts OpenClaw alongside AnyClaw.
 
-#### Per-User Container Model
+**Why VPS first:**
+- Cheapest to start -- a single $20-40/month VPS handles the first 10-20 users
+- Same Docker Compose setup as self-hosted, so the deployment is battle-tested
+- OpenClaw can run on the same VPS as a sibling Docker Compose project
+- No new infrastructure to learn (no Fly.io API, no Machines provisioning)
+- Migrate to Fly.io later when user count justifies per-user container isolation
 
-Each subscriber gets a single Fly Machine running all AnyClaw services in a supervised process (using `supervisord` or `s6-overlay`). This is a deliberate choice: running PocketBase, the Node.js logic service, the Vite frontend, and the MCP server in a single container avoids the network complexity and cost of multi-container orchestration for what is fundamentally a single-user system.
-
-**Container spec:**
-- Base image: Debian slim with Node.js 20, Go (for PocketBase), and git
-- CPU: 1 shared vCPU (scalable to 2 on demand)
-- RAM: 512MB base (scalable to 1GB)
-- Disk: 3GB persistent volume (Fly Volumes) per user for PocketBase data, git repo, and snapshots
-- Region: auto-selected based on user's location at signup
-
-**Process layout inside the container:**
+**VPS layout:**
 
 ```
-supervisord
-  ├── pocketbase (port 8090)
-  ├── node logic-service (port 3001)
-  ├── node frontend-server (port 5173, serving prod build as static files)
-  ├── node mcp-server (port 3002)
-  └── node tunnel-client (connects to broker)
+VPS (e.g., Hetzner CX32 -- 4 vCPU, 8GB RAM, 80GB disk)
+  ├── /opt/anyclaw/users/
+  │     ├── user-abc123/
+  │     │     ├── docker-compose.yml    (AnyClaw three-container stack)
+  │     │     └── data/                 (PocketBase data, git repo, snapshots)
+  │     ├── user-def456/
+  │     │     ├── docker-compose.yml
+  │     │     └── data/
+  │     └── ...
+  ├── /opt/openclaw/
+  │     └── docker-compose.yml          (OpenClaw instance, shared by all users)
+  └── /opt/anyclaw/provisioner/
+        └── docker-compose.yml          (Provisioning service + broker)
 ```
 
-Only the tunnel client has external connectivity. No ports are exposed directly. The mobile app reaches the container through the connection broker, same as self-hosted.
+Each user gets their own Docker Compose project with isolated volumes. Port allocation is dynamic -- the provisioner assigns unique host ports per user and configures the tunnel client to route through the broker.
 
-#### Provisioning Flow
+**Co-hosting OpenClaw:** OpenClaw runs as a separate Docker Compose project on the same VPS. AnyClaw's agent adapter for OpenClaw connects to it via internal Docker networking. Cloud-hosted users who choose OpenClaw as their agent share this single OpenClaw instance (each user's requests are dispatched with their own API keys and isolated workspace context).
 
-When a new user subscribes:
+#### Phase 2: Migrate to Fly.io (future)
 
-1. **Signup:** User creates account on anyclaw.com (Stripe for payment, PocketBase on the control plane for user records)
-2. **Provision API call:** The control plane calls the provisioning service, which:
-   a. Creates a Fly Machine from the AnyClaw template image in the nearest region
-   b. Attaches a new Fly Volume (3GB) to the machine
-   c. Generates a unique PocketBase admin credential pair
-   d. Stores the machine ID, region, and credentials in the control plane database
-   e. Starts the machine
-3. **Initialization:** On first boot, the container:
-   a. Initializes PocketBase with admin credentials
-   b. Initializes the git repository in the dev workspace
-   c. Installs the default frontend scaffold (home page, layout, empty state)
-   d. Runs a first deployment to populate prod
-   e. Registers with the connection broker using the user's auth token
-4. **Ready:** The provisioning service marks the user as active. The mobile app can now connect.
+When user count exceeds what a single VPS can handle (estimated 20-50 users depending on usage patterns), migrate to Fly.io Machines for per-user container isolation.
 
-Total provisioning time target: under 60 seconds from payment confirmation to a working instance.
+**Migration path:**
+- Each user's Docker Compose stack becomes a single Fly Machine running all three containers via `s6-overlay` process supervisor
+- Fly Volumes replace local bind mounts for persistent data
+- The provisioner becomes a Fly.io management API client
+- Idle shutdown: machines stop after 30 minutes of inactivity, wake on mobile app connect (3-5s boot)
+- OpenClaw moves to its own Fly Machine or stays on a dedicated VPS depending on scale
 
-#### Lifecycle Management
+**Fly.io cost model (per user/month, estimated):**
 
-- **Idle shutdown:** If a user's machine has no active connections (no mobile app connected, no agent task running) for 30 minutes, the machine is stopped. The Fly Volume persists. Stopped machines cost nothing.
-- **Wake on connect:** When the mobile app tries to connect through the broker, the broker calls the provisioning API to start the machine. The machine boots in 3-5 seconds (process startup, not image pull -- the image is cached on the host).
-- **Scaling up:** If an agent task is consuming heavy CPU (large build, many LLM calls), the machine can be temporarily scaled to 2 vCPU / 1GB RAM via Fly's machine update API. It scales back down after the task completes.
-- **Backups:** Fly Volumes are snapshotted daily by Fly.io. Additionally, the PocketBase SQLite file is backed up to object storage (Fly Tigris or S3-compatible) every 24 hours as a disaster recovery measure.
-
-#### Cost Model
-
-| Resource | Cost (per user/month, estimated) |
-|----------|----------------------------------|
+| Resource | Cost |
+|----------|------|
 | Fly Machine (shared-cpu-1x, ~50% active time) | ~$1.50 |
 | Fly Volume (3GB) | ~$0.45 |
-| Bandwidth (5GB/month typical) | ~$0.00 (included in free tier) |
-| Object storage backups (100MB) | ~$0.01 |
+| Bandwidth (5GB/month typical) | ~$0.00 |
 | **Infrastructure total** | **~$2.00/user/month** |
 | LLM tokens (bundled, ~$3-5 of usage) | ~$4.00 |
 | **Total COGS** | **~$6.00/user/month** |
@@ -1343,51 +1413,65 @@ This supports a subscription price point of $12-15/month with healthy margins. B
 
 ---
 
-### 9. Technical Decisions Needed
+### 9. Technical Decisions (Resolved)
 
-The following open questions require human input before implementation begins:
+All open questions from the original design have been resolved by the locked decisions in the main spec. Summary of resolutions:
 
-**1. Tailwind CSS version and configuration scope**
+| # | Original Question | Resolution |
+|---|-------------------|------------|
+| 1 | Tailwind v3 or v4? | **Tailwind v4** with CSS-first `@theme` config. No `tailwind.config.ts`. |
+| 2 | MCP transport (stdio vs HTTP/SSE)? | **HTTP/SSE from the start.** Cloud-ready from day one. |
+| 3 | Cloud hosting (Fly.io vs VPS)? | **Single VPS with Docker Compose first.** Migrate to Fly.io later. Co-host OpenClaw on same VPS. |
+| 4 | Skill versioning? | **Independent with compatibility check.** Skills declare `min_server_version`, server declares `min_skill_version`. Semver comparison at dispatch time. |
+| 5 | Dev workspace isolation? | **Dedicated sandbox container** with blocklist rules, resource limits (1 CPU, 1GB RAM), isolated network. Commands dispatched from control plane to sandbox via API. |
 
-The style guide specifies Tailwind with semantic color tokens. Decision needed:
-- Should we use Tailwind v3 (stable, widely known by agents) or Tailwind v4 (newer, CSS-first config)?
-- How many semantic tokens should we pre-define vs. let the agent create on demand?
-- Should we bundle a set of pre-made themes (light, dark, color accents) or start with a single default theme?
+---
 
-This affects the `tailwind.config.ts` that ships with the scaffold and every component the agent builds.
+## New Gaps
 
-**2. MCP server transport protocol**
+The following new technical decisions emerged from applying the locked decisions above. These need resolution before implementation.
 
-The MCP server needs to communicate with coding agents. Decision needed:
-- Should it use stdio transport (standard for Claude Code, requires the agent to spawn the MCP process)?
-- Should it use HTTP/SSE transport (works over the network, needed for remote agents)?
-- Should it support both, with auto-detection?
+**1. PocketBase API token provisioning and rotation**
 
-Stdio is simpler and more secure for local use. HTTP/SSE is required for the cloud-hosted case where the agent may run separately from the container. Supporting both adds complexity to the MCP server but maximizes compatibility.
+PocketBase API tokens (not email/password) are the locked auth mechanism. Open questions:
+- How is the initial API token created? PocketBase does not natively support pre-seeded API tokens -- it requires an admin account to generate them. The install script may need to create an admin account first, generate a token via the API, then disable password-based admin login.
+- How are tokens rotated? If a token is compromised, the user needs a way to regenerate it. This likely requires a control plane endpoint or a mobile app settings action.
+- How many tokens are needed? The app server and control plane each need one. Should they share a token or have separate tokens with different scopes?
 
-**3. Fly.io vs. alternatives for cloud hosting**
+**2. API key encryption scheme in PocketBase**
 
-The design proposes Fly.io Machines for cloud hosting. Decision needed:
-- Is Fly.io's pricing and reliability acceptable for production use?
-- Should we prototype with a simpler setup first (e.g., a single VPS with Docker Compose and user isolation via separate compose projects)?
-- Is the single-container-per-user model the right granularity, or should we share PocketBase instances across users (multi-tenant)?
+API keys are stored encrypted in PocketBase (not env vars). Open questions:
+- What encryption algorithm? AES-256-GCM is the obvious choice, but the encryption key itself needs to be stored somewhere. If it is in the .env file, we have merely moved the problem.
+- Should the encryption key be derived from the PocketBase API token (so there is only one secret to protect)?
+- How does the control plane decrypt keys at runtime? It needs the decryption key in memory. If the container restarts, it must be able to recover the key from a persistent source.
+- PocketBase does not have built-in field-level encryption. This must be application-level encryption (encrypt before writing, decrypt after reading). The `api_keys` collection stores ciphertext, not plaintext.
 
-A single VPS with Docker Compose is cheaper to start but harder to scale. Multi-tenant PocketBase reduces costs but complicates isolation and rollback.
+**3. Sandbox container command API design**
 
-**4. Skill versioning and update mechanism**
+The sandbox container exposes a command execution API on port 3005. Open questions:
+- What is the API contract? Likely `POST /exec` with `{ command, workdir, timeout }` and streaming stdout/stderr response.
+- How does the control plane authenticate to the sandbox? The sandbox is on an internal-only network, but should there still be a shared secret or is network isolation sufficient?
+- How does the blocklist work? String matching on the command? Parsing the command into executable + args and checking against a list? What about commands invoked indirectly (e.g., `bash -c "rm -rf /"`)?
+- Should the sandbox have internet access for `npm install`? Currently the sandbox is on an internal-only network (`sandbox_net: internal: true`), which blocks all external traffic. But `npm install` requires registry access. Options: (a) give the sandbox default network access too, (b) run an npm registry proxy on the control plane, (c) pre-install common packages in the sandbox image.
 
-Skills will evolve as we learn what works and what fails. Decision needed:
-- Should skills be versioned independently from the AnyClaw server release?
-- When a skill is updated, should existing users get the update automatically (the install script re-runs), or should the user opt-in?
-- Should the agent be able to read the current skill version and check for updates?
+**4. Control plane Docker socket access**
 
-Automatic updates are simpler for users but risk breaking a working agent workflow. Opt-in is safer but means most users will run stale skills.
+The control plane needs Docker socket access to restart the app container and dispatch commands to the sandbox. Open questions:
+- Is mounting `/var/run/docker.sock` acceptable for the security model? It gives the control plane root-equivalent access to the host.
+- Should we use a more restricted approach like a Docker socket proxy (e.g., Tecnativa docker-socket-proxy) that only allows specific API calls (restart container, exec in container)?
+- For cloud-hosted mode, Docker socket access works differently on Fly.io. This needs a separate mechanism (Fly Machines API) for the Phase 2 migration.
 
-**5. Dev workspace isolation model inside Docker**
+**5. Tailwind v4 `@theme` token definition**
 
-The agent writes code in the `dev_workspace` volume. Decision needed:
-- Should the dev workspace be a full Node.js environment with its own `node_modules`, or should it share the base image's installed packages?
-- Should `anyclaw_run_dev` execute commands inside the MCP container (fast, shared resources) or spin up a temporary container (isolated, but slower)?
-- What resource limits should dev commands have (CPU time, memory, network access)?
+The style guide references semantic color tokens but the exact `@theme` block content is not defined. Open questions:
+- What is the exact CSS for the default theme in `app.css`? Tailwind v4 uses `@theme { --color-primary: ...; }` syntax.
+- Should the agent be allowed to add new `@theme` tokens, or only use pre-defined ones? Adding tokens means editing `app.css`, which could break the theme if done incorrectly.
+- How does dark mode work with Tailwind v4? The `@theme` block supports `@media (prefers-color-scheme: dark)` overrides, but the exact pattern needs to be specified in the style guide.
 
-Running inside the MCP container is faster but a runaway `npm install` could starve other services. A temporary container provides isolation but adds 1-2 seconds of startup latency per command.
+**6. VPS provisioner design for cloud-hosted mode**
+
+The VPS-first cloud hosting model needs a provisioner service. Open questions:
+- How does the provisioner allocate ports for each user's Docker Compose stack? Each user needs unique host ports for PocketBase, logic, frontend, etc. (or all traffic routes through the tunnel and no host ports are exposed).
+- How does the provisioner manage per-user Docker Compose projects? It needs to template the `docker-compose.yml` per user, manage lifecycle (create, start, stop, destroy), and handle resource limits.
+- What is the resource limit per user on the shared VPS? How many concurrent users can a 4 vCPU / 8GB RAM VPS support?
+- How does OpenClaw share across cloud users? Each user dispatches tasks to a shared OpenClaw instance, but with their own API keys and workspace paths. The adapter needs to handle concurrent requests from multiple users safely.
