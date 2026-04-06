@@ -1,6 +1,6 @@
 # Plan 6: Skills + Deployment -- Design Document
 
-**Goal:** Define the complete agent skill suite that teaches coding agents how to build features on AnyClaw, and the Docker-based deployment setup for self-hosted and cloud-hosted modes.
+**Goal:** Define the complete agent skill suite that teaches coding agents how to build features on AnyClaw, and the deployment setup for self-hosted and cloud-hosted modes.
 
 **Dependencies:** Plan 1 (Server Infrastructure) must be implemented -- the skills reference the project structure, primitives, deployment manager, and dev/prod split defined there.
 
@@ -9,6 +9,18 @@
 ## Part A: Skills
 
 Skills are the instructions that teach a coding agent how to work within the AnyClaw system. They are agent-agnostic in content but packaged differently per agent platform.
+
+The core philosophy (locked decision #5, #23): **the agent uses its own built-in file and shell tools** to read, write, edit, and run commands. AnyClaw MCP tools are reserved for the small set of robustness-critical operations that agents tend to get wrong or cannot do natively. That set is exactly:
+
+- `anyclaw_deploy`
+- `anyclaw_rollback`
+- `anyclaw_snapshot_db`
+- `anyclaw_create_collection`
+- `anyclaw_ask_user`
+- `anyclaw_update_progress`
+- `anyclaw_list_versions`
+
+There are no `anyclaw_read_file`, `anyclaw_write_file`, `anyclaw_run_command`, `anyclaw_create_page`, or `anyclaw_create_api_route` tools. The agent uses its native equivalents for all of those.
 
 ---
 
@@ -19,15 +31,29 @@ This is the primary workflow skill. It governs the entire lifecycle of a user fe
 ```markdown
 # anyclaw-build-feature
 
-You are building a feature for a personal web application running on AnyClaw infrastructure.
-The app uses PocketBase (SQLite DB with auto REST API), a Node.js/TypeScript logic service,
-and a Vite+React+TypeScript+Tailwind v4 frontend.
+You are building a feature for a personal web application running on AnyClaw
+infrastructure. The app uses PocketBase (SQLite DB with auto REST API), a
+Node.js/TypeScript logic service, and a Vite+React+TypeScript+Tailwind v4
+frontend.
 
-You write code directly using your built-in file tools (read, write, edit).
-You do NOT use MCP tools for creating files -- you write them yourself.
-MCP tools are only for robustness-critical operations that agents tend to get wrong:
-`anyclaw_deploy`, `anyclaw_rollback`, `anyclaw_snapshot_db`, `anyclaw_ask_user`,
-`anyclaw_update_progress`, and `anyclaw_create_collection`.
+You write code directly using YOUR OWN built-in file tools (read, write, edit)
+and YOUR OWN shell tool for running commands. You do NOT use MCP tools for
+files or shell -- you already have those.
+
+AnyClaw MCP tools are only for operations that require server-side guarantees:
+
+- `anyclaw_deploy` -- run validation + snapshot + promote dev to prod atomically
+- `anyclaw_rollback` -- restore a specific version (code + DB snapshot together)
+- `anyclaw_snapshot_db` -- take a DB snapshot before risky schema changes
+- `anyclaw_create_collection` -- create a PocketBase collection via admin API
+- `anyclaw_ask_user` -- post a clarifying question to the mobile app and wait
+- `anyclaw_update_progress` -- post a progress update to the mobile app task card
+- `anyclaw_list_versions` -- read deployment history
+
+Your workspace is `/data/dev/` (bind-mounted into the container). Read and
+write files there using your own tools. Run `npm`, `tsc`, `vite`, etc. using
+your own shell tool. The infrastructure code in `/.anyclaw/` is NOT writable
+from your workspace -- do not try to modify it.
 
 Follow this workflow exactly. Do not skip steps.
 
@@ -46,9 +72,9 @@ Good clarifying questions:
 - "How often should this update -- real-time, hourly, daily?"
 - "Should I send you a notification when [event]?"
 
-Do NOT ask more than 3 questions in a single round. If you need more information,
-prioritize the questions that most affect the architecture. You can ask follow-ups
-in a second round if needed.
+Do NOT ask more than 3 questions in a single round. If you need more
+information, prioritize the questions that most affect the architecture.
+You can ask follow-ups in a second round if needed.
 
 If the request is clear enough to build without ambiguity, skip to Step 2.
 Do not ask questions just to appear thorough.
@@ -58,55 +84,51 @@ Do not ask questions just to appear thorough.
 Before writing any code, create a concrete plan. Determine which of these
 components are needed:
 
-- **Collections (DB tables):** What data needs to be stored? Define collection names,
-  field names, field types, and any relations. Use PocketBase collection conventions:
-  - Collection names: lowercase, plural, snake_case (e.g., `mood_entries`, `news_sources`)
+- **Collections (DB tables):** What data needs to be stored? Define collection
+  names, field names, field types, and any relations. Use PocketBase
+  collection conventions:
+  - Collection names: lowercase, plural, snake_case (e.g., `mood_entries`)
   - Field types: text, number, bool, email, url, date, select, relation, file, json
   - Always include a `user` relation field if the data is user-specific
-  - Always think about what fields you will need for the UI -- avoid extra round trips
+  - Think about what fields the UI will need -- avoid extra round trips
 
-- **API routes (Node.js):** Only needed if the feature requires:
-  - Complex queries that span multiple collections
-  - External API calls (fetching data from the web)
-  - LLM processing (summarization, classification, generation)
-  - Custom business logic beyond CRUD
-  If the feature is pure CRUD, skip this -- the frontend talks to PocketBase directly.
+- **API routes (Node.js):** Only needed for complex queries across collections,
+  external API calls, LLM processing, or custom business logic beyond CRUD.
+  If the feature is pure CRUD, skip this -- the frontend talks to PocketBase
+  directly.
 
-- **Background jobs:** Only needed if the feature requires:
-  - Scheduled data fetching (news, weather, prices)
-  - Periodic processing (daily summaries, weekly reports)
-  - Timed notifications
-  Define the job name, cron schedule, and what it does.
+- **Background jobs:** Only needed for scheduled fetching, periodic processing,
+  or timed notifications. Define the job name, cron schedule, and what it does.
 
-- **Pages and components:** What UI screens are needed? What components?
-  - New page: needs a route in the router, a page component, navigation entry
-  - Existing page modification: identify which page and what changes
-  - Shared components: identify reusable pieces (cards, charts, forms)
+- **Pages and components:** What UI screens are needed? What shared components?
 
 - **Navigation:** Where does this feature appear in the app's navigation?
 
 Post your plan to the user via `anyclaw_update_progress`:
-"Planning: [feature name] will need [N] new database collections, [N] API routes,
-[N] pages, and [N] background jobs. Building now."
+"Planning: [feature name] will need [N] new database collections, [N] API
+routes, [N] pages, and [N] background jobs. Building now."
 
 ## Step 3: Implement -- Database Layer
 
 Create collections first because everything else depends on them.
 
 For each collection:
-1. Use `anyclaw_create_collection` with the full schema definition
-2. Verify the collection was created by reading back its schema
-3. If the collection has relations to existing collections, verify those exist
+1. Call `anyclaw_create_collection` with the full schema definition
+2. Verify by reading back its schema (the tool returns the created schema)
+3. If the collection has relations to existing collections, confirm those exist
 
 Order matters: create collections that others depend on first.
 
+Do NOT try to edit PocketBase internals, migration files, or the PocketBase
+data directory. The MCP tool is the only way to change schema.
+
 ## Step 4: Implement -- Backend Layer
 
-If API routes or background jobs are needed:
+If API routes or background jobs are needed, use your own file tools to write
+them in the workspace.
 
-For API routes:
-1. Create the route file directly in `packages/logic/src/routes/` using your file tools
-2. Follow this pattern exactly:
+For API routes: create the route file in
+`/data/dev/packages/logic/src/routes/` and follow this pattern exactly:
 
 ```typescript
 import { Router } from "express";
@@ -128,11 +150,11 @@ router.get("/api/your-endpoint", async (req, res) => {
 export default router;
 ```
 
-3. Register the route in `packages/logic/src/index.ts` by importing and mounting it.
+Register the route in `/data/dev/packages/logic/src/index.ts` by importing
+and mounting it.
 
-For background jobs:
-1. Create the job file directly in `packages/logic/src/jobs/` using your file tools
-2. Follow this pattern:
+For background jobs: create the job file in
+`/data/dev/packages/logic/src/jobs/` and follow this pattern:
 
 ```typescript
 import { scheduleJob } from "../primitives/schedule-job";
@@ -146,41 +168,39 @@ export function registerYourJob() {
 }
 ```
 
-3. Register the job in `packages/logic/src/index.ts`.
+Register the job in `/data/dev/packages/logic/src/index.ts`.
 
 Update progress: "Implementing backend for [feature name]..."
 
 ## Step 5: Implement -- Frontend Layer
 
-Build the UI. Follow the anyclaw-style-guide skill for all CSS and component conventions.
+Build the UI. Follow the anyclaw-style-guide skill for all CSS and component
+conventions.
 
 For each new page:
-1. Create the page component file in `packages/frontend/src/pages/` using your file tools
+1. Create the page component in `/data/dev/packages/frontend/src/pages/`
 2. Add the route to the router configuration
 3. Add the page to navigation
 
 For components:
-1. Create shared components in `packages/frontend/src/components/`
-2. Create page-specific components alongside the page file
+1. Shared components go in `/data/dev/packages/frontend/src/components/`
+2. Page-specific components live alongside their page
 
 Data fetching pattern -- always use the PocketBase JS SDK for CRUD:
 
 ```typescript
 import { pb } from "../lib/pocketbase";
 
-// List records
 const records = await pb.collection("mood_entries").getList(1, 50, {
   sort: "-created",
 });
 
-// Create record
 await pb.collection("mood_entries").create({
   mood: "happy",
   energy: 8,
   notes: "Good day",
 });
 
-// Real-time subscription
 pb.collection("mood_entries").subscribe("*", (e) => {
   // handle real-time updates
 });
@@ -198,23 +218,18 @@ Update progress: "Building UI for [feature name]..."
 
 ## Step 6: Test in Dev
 
-Run the validation suite in the dev environment:
+Run the validation suite using your OWN shell tool, in `/data/dev/`:
 
-1. Use `anyclaw_run_command` to execute: `npm run lint`
-   - Fix any lint errors before proceeding
-2. Use `anyclaw_run_command` to execute: `npm run typecheck`
-   - Fix any type errors before proceeding
-3. Use `anyclaw_run_command` to execute: `npm run build`
-   - Fix any build errors before proceeding
-4. Use `anyclaw_run_command` to execute: `npm run test`
-   - Fix any failing tests before proceeding
+1. `npm run lint` -- fix any lint errors before proceeding
+2. `npm run typecheck` -- fix any type errors before proceeding
+3. `npm run build` -- fix any build errors before proceeding
+4. `npm run test` -- fix any failing tests before proceeding
 
-If you created new API routes, manually test them:
-- Use `anyclaw_run_command` to curl the endpoints and verify responses
+If you created new API routes, test them by starting the dev server in the
+background and running curl against the endpoints.
 
-If you modified existing features, verify they still work:
-- Check that existing pages still render (no import errors)
-- Check that existing API routes still respond correctly
+If you modified existing features, verify they still work (existing pages
+render, existing routes still respond).
 
 Do NOT proceed to deployment if any validation step fails.
 Iterate until everything passes. If you are stuck after 3 attempts on the
@@ -223,40 +238,43 @@ same error, use `anyclaw_ask_user` to explain the situation and ask for guidance
 ## Step 7: Write Version Description
 
 Follow the anyclaw-describe-version skill to write a clear, non-technical
-description of what changed. This description will appear in the user's
-version history screen.
+description of what changed. This appears in the user's version history.
 
 ## Step 8: Deploy
 
-Use `anyclaw_deploy` with your version description.
+Call `anyclaw_deploy` with your version description.
 
 The deploy tool will:
-1. Run the full validation suite one more time
-2. Snapshot the database (if schema changed)
+1. Run the full validation suite one more time (server-side, authoritative)
+2. Snapshot the database if schema changed
 3. Commit to git with the version description
-4. Promote build artifacts to prod
+4. Promote build artifacts from `/data/dev/` to `/data/prod/`
 5. Trigger a WebView reload on the mobile app
 
-If deployment fails, read the error message carefully. The most common causes:
-- Lint or type errors introduced after your last check (fix and retry)
-- Build errors from missing imports (check your imports and retry)
-- Smoke test failures from broken existing features (investigate the regression)
+If deployment fails, read the error carefully. Common causes:
+- Lint or type errors introduced after your last check -- fix and retry
+- Build errors from missing imports -- check imports and retry
+- Smoke test failures from broken existing features -- investigate the regression
 
 Update progress: "Deployed! [feature name] is live."
 
 ## Rules
 
-- NEVER edit files in the `prod/` directory directly. All changes go through dev.
-- NEVER modify PocketBase's internal files. Use the admin API via MCP tools only.
+- NEVER edit files under `/data/prod/`. All changes go through `/data/dev/`.
+- NEVER try to modify files under `/.anyclaw/` -- that is infrastructure and
+  is not writable from your workspace.
+- NEVER modify PocketBase's internal files. Use `anyclaw_create_collection`.
 - NEVER deploy without passing all validation steps.
-- NEVER delete existing collections unless the user explicitly asks to remove a feature.
-- ALWAYS snapshot the database before schema migrations (the deploy tool does this
-  automatically, but if you are doing manual testing with schema changes, snapshot first).
+- NEVER delete existing collections unless the user explicitly asks to remove
+  a feature.
+- ALWAYS snapshot the database before risky schema changes. `anyclaw_deploy`
+  does this automatically, but call `anyclaw_snapshot_db` explicitly if you
+  are doing manual testing with schema changes.
 - ALWAYS post progress updates so the user knows what is happening.
-- If a feature request would require installing new npm packages, use
-  `anyclaw_run_command` to run `npm install <package>` in the appropriate workspace.
-  Prefer well-known, maintained packages. Avoid packages with fewer than 1000
-  weekly downloads unless there is no alternative.
+- If a feature request needs new npm packages, run `npm install <package>`
+  from your own shell in the appropriate workspace. Prefer well-known,
+  maintained packages. Avoid packages with fewer than 1000 weekly downloads
+  unless there is no alternative.
 ```
 
 ---
@@ -274,12 +292,13 @@ feature you build side by side, so they must look like they belong together.
 ## CSS Approach: Tailwind CSS v4
 
 Use Tailwind CSS v4 utility classes for all styling. Tailwind v4 uses
-CSS-first configuration -- theme tokens are defined in `packages/frontend/src/app.css`
-using `@theme`, not in a JS/TS config file. Do not use:
+CSS-first configuration -- theme tokens are defined in
+`packages/frontend/src/app.css` using `@theme`, not in a JS/TS config file.
+Do not use:
 - Inline style objects (`style={{ }}`)
 - CSS Modules
 - Styled-components or CSS-in-JS libraries
-- Separate .css files (except for the main `app.css` with Tailwind's `@theme` block)
+- Separate .css files (except `app.css` with Tailwind's `@theme` block)
 - A `tailwind.config.ts` file (Tailwind v4 does not use one)
 
 Tailwind is already configured in the project. Use utility classes directly
@@ -287,9 +306,9 @@ on JSX elements.
 
 ## Color System
 
-Use the following semantic color tokens defined in `packages/frontend/src/app.css`
-via `@theme`.
-NEVER use raw color values (no `bg-blue-500`). Always use semantic names:
+Use the following semantic color tokens defined in
+`packages/frontend/src/app.css` via `@theme`. NEVER use raw color values
+(no `bg-blue-500`). Always use semantic names:
 
 ```
 Primary:    bg-primary, text-primary, border-primary
@@ -305,8 +324,8 @@ Warning:    bg-warning, text-warning, border-warning
 ```
 
 If the user has not customized colors, these resolve to a clean neutral
-palette with a single accent color. The user can retheme by changing
-the config -- your job is to use the tokens so theming works.
+palette with a single accent color. The user can retheme by changing the
+tokens in `app.css` -- your job is to use the tokens so theming works.
 
 ## Typography
 
@@ -321,7 +340,6 @@ Use `font-semibold` for headings and `font-medium` for sub-headings.
 
 ## Spacing
 
-Use Tailwind's spacing scale consistently:
 - Page padding: `p-4` on mobile, `p-6` on desktop
 - Between sections: `space-y-6`
 - Between items in a list: `space-y-3`
@@ -340,7 +358,7 @@ Use Tailwind's spacing scale consistently:
 Always use `rounded-xl` for cards. Never use sharp corners or `rounded-sm`.
 
 ### Buttons
-Primary action:
+Primary:
 ```tsx
 <button className="bg-primary text-white rounded-lg px-4 py-2 text-sm font-medium
   hover:opacity-90 active:opacity-80 transition-opacity">
@@ -348,7 +366,7 @@ Primary action:
 </button>
 ```
 
-Secondary action:
+Secondary:
 ```tsx
 <button className="bg-surface border border-default rounded-lg px-4 py-2 text-sm
   font-medium text-foreground hover:bg-background active:opacity-80 transition-colors">
@@ -356,7 +374,7 @@ Secondary action:
 </button>
 ```
 
-Danger action:
+Danger:
 ```tsx
 <button className="bg-danger text-white rounded-lg px-4 py-2 text-sm font-medium
   hover:opacity-90 active:opacity-80 transition-opacity">
@@ -375,7 +393,6 @@ Danger action:
 ```
 
 ### Empty States
-When a list or page has no data yet:
 ```tsx
 <div className="flex flex-col items-center justify-center py-12 text-center">
   <p className="text-muted text-sm">No entries yet</p>
@@ -395,88 +412,80 @@ When a list or page has no data yet:
 
 ## Responsive Breakpoints
 
-This app runs in a mobile WebView. Design mobile-first.
+Mobile-first. The app runs primarily in a mobile WebView.
 
-- **Default (no prefix):** Mobile phone (320px-480px). This is the PRIMARY target.
-- **`sm:` (640px+):** Large phone / small tablet
-- **`md:` (768px+):** Tablet
-- **`lg:` (1024px+):** Desktop (rare -- only for users accessing via browser)
+- Default (no prefix): 320px-480px, PRIMARY target
+- `sm:` 640px+, large phone / small tablet
+- `md:` 768px+, tablet
+- `lg:` 1024px+, desktop (rare -- browser access only)
 
 Rules:
 - All layouts must work at 320px width. No horizontal scrolling ever.
-- Use single-column layouts by default. Only use `md:grid-cols-2` or wider for tablet+.
-- Touch targets must be at least 44px tall. Use `min-h-[44px]` on interactive elements.
-- Font sizes must be at least `text-sm` (14px). Never use `text-xs` for interactive labels.
+- Single-column layouts by default. `md:grid-cols-2`+ only for tablet+.
+- Touch targets at least 44px tall (`min-h-[44px]`).
+- Font sizes at least `text-sm` (14px). Never `text-xs` for interactive labels.
 
 ## Component File Organization
 
 ```
 packages/frontend/src/
   components/           # Shared components used across multiple pages
-    Layout.tsx          # Base layout shell (nav, content area)
-    Card.tsx            # Reusable card wrapper
-    Button.tsx          # Button component (if patterns diverge enough to warrant it)
-    EmptyState.tsx      # Generic empty state
-    LoadingSpinner.tsx  # Generic loading indicator
+    Layout.tsx
+    Card.tsx
+    Button.tsx
+    EmptyState.tsx
+    LoadingSpinner.tsx
   pages/
-    Home.tsx            # Landing/dashboard page
+    Home.tsx
     mood/
-      MoodPage.tsx      # Main mood tracker page
-      MoodEntryForm.tsx # Mood entry form (page-specific component)
-      MoodChart.tsx     # Mood chart (page-specific component)
+      MoodPage.tsx
+      MoodEntryForm.tsx
+      MoodChart.tsx
     news/
-      NewsPage.tsx      # News page
-      NewsCard.tsx      # Individual news card (page-specific)
+      NewsPage.tsx
+      NewsCard.tsx
 ```
 
 Rules:
-- Shared components go in `components/`. A component is "shared" if 2+ pages use it.
-- Page-specific components go in a folder alongside the page, named after the feature.
-- One component per file. File name matches component name in PascalCase.
+- Shared components in `components/` (2+ pages use them).
+- Page-specific components in the feature folder alongside the page.
+- One component per file. PascalCase file name matches component name.
 - Pages are default exports. Shared components are named exports.
 
 ## Component Naming
 
-- Pages: `[Feature]Page.tsx` (e.g., `MoodPage.tsx`, `NewsPage.tsx`)
-- Feature-specific components: `[Feature][Thing].tsx` (e.g., `MoodChart.tsx`, `NewsCard.tsx`)
-- Shared components: `[Thing].tsx` (e.g., `Card.tsx`, `Button.tsx`, `EmptyState.tsx`)
-- No `index.tsx` barrel files. Import components by their direct file name.
+- Pages: `[Feature]Page.tsx`
+- Feature-specific: `[Feature][Thing].tsx`
+- Shared: `[Thing].tsx`
+- No barrel `index.tsx` files.
 
 ## State Management
 
-- Use React's built-in `useState` and `useEffect` for local state.
-- Use PocketBase's real-time subscriptions for live data (not polling).
-- For state shared across multiple pages, use React Context. Create contexts in
-  `packages/frontend/src/contexts/[Feature]Context.tsx`.
-- Do NOT install Redux, Zustand, Jotai, or other state libraries unless the
-  user explicitly requests it. React Context + PocketBase subscriptions cover
-  virtually all cases for a single-user app.
+- `useState` and `useEffect` for local state.
+- PocketBase real-time subscriptions for live data (not polling).
+- Cross-page shared state: React Context in `contexts/`.
+- Do NOT install Redux, Zustand, Jotai etc. unless the user asks.
 
 ## Data Fetching
 
-- Use `useEffect` + `useState` for initial data loads.
-- Create custom hooks in `packages/frontend/src/hooks/` for reusable data patterns:
-  - `useCollection(name, options)` -- generic hook for fetching a PocketBase collection
-  - Feature-specific hooks: `useMoodEntries()`, `useNewsSources()`, etc.
-- Always handle loading, error, and empty states. Never render a blank screen.
-- Show a loading spinner while fetching. Show an empty state message if no data.
-  Show an error message with a retry button if the fetch fails.
+- `useEffect` + `useState` for initial loads.
+- Custom hooks in `packages/frontend/src/hooks/` for reusable patterns.
+- Always handle loading, error, and empty states. Never render blank.
 
 ## Accessibility
 
-- All images must have `alt` text.
-- All form inputs must have associated `<label>` elements or `aria-label`.
-- Use semantic HTML: `<main>`, `<nav>`, `<section>`, `<article>`, `<button>` (not div-as-button).
-- Color alone must never convey information. Pair color with text or icons.
-- Focus states are handled by Tailwind's `focus:ring-2 focus:ring-primary/50`.
+- All images have `alt` text.
+- All inputs have associated `<label>` or `aria-label`.
+- Semantic HTML: `<main>`, `<nav>`, `<section>`, `<article>`, `<button>`.
+- Color alone never conveys information.
+- Focus rings via `focus:ring-2 focus:ring-primary/50`.
 
 ## Icons
 
-Use `lucide-react` for all icons. It is already installed. Import icons by name:
+Use `lucide-react` for all icons. Already installed.
 
 ```tsx
 import { Plus, Trash2, Settings, ChevronRight } from "lucide-react";
-
 <Plus className="h-5 w-5" />
 ```
 
@@ -484,15 +493,13 @@ Do not install other icon libraries.
 
 ## Do NOT
 
-- Do not use `any` type. Type everything properly.
-- Do not use `// @ts-ignore` or `// @ts-expect-error`.
-- Do not use `!important` in class names.
-- Do not hardcode colors (no `text-[#ff0000]` or `bg-blue-500`).
-- Do not create components with more than 200 lines. Split them.
-- Do not use `dangerouslySetInnerHTML` unless rendering sanitized markdown.
-- Do not add animations beyond simple transitions (`transition-opacity`,
-  `transition-colors`). No spring physics, no page transitions, no parallax.
-  Keep it fast and clean.
+- No `any` type. Type everything properly.
+- No `// @ts-ignore` or `// @ts-expect-error`.
+- No `!important` in class names.
+- No hardcoded colors.
+- No components over 200 lines.
+- No `dangerouslySetInnerHTML` unless rendering sanitized markdown.
+- No elaborate animations. `transition-opacity`/`transition-colors` only.
 ```
 
 ---
@@ -510,12 +517,12 @@ or when the agent detects growing complexity during a build-feature task.
 
 Refactoring runs automatically when ANY of these conditions are met:
 - A component file exceeds 200 lines
-- Three or more pages contain duplicated JSX patterns (same structure, different data)
+- Three or more pages contain duplicated JSX patterns
 - A single page file imports more than 10 modules
 - The same PocketBase query pattern appears in 3+ files
 - The `packages/logic/src/routes/` directory has more than 15 route files
 - A background job file exceeds 100 lines
-- After every 5th deployment (tracked in version metadata)
+- After every 5th deployment
 
 The agent can also invoke this skill proactively during a build-feature task
 if it notices code smells while implementing.
@@ -523,86 +530,50 @@ if it notices code smells while implementing.
 ## What to Look For
 
 ### 1. Component Extraction
-Scan all page files for repeated JSX patterns. If the same card layout, list item
-structure, or form pattern appears in 2+ pages, extract it into a shared component
-in `packages/frontend/src/components/`.
-
-Procedure:
-1. Identify the repeated pattern
-2. Determine which parts vary between uses (these become props)
-3. Create the shared component with typed props
-4. Replace all instances with the shared component
-5. Run typecheck and build to verify nothing broke
+Scan all page files for repeated JSX patterns. If the same card layout, list
+item structure, or form pattern appears in 2+ pages, extract it into a shared
+component in `packages/frontend/src/components/`.
 
 ### 2. Custom Hook Extraction
-Scan for repeated data-fetching patterns. If 2+ components fetch from the same
-collection with similar options, extract a custom hook.
-
-Procedure:
-1. Identify the repeated fetch pattern
-2. Create a hook in `packages/frontend/src/hooks/`
-3. The hook should handle loading, error, and data states
-4. Replace all instances with the hook
-5. Run typecheck and build to verify
+If 2+ components fetch from the same collection with similar options, extract
+a custom hook in `packages/frontend/src/hooks/`.
 
 ### 3. Dead Code Removal
-Scan for:
-- Unused imports (eslint will catch most of these)
-- Components that are defined but never rendered
-- API routes that no page or job calls
-- Collections that no code reads from or writes to
-- Background jobs that are registered but whose schedules are commented out
-
-Procedure:
-1. Identify the dead code
-2. Verify it is truly unused by searching for all references
-3. Remove it
-4. Run full validation suite
+- Unused imports
+- Components defined but never rendered
+- API routes no page or job calls
+- Collections no code reads from or writes to
+- Background jobs whose schedules are commented out
 
 ### 4. File Organization
-Check that the file organization rules from the style guide are followed:
-- Shared components in `components/`
-- Page-specific components in feature folders alongside pages
-- No barrel `index.tsx` files
-- One component per file
-
-If files are misplaced, move them and update all imports.
+Check the style guide rules are followed. If files are misplaced, move them
+and update all imports.
 
 ### 5. Route Consolidation
-If the logic service has many small route files that serve the same feature,
-consolidate them into a single route file per feature:
-- `routes/mood-trends.ts` + `routes/mood-export.ts` -> `routes/mood.ts`
+Collapse many small route files for the same feature into a single file per
+feature.
 
 ### 6. Type Improvements
-- Replace any `any` types with proper types
-- Add missing return types to functions
-- Create shared type definitions in `packages/frontend/src/types/` for data
-  structures used across multiple files
+- Replace `any` with proper types
+- Add missing return types
+- Create shared type definitions
 - Ensure PocketBase collection types are defined once and reused
 
 ## Safety Rules
 
-- NEVER refactor and add features in the same deployment. Refactoring is a
-  separate deployment with its own version description.
-- ALWAYS run the full validation suite after each refactoring change:
-  lint, typecheck, build, tests.
-- NEVER change behavior during a refactor. The app should work identically
-  before and after. If you find a bug during refactoring, note it and fix it
-  in a separate deployment.
-- NEVER delete a PocketBase collection during refactoring. Collection removal
-  is a feature change, not a refactor.
-- Make small, incremental changes. Do not rewrite the entire codebase at once.
-  Extract one component, verify, then move to the next.
-- If a refactoring change causes test failures, revert it and move on.
-  Do not spend more than 2 attempts fixing a single refactoring change.
+- NEVER refactor and add features in the same deployment.
+- ALWAYS run lint, typecheck, build, tests after each change.
+- NEVER change behavior during a refactor.
+- NEVER delete a PocketBase collection during refactoring.
+- Make small, incremental changes.
+- If a refactor breaks tests, revert it.
 
 ## Version Description for Refactors
 
-Use the format: "Housekeeping: [what you cleaned up]"
+Format: "Housekeeping: [what you cleaned up]"
 Examples:
 - "Housekeeping: extracted shared Card and ListItem components"
 - "Housekeeping: consolidated mood-related API routes into a single file"
-- "Housekeeping: removed unused news import code and cleaned up types"
 ```
 
 ---
@@ -612,8 +583,8 @@ Examples:
 ```markdown
 # anyclaw-describe-version
 
-You are writing a version description for a deployment of an AnyClaw personal web app.
-This description appears in the user's version history screen on their mobile app.
+You are writing a version description for a deployment of an AnyClaw personal
+web app. This description appears in the user's version history screen.
 The user is NOT a developer. Write for a normal person.
 
 ## Rules
@@ -622,88 +593,38 @@ The user is NOT a developer. Write for a normal person.
 2. Use plain language. No technical jargon.
 3. One to three sentences. Never more.
 4. If the feature has a visual component, describe what they will see.
-5. If the feature has a background component (jobs, notifications), explain
-   what will happen and when.
+5. If the feature has a background component, explain what happens and when.
 6. Do not mention file names, function names, components, collections,
    API routes, or database schemas.
 7. Do not say "I" or "the agent." Describe what changed, not who changed it.
 8. Use present tense ("You can now..." not "Added the ability to...").
 
-## Format
-
-[One-line summary of what is new or changed.]
-[Optional: one line of additional detail if the feature has multiple parts.]
-[Optional: one line about when/how a background feature activates.]
-
 ## Examples
 
-### Good Examples
+Good: mood tracker with weekly chart
+> You can now track your mood, energy, and stress levels with a daily
+> check-in. A weekly chart shows your trends over time.
 
-Feature: mood tracker with daily check-in and weekly chart
-```
-You can now track your mood, energy, and stress levels with a daily check-in.
-A weekly chart shows your trends over time so you can spot patterns.
-```
+Good: news aggregator
+> Your personalized news feed is ready. It pulls articles from your chosen
+> sources every 6 hours and highlights the ones most relevant to you.
 
-Feature: news aggregator with scheduled fetching
-```
-Your personalized news feed is ready. It pulls articles from your chosen
-sources every 6 hours and highlights the ones most relevant to your interests.
-```
+Good: refactoring
+> Housekeeping: cleaned up the code behind the scenes. Everything works
+> the same, just tidier under the hood.
 
-Feature: simple to-do list
-```
-You now have a to-do list on your home page. Tap to add items, swipe to complete them.
-```
-
-Feature: bug fix -- chart not loading on slow connections
-```
-The weekly mood chart now loads reliably even on slower connections.
-```
-
-Feature: refactoring -- no user-visible changes
-```
-Housekeeping: cleaned up the code behind the scenes. Everything works the same,
-just tidier under the hood.
-```
-
-Feature: added push notifications for daily reminder
-```
-You will now get a reminder notification at 9pm each day to log your mood.
-You can change the time or turn this off in Settings.
-```
-
-### Bad Examples (Do NOT write like this)
-
-```
-Added MoodEntry collection with fields for mood, energy, stress, and notes.
-Created MoodPage component with MoodEntryForm and MoodChart sub-components.
-Set up a cron job running every 6 hours to fetch RSS feeds.
-```
-This is developer output, not a version description.
-
-```
-Implemented new feature as requested.
-```
-This says nothing useful.
-
-```
-I've gone ahead and built you a really awesome mood tracking system that
-lets you keep track of how you're feeling throughout the day with beautiful
-charts and an intuitive interface that makes it super easy to log your entries!
-```
-Too long, too salesy, too informal.
+Bad (do NOT write like this):
+> Added MoodEntry collection with fields for mood, energy, stress, and notes.
+> Created MoodPage component with MoodEntryForm and MoodChart sub-components.
 ```
 
 ---
 
 ### Skill 5: Skill Packaging
 
-Skills are authored once and then packaged into three formats depending on the target agent platform.
+Skills are authored once and packaged into three formats depending on the target agent platform.
 
 #### 5a. Source Format
-
-All skills are authored as Markdown files stored in the AnyClaw repository:
 
 ```
 anyclaw-server/
@@ -714,111 +635,54 @@ anyclaw-server/
     anyclaw-describe-version.md
 ```
 
-Each file contains the skill prompt exactly as the agent should receive it. No frontmatter, no metadata wrapper -- just the raw instructions in Markdown.
+Each file contains the skill prompt exactly as the agent should receive it, with a YAML frontmatter block for versioning (see 5e).
 
 #### 5b. OpenClaw Packaging
 
-OpenClaw loads skills from its skill directory. Each skill is installed as a file in the OpenClaw skills path (typically `~/.openclaw/skills/` or configured by the user).
-
-Installation process (handled by the AnyClaw install script):
-
-1. Detect OpenClaw's skill directory from its config file (`~/.openclaw/config.json`, field `skillsDir`)
-2. Copy each `.md` file from `anyclaw-server/skills/` into the skill directory, prefixed with `anyclaw-`:
-   - `~/.openclaw/skills/anyclaw-build-feature.md`
-   - `~/.openclaw/skills/anyclaw-style-guide.md`
-   - `~/.openclaw/skills/anyclaw-refactor.md`
-   - `~/.openclaw/skills/anyclaw-describe-version.md`
-3. OpenClaw automatically discovers skills by reading `.md` files from its skill directory
-
-The skill content is used verbatim. OpenClaw's skill system passes the Markdown content as system prompt context when the skill is invoked.
+Install script copies `.md` files into OpenClaw's skill directory (typically `~/.openclaw/skills/`), discovered via `~/.openclaw/config.json` `skillsDir`.
 
 #### 5c. Claude Code Packaging
 
-Claude Code uses two mechanisms: `CLAUDE.md` project files and custom slash commands.
+Two mechanisms:
 
-**CLAUDE.md integration:**
-
-The install script appends a block to the project's `CLAUDE.md` (creating it if absent):
+**CLAUDE.md** -- the install script appends:
 
 ```markdown
 ## AnyClaw Agent Instructions
 
-You are building features for an AnyClaw personal web app. When working on this
-project, follow these rules:
+You are building features for an AnyClaw personal web app. When working on
+this project, follow these rules:
 
-1. For all feature work, follow the workflow in `/anyclaw-build-feature`
-2. For all frontend code, follow the conventions in `/anyclaw-style-guide`
-3. After every 5 deployments, run `/anyclaw-refactor`
-4. When writing version descriptions, follow `/anyclaw-describe-version`
+1. Follow `/anyclaw-build-feature` for all feature work
+2. Follow `/anyclaw-style-guide` for all frontend code
+3. Run `/anyclaw-refactor` after every 5 deployments
+4. Follow `/anyclaw-describe-version` when writing version descriptions
 
-Write code directly using your built-in file tools (read, write, edit).
-Use AnyClaw MCP tools only for robustness-critical operations:
-`anyclaw_deploy`, `anyclaw_rollback`, `anyclaw_snapshot_db`,
-`anyclaw_create_collection`, `anyclaw_ask_user`, `anyclaw_update_progress`.
-Do not manually edit PocketBase files or the prod/ directory.
+Use your own built-in file and shell tools for all reading, writing, editing,
+and running commands. AnyClaw MCP tools are only: anyclaw_deploy,
+anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection,
+anyclaw_ask_user, anyclaw_update_progress, anyclaw_list_versions.
+Do not manually edit PocketBase files or the /data/prod/ directory.
 ```
 
-**Slash commands:**
-
-Each skill is installed as a Claude Code slash command by placing files in `.claude/commands/`:
-
-```
-anyclaw-server/
-  .claude/
-    commands/
-      anyclaw-build-feature.md
-      anyclaw-style-guide.md
-      anyclaw-refactor.md
-      anyclaw-describe-version.md
-```
-
-Claude Code automatically registers files in `.claude/commands/` as `/command-name` slash commands. The file content becomes the command's prompt.
-
-The install script copies the skill files from `anyclaw-server/skills/` to `.claude/commands/`. The content is identical -- Claude Code slash commands use the same raw Markdown format.
+**Slash commands:** skill files copied to `.claude/commands/`.
 
 #### 5d. Generic Agent Packaging (System Prompts)
 
-For agents that do not support MCP skills or slash commands (Codex, Aider, custom harnesses), skills are concatenated into a single system prompt template.
-
-The install script generates `anyclaw-server/skills/system-prompt.txt`:
-
-```
-You are a coding agent working on an AnyClaw personal web app. Follow these
-instructions for all work on this project.
-
-=== BUILD FEATURE WORKFLOW ===
-[contents of anyclaw-build-feature.md]
-
-=== STYLE GUIDE ===
-[contents of anyclaw-style-guide.md]
-
-=== REFACTOR GUIDELINES ===
-[contents of anyclaw-refactor.md]
-
-=== VERSION DESCRIPTIONS ===
-[contents of anyclaw-describe-version.md]
-```
-
-This file is passed as the system prompt (or prepended to the first user message) by the agent adapter when dispatching tasks. The generic webhook adapter includes a `systemPrompt` field in its dispatch payload.
+For agents without MCP skill support, skills are concatenated into `anyclaw-server/skills/system-prompt.txt` and passed as the system prompt by the generic webhook adapter.
 
 #### 5e. Skill Versioning and Compatibility
 
-Skills are versioned independently from the AnyClaw server. This allows faster iteration on agent prompts without requiring a full server update. The server enforces compatibility at task dispatch time.
-
-**Version format:** Each skill declares a version and a minimum compatible server version in a YAML frontmatter block at the top of the file:
+Skills are versioned independently. Each file has YAML frontmatter:
 
 ```yaml
 ---
 skill_version: "1.3.0"
 min_server_version: "0.5.0"
 ---
-# anyclaw-build-feature
-...
 ```
 
-The frontmatter is stripped before the skill content is passed to the agent. It is only read by the AnyClaw system.
-
-**Server version:** The AnyClaw server exposes its version via `GET /api/version` on the control plane (port 3004). The response includes:
+The dispatch server exposes `GET /api/version`:
 
 ```json
 {
@@ -827,261 +691,231 @@ The frontmatter is stripped before the skill content is passed to the agent. It 
 }
 ```
 
-**Compatibility check flow:**
-
-1. At task dispatch time, the control plane reads the skill file that will be used (e.g., `anyclaw-build-feature.md`).
-2. It parses the frontmatter to extract `skill_version` and `min_server_version`.
-3. It compares `min_server_version` against the running server version using semver. If the server is too old, the task is rejected with an error: "Skill anyclaw-build-feature v1.3.0 requires server >= 0.5.0, but server is 0.4.1. Please update AnyClaw."
-4. It also compares `skill_version` against the server's `min_skill_version`. If the skill is too old, the task is rejected: "Skill anyclaw-build-feature v0.9.0 is outdated. Server requires skill >= 1.0.0. Please update skills."
-5. If both checks pass, the skill content (without frontmatter) is passed to the agent.
-
-**Update mechanism:**
-
-- Skills are distributed as files in the AnyClaw release package. Running the install script (or `docker compose pull` for updates) fetches new skill files alongside server images.
-- The packaging script (`package-skills.sh`) preserves frontmatter during copying so that the version metadata is available at the destination.
-- Users are notified of skill updates via the mobile app settings screen ("Skills update available") but the update is applied automatically on the next `docker compose pull` / install script run.
+At task dispatch time, the dispatch server parses frontmatter, checks semver compatibility both directions, and rejects incompatible skill+server combinations with a clear error. Frontmatter is stripped before the skill content is passed to the agent.
 
 #### 5f. Packaging Script
 
-A script at `anyclaw-server/scripts/package-skills.sh` handles all three formats:
-
-```bash
-#!/usr/bin/env bash
-# Packages skills for all agent platforms.
-# Run during install or after editing skill files.
-
-SKILLS_DIR="$(dirname "$0")/../skills"
-CLAUDE_COMMANDS_DIR="$(dirname "$0")/../.claude/commands"
-
-# 1. Claude Code: copy to .claude/commands/
-mkdir -p "$CLAUDE_COMMANDS_DIR"
-for skill in "$SKILLS_DIR"/anyclaw-*.md; do
-  cp "$skill" "$CLAUDE_COMMANDS_DIR/$(basename "$skill")"
-done
-
-# 2. Generic: concatenate into system-prompt.txt
-{
-  echo "You are a coding agent working on an AnyClaw personal web app."
-  echo "Follow these instructions for all work on this project."
-  echo ""
-  for skill in "$SKILLS_DIR"/anyclaw-*.md; do
-    name=$(basename "$skill" .md | tr '[:lower:]' '[:upper:]' | tr '-' ' ')
-    echo "=== $name ==="
-    cat "$skill"
-    echo ""
-    echo ""
-  done
-} > "$SKILLS_DIR/system-prompt.txt"
-
-# 3. OpenClaw: copy to skill directory (if OpenClaw is installed)
-if [ -f "$HOME/.openclaw/config.json" ]; then
-  OC_SKILLS=$(python3 -c "import json; print(json.load(open('$HOME/.openclaw/config.json')).get('skillsDir', '$HOME/.openclaw/skills'))" 2>/dev/null)
-  if [ -n "$OC_SKILLS" ]; then
-    mkdir -p "$OC_SKILLS"
-    for skill in "$SKILLS_DIR"/anyclaw-*.md; do
-      cp "$skill" "$OC_SKILLS/$(basename "$skill")"
-    done
-  fi
-fi
-
-echo "Skills packaged for all platforms."
-```
+`anyclaw-server/scripts/package-skills.sh` generates all three formats. It copies skill files to `.claude/commands/`, builds the concatenated `system-prompt.txt`, and copies to OpenClaw's skill directory if OpenClaw is installed.
 
 ---
 
 ## Part B: Deployment
 
+The deployment model is locked by decisions #8, #22, #23:
+
+- **Self-hosted:** one Docker container (or native install) running supervisord/systemd inside, which supervises multiple AnyClaw processes.
+- **Cloud-hosted Phase 1:** one container per user on a single VPS. Each container is the same layout as self-hosted.
+- **Cloud-hosted Phase 2 (future):** migrate to E2B microVMs or Kubernetes Agent Sandbox CRD when scale justifies.
+
+There is **no three-container architecture**, no sandbox container, no control plane container, no cross-container Docker socket access. Crash isolation is provided by supervisord process restart policies, not container splits.
+
 ---
 
-### 6. Docker Compose
+### 6. Container and Process Layout
 
-The self-hosted deployment runs as a single `docker compose` stack with three containers, matching the locked architecture decision. All services share a Docker network and communicate via internal hostnames.
+#### 6a. Filesystem Layout
 
-**Three-container architecture:**
+```
+/data/                           # Persistent bind-mount / volume
+  pocketbase/                    # PocketBase data directory (SQLite, uploads)
+  dev/                           # Agent's workspace -- READ/WRITE for agent
+    packages/
+      frontend/
+      logic/
+    package.json
+    .git/
+  prod/                          # Deployed artifacts -- NOT writable by agent
+    frontend-build/
+    logic-build/
+  snapshots/                     # Compressed DB snapshots for rollback
 
-1. **App server** -- serves the agent-built frontend + PocketBase + Node.js logic service to the mobile WebView. Can be restarted/stopped by the user or agent without losing access to the control plane.
-2. **Control plane** -- health checks, restart API for the app server, agent task dispatch API, MCP server, tunnel client. Always available, even if the app server is down. The user can always reach their agent.
-3. **Sandbox** -- isolated command execution environment for the coding agent. Runs build commands, linting, tests, npm install, etc. with a blocklist. Isolated so runaway commands cannot affect the app server or control plane.
+/.anyclaw/                       # AnyClaw infrastructure code -- NOT writable by agent
+  dispatch/                      # Dispatch/MCP server source
+  tunnel/                        # Tunnel manager source
+  prod-static/                   # Prod static file server
+  skills/                        # Skill files
+  scripts/
+    package-skills.sh
+  supervisord.conf
+```
+
+The path separation is the security boundary that replaces the old sandbox container. The agent's subprocess is spawned with `cwd=/data/dev/` and has ordinary filesystem permissions, but the dispatch server enforces that MCP tool invocations do not touch paths outside `/data/dev/`. More importantly, `/.anyclaw/` is owned by a different user (or mounted read-only into the agent subprocess via bind-mount options) so the agent cannot mutate the dispatch server's own source.
+
+#### 6b. Supervised Processes
+
+Inside the single container (or on the host for native installs), supervisord runs the following processes. All are started on boot. Each has its own restart policy.
+
+| Process | Restart policy | Purpose |
+|---|---|---|
+| `pocketbase` | `autorestart=true` | Data layer. Serves DB REST + Realtime SSE on 8090. |
+| `tunnel-manager` | `autorestart=true` | Persistent WSS connection to broker. Survives all other crashes so the mobile app never loses contact. |
+| `dispatch-mcp` | `autorestart=true` | Task dispatch API + MCP HTTP/SSE endpoint + emergency rollback + restart-logic endpoint. Always available. Source in `/.anyclaw/dispatch/`. |
+| `logic-service` | `autorestart=unexpected` | Agent-modifiable Node.js service. Custom API routes + background jobs. Runs `/data/prod/logic-build/`. Restart-on-crash only. |
+| `prod-static` | `autorestart=true` | Small Express server serving `/data/prod/frontend-build/` to the WebView. |
+
+The **agent subprocess** and **Vite dev server** are NOT supervisord entries. They are spawned transiently by the dispatch server on a per-task basis and exit when the task is done (or is killed). Resource limits on the agent subprocess are applied at spawn time via `systemd-run --scope --uid=... --property=MemoryMax=... --property=CPUQuota=...` on systems with systemd, or via supervisord's `rlimit` / cgroup integration in container-only environments.
+
+#### 6c. supervisord.conf (reference)
+
+`/.anyclaw/supervisord.conf`:
+
+```ini
+[supervisord]
+nodaemon=true
+logfile=/var/log/supervisord/supervisord.log
+pidfile=/var/run/supervisord.pid
+user=root
+
+[program:pocketbase]
+command=/usr/local/bin/pocketbase serve --http=0.0.0.0:8090 --dir=/data/pocketbase
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisord/pocketbase.log
+stderr_logfile=/var/log/supervisord/pocketbase.err
+startretries=10
+
+[program:tunnel-manager]
+command=/usr/local/bin/node /.anyclaw/tunnel/index.js
+autostart=true
+autorestart=true
+environment=BROKER_URL="%(ENV_BROKER_URL)s",ANYCLAW_USER_TOKEN="%(ENV_ANYCLAW_USER_TOKEN)s"
+stdout_logfile=/var/log/supervisord/tunnel.log
+stderr_logfile=/var/log/supervisord/tunnel.err
+startretries=10
+
+[program:dispatch-mcp]
+command=/usr/local/bin/node /.anyclaw/dispatch/index.js
+autostart=true
+autorestart=true
+environment=POCKETBASE_URL="http://127.0.0.1:8090",DEV_WORKSPACE="/data/dev",PROD_WORKSPACE="/data/prod",SNAPSHOTS_DIR="/data/snapshots",INFRA_DIR="/.anyclaw"
+stdout_logfile=/var/log/supervisord/dispatch.log
+stderr_logfile=/var/log/supervisord/dispatch.err
+startretries=10
+
+[program:logic-service]
+command=/usr/local/bin/node /data/prod/logic-build/index.js
+directory=/data/prod/logic-build
+autostart=true
+autorestart=unexpected
+exitcodes=0
+environment=POCKETBASE_URL="http://127.0.0.1:8090",NODE_ENV="production"
+stdout_logfile=/var/log/supervisord/logic.log
+stderr_logfile=/var/log/supervisord/logic.err
+startretries=5
+
+[program:prod-static]
+command=/usr/local/bin/node /.anyclaw/prod-static/server.js
+environment=PROD_FRONTEND="/data/prod/frontend-build",PORT="5173"
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisord/prod-static.log
+stderr_logfile=/var/log/supervisord/prod-static.err
+startretries=10
+```
+
+Note: `logic-service` has `autorestart=unexpected` with `exitcodes=0` so a clean restart by the dispatch server (after a deploy) is not treated as a crash. `pocketbase`, `tunnel-manager`, `dispatch-mcp`, and `prod-static` always restart.
+
+#### 6d. Dockerfile (reference)
+
+```dockerfile
+# syntax=docker/dockerfile:1.6
+FROM node:20-bookworm-slim
+
+# System packages: supervisord, git, curl, build essentials for npm, PocketBase
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      supervisor \
+      git \
+      curl \
+      ca-certificates \
+      build-essential \
+      python3 \
+      wget \
+      unzip \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install PocketBase binary
+ARG POCKETBASE_VERSION=0.22.0
+RUN curl -fsSL -o /tmp/pb.zip \
+      "https://github.com/pocketbase/pocketbase/releases/download/v${POCKETBASE_VERSION}/pocketbase_${POCKETBASE_VERSION}_linux_amd64.zip" \
+ && unzip /tmp/pb.zip -d /usr/local/bin \
+ && rm /tmp/pb.zip \
+ && chmod +x /usr/local/bin/pocketbase
+
+# Copy infrastructure code
+COPY infra/ /.anyclaw/
+RUN cd /.anyclaw/dispatch && npm ci --omit=dev \
+ && cd /.anyclaw/tunnel && npm ci --omit=dev \
+ && cd /.anyclaw/prod-static && npm ci --omit=dev
+
+# Create data directories
+RUN mkdir -p /data/pocketbase /data/dev /data/prod /data/snapshots /var/log/supervisord
+
+# Supervisord config
+COPY infra/supervisord.conf /etc/supervisor/conf.d/anyclaw.conf
+
+EXPOSE 8090 5173
+VOLUME ["/data"]
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyclaw.conf"]
+```
+
+#### 6e. docker-compose.yml (single service)
 
 ```yaml
-# docker-compose.yml
-
 services:
-  # -------------------------------------------------------
-  # Container 1: App Server
-  # Serves the agent-built frontend + PocketBase + logic service.
-  # Restartable by user or agent without losing control plane access.
-  # -------------------------------------------------------
-  app:
-    image: ghcr.io/anyclaw/app-server:latest
-    container_name: anyclaw-app
+  anyclaw:
+    image: ghcr.io/anyclaw/anyclaw:latest
+    container_name: anyclaw
     restart: unless-stopped
     ports:
-      - "8090:8090"   # PocketBase
-      - "3001:3001"   # Node.js logic service
-      - "5173:5173"   # Frontend (prod static server)
+      - "8090:8090"    # PocketBase (internal/debug; not exposed publicly in prod)
+      - "5173:5173"    # Prod static server (served via tunnel in normal use)
     volumes:
-      - pb_data:/app/pb_data
-      - pb_migrations:/app/pb_migrations
-      - logic_data:/app/logic_data
-      - prod_workspace:/app/prod
-      - dev_workspace:/app/dev
-      - git_repo:/app/repo
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/api/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      - anyclaw_data:/data
     environment:
-      - POCKETBASE_URL=http://localhost:8090
-      - POCKETBASE_API_TOKEN=${POCKETBASE_API_TOKEN}
-      - NODE_ENV=production
-      - SERVE_MODE=prod
-
-  # -------------------------------------------------------
-  # Container 2: Control Plane
-  # Health checks, restart API, agent task dispatch, MCP server,
-  # tunnel client. Always available -- never restarted by the agent.
-  # -------------------------------------------------------
-  control:
-    image: ghcr.io/anyclaw/control-plane:latest
-    container_name: anyclaw-control
-    restart: unless-stopped
-    ports:
-      - "3002:3002"   # MCP server (HTTP/SSE)
-      - "3003:3003"   # Tunnel client
-      - "3004:3004"   # Control plane API (health, restart, dispatch)
-    volumes:
-      - dev_workspace:/app/dev
-      - prod_workspace:/app/prod
-      - git_repo:/app/repo
-      - pb_data:/app/pb_data:ro
-      - snapshots:/app/snapshots
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # restart app, dispatch to sandbox
-    depends_on:
-      app:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3004/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    environment:
-      - POCKETBASE_URL=http://app:8090
-      - POCKETBASE_API_TOKEN=${POCKETBASE_API_TOKEN}
-      - APP_CONTAINER_NAME=anyclaw-app
-      - LOGIC_URL=http://app:3001
-      - FRONTEND_URL=http://app:5173
-      - DEV_WORKSPACE=/app/dev
-      - PROD_WORKSPACE=/app/prod
-      - GIT_REPO=/app/repo
-      - SNAPSHOTS_DIR=/app/snapshots
       - BROKER_URL=${BROKER_URL:-https://broker.anyclawapp.com}
       - ANYCLAW_USER_TOKEN=${ANYCLAW_USER_TOKEN}
-      - DOCKER_HOST=unix:///var/run/docker.sock
-
-  # -------------------------------------------------------
-  # Container 3: Sandbox
-  # Isolated command execution for the coding agent.
-  # Blocklist prevents dangerous commands. Resource-limited.
-  # -------------------------------------------------------
-  sandbox:
-    image: ghcr.io/anyclaw/sandbox:latest
-    container_name: anyclaw-sandbox
-    restart: unless-stopped
-    volumes:
-      - dev_workspace:/app/dev
-      - git_repo:/app/repo
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3005/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    ports:
-      - "3005:3005"   # Sandbox command API (internal only)
-    environment:
-      - DEV_WORKSPACE=/app/dev
-      - GIT_REPO=/app/repo
-      - COMMAND_BLOCKLIST=rm -rf /,mkfs,dd,shutdown,reboot,systemctl,docker,mount
-      - COMMAND_TIMEOUT_SECONDS=300
+      - POCKETBASE_API_TOKEN=${POCKETBASE_API_TOKEN}
+    # cgroup-level resource limits for the whole container
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1G
-    # No network access to PocketBase or external services
-    # Only the dev workspace and git repo are mounted
-    networks:
-      - sandbox_net
-
-networks:
-  default:
-    name: anyclaw-net
-  sandbox_net:
-    name: anyclaw-sandbox-net
-    internal: true  # No external network access from sandbox
+          cpus: "4.0"
+          memory: 4G
 
 volumes:
-  pb_data:
-    driver: local
-  pb_migrations:
-    driver: local
-  logic_data:
-    driver: local
-  dev_workspace:
-    driver: local
-  prod_workspace:
-    driver: local
-  git_repo:
-    driver: local
-  snapshots:
+  anyclaw_data:
     driver: local
 ```
 
-**Container summary:**
+One service, one container. Supervisord inside runs the five supervised processes. The agent subprocess and Vite dev server are spawned by the dispatch server on demand, inside this same container, with their own cgroup limits applied via `systemd-run` (if the host has systemd cgroup delegation) or supervisord's rlimit / `sh -c 'ulimit ...; exec ...'` wrapper.
 
-| Container | Ports | Purpose | Restartable by agent? |
-|-----------|-------|---------|-----------------------|
-| `app` | 8090, 3001, 5173 | PocketBase + Node.js logic + frontend static server | Yes (via control plane restart API) |
-| `control` | 3002, 3003, 3004 | MCP server, tunnel client, health checks, restart API, agent task dispatch | No (always available) |
-| `sandbox` | 3005 | Command execution (lint, typecheck, build, tests, npm install) with blocklist | No (managed by control plane) |
+**Port strategy:** in normal operation the only ingress is the tunnel manager's outbound WSS connection to the broker. The exposed host ports 8090 and 5173 are for local debugging and are typically bound to `127.0.0.1` in production.
 
-**Volume purposes:**
+#### 6f. Why This Replaces Three Containers
 
-| Volume | Shared By | Purpose |
-|--------|-----------|---------|
-| `pb_data` | app, control (read-only) | PocketBase data directory (SQLite DB, uploaded files) |
-| `pb_migrations` | app | PocketBase migration files |
-| `dev_workspace` | app, control, sandbox | The agent's working copy of frontend + logic source |
-| `prod_workspace` | app, control | Production build artifacts |
-| `git_repo` | app, control, sandbox | Git repository for version tracking |
-| `snapshots` | control | SQLite DB snapshots for rollback |
-| `logic_data` | app | Persistent data for background jobs (caches, state files) |
-
-**How `anyclaw_run_command` works:** The MCP server (in the control plane) dispatches commands to the sandbox container via its API on port 3005. The sandbox executes the command in the dev workspace, applies the blocklist, enforces resource limits, and streams stdout/stderr back. The sandbox has no access to PocketBase, no access to the external network, and cannot affect the app server or control plane.
+| Old concern | How supervisord-in-one-container handles it |
+|---|---|
+| Agent can crash the app server | Agent is a transient subprocess; logic service has its own restart policy. |
+| Agent can break dispatch/MCP server | `/.anyclaw/` is not in the agent's writable path; dispatch server source is immutable to the agent. |
+| Runaway `npm install` or `vite build` consumes all RAM/CPU | cgroup limits applied to the agent subprocess at spawn time via systemd-run or rlimit. |
+| PocketBase must stay up | Supervisord restart=always; restarts in ~2s on crash. |
+| Tunnel must stay up when everything else breaks | Supervisord restart=always; independent of logic service. |
+| Control plane must stay reachable when app is broken | Dispatch server is an independent supervised process with its own restart policy. It never reads from or writes to `/data/prod/logic-build/`. |
+| Command blocklist | Enforced at the MCP tool level for tools that shell out; agent's native shell tool is assumed capable (Claude Code / OpenClaw have their own allowlists and user-level confirmations). |
 
 ---
 
 ### 7. Install Script
 
-The standalone install script is a single shell command that bootstraps everything from a fresh machine.
+Single-container deployment. Handles both Docker and (future) native install. For MVP, Docker-only.
 
 **Invocation:**
 ```bash
 curl -fsSL https://get.anyclaw.com | bash
 ```
 
-Or for users who do not want to pipe to bash:
-```bash
-wget https://get.anyclaw.com/install.sh
-chmod +x install.sh
-./install.sh
-```
-
-**What the script does, in order:**
+**What the script does:**
 
 ```bash
 #!/usr/bin/env bash
@@ -1092,25 +926,22 @@ set -euo pipefail
 # ============================================================
 
 ANYCLAW_VERSION="${ANYCLAW_VERSION:-latest}"
-INSTALL_DIR="${ANYCLAW_DIR:-$HOME/.anyclaw}"
+INSTALL_DIR="${ANYCLAW_DIR:-$HOME/.anyclaw-host}"
 
 echo "=== AnyClaw Installer ==="
-echo ""
 
 # ----------------------------------------------------------
-# Phase 1: Prerequisites Check
+# Phase 1: Prerequisites
 # ----------------------------------------------------------
 
-echo "[1/7] Checking prerequisites..."
+echo "[1/6] Checking prerequisites..."
 
-# Check OS (Linux or macOS; WSL for Windows users)
 OS="$(uname -s)"
 case "$OS" in
   Linux|Darwin) ;;
-  *) echo "Error: Unsupported OS ($OS). AnyClaw requires Linux, macOS, or WSL."; exit 1 ;;
+  *) echo "Error: Unsupported OS ($OS). Requires Linux, macOS, or WSL."; exit 1 ;;
 esac
 
-# Check architecture
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64) ARCH="amd64" ;;
@@ -1118,97 +949,79 @@ case "$ARCH" in
   *) echo "Error: Unsupported architecture ($ARCH)."; exit 1 ;;
 esac
 
-# Check minimum RAM (2GB)
 if [ "$OS" = "Linux" ]; then
   MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
   if [ "$MEM_KB" -lt 2000000 ]; then
-    echo "Warning: Less than 2GB RAM detected. AnyClaw may run slowly."
+    echo "Warning: Less than 2GB RAM detected."
   fi
 fi
 
-# Check disk space (at least 5GB free)
 FREE_KB=$(df "$HOME" | tail -1 | awk '{print $4}')
 if [ "$FREE_KB" -lt 5000000 ]; then
-  echo "Warning: Less than 5GB free disk space. AnyClaw needs ~3GB."
+  echo "Warning: Less than 5GB free disk space."
 fi
 
 # ----------------------------------------------------------
-# Phase 2: Install Docker (if not present)
+# Phase 2: Docker
 # ----------------------------------------------------------
 
-echo "[2/7] Checking Docker..."
+echo "[2/6] Checking Docker..."
 
 if ! command -v docker &>/dev/null; then
-  echo "Docker not found. Installing Docker..."
   if [ "$OS" = "Linux" ]; then
     curl -fsSL https://get.docker.com | sh
     sudo usermod -aG docker "$USER"
-    echo "Docker installed. You may need to log out and back in for group changes."
-  elif [ "$OS" = "Darwin" ]; then
-    echo "Error: Please install Docker Desktop for Mac from https://docker.com/products/docker-desktop"
-    echo "Then re-run this installer."
-    exit 1
+  else
+    echo "Error: install Docker Desktop and re-run."; exit 1
   fi
 fi
 
-# Verify Docker is running
-if ! docker info &>/dev/null; then
-  echo "Error: Docker is installed but not running. Please start Docker and re-run."
-  exit 1
-fi
-
-# Check docker compose (v2 plugin)
-if ! docker compose version &>/dev/null; then
-  echo "Error: docker compose (v2) not found. Please update Docker."
-  exit 1
-fi
+docker info &>/dev/null || { echo "Error: Docker not running."; exit 1; }
+docker compose version &>/dev/null || { echo "Error: docker compose v2 required."; exit 1; }
 
 # ----------------------------------------------------------
-# Phase 3: Create Directory Structure
+# Phase 3: Install dir + compose file
 # ----------------------------------------------------------
 
-echo "[3/7] Setting up AnyClaw directory..."
+echo "[3/6] Setting up install directory..."
 
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Download docker-compose.yml and .env.template
 curl -fsSL "https://releases.anyclaw.com/$ANYCLAW_VERSION/docker-compose.yml" \
   -o docker-compose.yml
 curl -fsSL "https://releases.anyclaw.com/$ANYCLAW_VERSION/env.template" \
   -o .env.template
 
 # ----------------------------------------------------------
-# Phase 4: Configure Environment
+# Phase 4: Configure environment (no secrets in .env beyond tokens)
 # ----------------------------------------------------------
 
-echo "[4/7] Configuring AnyClaw..."
+echo "[4/6] Configuring..."
 
 if [ ! -f .env ]; then
   cp .env.template .env
 
-  # Generate a PocketBase API token for programmatic access (not email/password)
-  PB_API_TOKEN=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)
-
+  # Generate PocketBase API token (locked decision #20)
+  PB_API_TOKEN=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 48)
   sed -i.bak "s|POCKETBASE_API_TOKEN=.*|POCKETBASE_API_TOKEN=$PB_API_TOKEN|" .env
+
+  # Generate master encryption key for at-rest API key encryption (#21)
+  MASTER_KEY=$(openssl rand -base64 32)
+  sed -i.bak "s|ANYCLAW_MASTER_KEY=.*|ANYCLAW_MASTER_KEY=$MASTER_KEY|" .env
+
+  # User identity token for the broker
+  ANYCLAW_USER_TOKEN=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)
+  sed -i.bak "s|ANYCLAW_USER_TOKEN=.*|ANYCLAW_USER_TOKEN=$ANYCLAW_USER_TOKEN|" .env
   rm -f .env.bak
 
+  # Prompt for the LLM API key -- stored encrypted in PocketBase, not in .env
   echo ""
-  echo "  PocketBase API Token (saved in $INSTALL_DIR/.env):"
-  echo "    Token: $PB_API_TOKEN"
-  echo ""
-
-  # Collect LLM API key -- will be stored encrypted in PocketBase after boot
   echo "AnyClaw needs an LLM API key for AI-powered features."
-  echo "Supported providers: anthropic, openai"
   read -rp "LLM provider (anthropic/openai) [anthropic]: " LLM_PROVIDER
   LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
-
   read -rp "API key for $LLM_PROVIDER: " LLM_API_KEY
 
-  # API keys are NOT stored in .env. They will be written to PocketBase
-  # (encrypted at rest) after the services start. Store temporarily for
-  # the bootstrap phase only.
   BOOTSTRAP_LLM_PROVIDER="$LLM_PROVIDER"
   BOOTSTRAP_LLM_KEY="$LLM_API_KEY"
 else
@@ -1218,257 +1031,198 @@ else
 fi
 
 # ----------------------------------------------------------
-# Phase 5: Pull Images and Start Services
+# Phase 5: Pull and start
 # ----------------------------------------------------------
 
-echo "[5/7] Pulling Docker images..."
+echo "[5/6] Pulling and starting AnyClaw..."
 docker compose pull
-
-echo "[6/7] Starting AnyClaw..."
 docker compose up -d
 
-# Wait for all services to be healthy
-echo "Waiting for services to start..."
+# Wait for health
 TIMEOUT=120
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  HEALTHY=$(docker compose ps --format json | grep -c '"healthy"' || true)
-  TOTAL=$(docker compose ps --format json | wc -l)
-  if [ "$HEALTHY" -ge "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+  if docker compose exec -T anyclaw wget -q --spider http://127.0.0.1:8090/api/health 2>/dev/null; then
     break
   fi
   sleep 2
   ELAPSED=$((ELAPSED + 2))
 done
 
-if [ $ELAPSED -ge $TIMEOUT ]; then
-  echo "Warning: Some services did not become healthy within ${TIMEOUT}s."
-  echo "Run 'docker compose -f $INSTALL_DIR/docker-compose.yml logs' to debug."
-fi
-
-# ----------------------------------------------------------
-# Phase 5b: Store API Keys in PocketBase (encrypted)
-# ----------------------------------------------------------
-
-# API keys are stored encrypted in PocketBase, not in .env files.
-# The PocketBase `api_keys` collection uses an encrypted JSON field.
-# The control plane reads keys from PocketBase at runtime.
-
+# Store the LLM key encrypted in PocketBase via the dispatch server
 if [ -n "$BOOTSTRAP_LLM_KEY" ]; then
-  echo "Storing API key in PocketBase (encrypted)..."
-  PB_URL="http://localhost:8090"
-
-  # Wait for PocketBase to be ready
-  for i in $(seq 1 10); do
-    if wget -q --spider "$PB_URL/api/health" 2>/dev/null; then break; fi
-    sleep 1
-  done
-
-  # Use the API token to authenticate and store the key
-  curl -s -X POST "$PB_URL/api/collections/api_keys/records" \
-    -H "Authorization: Bearer $PB_API_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"provider\": \"$BOOTSTRAP_LLM_PROVIDER\",
-      \"key\": \"$BOOTSTRAP_LLM_KEY\",
-      \"active\": true
-    }" > /dev/null
-
-  echo "API key stored. You can manage keys from the mobile app Settings screen."
-  # Clear the key from shell memory
+  echo "Storing LLM API key (encrypted) in PocketBase..."
+  docker compose exec -T anyclaw \
+    node /.anyclaw/dispatch/scripts/store-api-key.js \
+      --provider "$BOOTSTRAP_LLM_PROVIDER" \
+      --key "$BOOTSTRAP_LLM_KEY"
   unset BOOTSTRAP_LLM_KEY
-else
-  if [ -z "$BOOTSTRAP_LLM_PROVIDER" ]; then
-    echo "No new API key to store."
-  else
-    echo "Warning: No API key provided. Add one later via the mobile app Settings screen."
-  fi
 fi
 
 # ----------------------------------------------------------
-# Phase 6: Agent Configuration
+# Phase 6: Agent skill packaging (for local plugin mode)
 # ----------------------------------------------------------
 
-echo "[7/7] Configuring agent..."
+echo "[6/6] Packaging skills for local agent..."
 
-# Detect which agent is available
 AGENT=""
-if command -v openclaw &>/dev/null; then
-  AGENT="openclaw"
-elif command -v claude &>/dev/null; then
-  AGENT="claude-code"
+if command -v openclaw &>/dev/null; then AGENT="openclaw"
+elif command -v claude &>/dev/null; then AGENT="claude-code"
 fi
 
 if [ "$AGENT" = "openclaw" ]; then
-  echo "Detected OpenClaw. Installing AnyClaw skills..."
-  # Run skill packaging for OpenClaw
-  docker compose exec mcp /app/scripts/package-skills.sh
-  echo "Skills installed. AnyClaw MCP server is available at localhost:3002."
-
+  docker compose exec anyclaw /.anyclaw/scripts/package-skills.sh openclaw
+  echo "OpenClaw skills installed."
 elif [ "$AGENT" = "claude-code" ]; then
-  echo "Detected Claude Code. Installing AnyClaw skills..."
-  # Copy skills to .claude/commands in the workspace
-  docker compose exec mcp /app/scripts/package-skills.sh
-  echo "Skills installed as slash commands."
-  echo "Add this to your Claude Code MCP config:"
+  docker compose exec anyclaw /.anyclaw/scripts/package-skills.sh claude-code
+  echo "Claude Code slash commands installed."
   echo ""
-  echo "  {"
-  echo "    \"mcpServers\": {"
-  echo "      \"anyclaw\": {"
-  echo "        \"url\": \"http://localhost:3002/mcp\""
-  echo "      }"
-  echo "    }"
-  echo "  }"
-
+  echo "Add this to your Claude Code MCP config:"
+  echo "  { \"mcpServers\": { \"anyclaw\": { \"url\": \"http://localhost:3002/mcp\" } } }"
 else
-  echo "No recognized agent found (OpenClaw or Claude Code)."
-  echo "You can connect any MCP-compatible agent to: http://localhost:3002/mcp"
-  echo "System prompt template available at: $INSTALL_DIR/skills/system-prompt.txt"
+  echo "No recognized local agent. You can connect any MCP agent to: http://localhost:3002/mcp"
 fi
-
-# ----------------------------------------------------------
-# Done
-# ----------------------------------------------------------
 
 echo ""
 echo "=== AnyClaw is running ==="
-echo ""
-echo "  Frontend:   http://localhost:5173"
-echo "  PocketBase:  http://localhost:8090/_/"
-echo "  MCP Server:  http://localhost:3002"
-echo "  Tunnel:      Connecting to broker..."
-echo ""
 echo "  Install dir: $INSTALL_DIR"
-echo "  Config:      $INSTALL_DIR/.env"
 echo "  Logs:        docker compose -f $INSTALL_DIR/docker-compose.yml logs -f"
 echo "  Stop:        docker compose -f $INSTALL_DIR/docker-compose.yml down"
-echo "  Update:      curl -fsSL https://get.anyclaw.com | bash"
 echo ""
 echo "Open the AnyClaw mobile app and sign in to connect."
 ```
+
+Key properties of the updated installer:
+- No three-service compose file. One service.
+- PocketBase API token is generated, not an admin password (locked decision #20).
+- Master encryption key is generated for at-rest API key encryption (#21).
+- LLM API key is written encrypted to PocketBase via the dispatch server, never persisted in `.env`.
+- Skills are packaged via a script inside the container.
 
 ---
 
 ### 8. Cloud-Hosted Setup
 
-#### Phase 1: Single VPS with Docker Compose
+#### Phase 1: Single VPS, one container per user
 
-Start simple. A single VPS runs Docker Compose for all cloud-hosted users, with user isolation via separate compose projects. This VPS also hosts OpenClaw alongside AnyClaw.
-
-**Why VPS first:**
-- Cheapest to start -- a single $20-40/month VPS handles the first 10-20 users
-- Same Docker Compose setup as self-hosted, so the deployment is battle-tested
-- OpenClaw can run on the same VPS as a sibling Docker Compose project
-- No new infrastructure to learn (no Fly.io API, no Machines provisioning)
-- Migrate to Fly.io later when user count justifies per-user container isolation
+Start simple. A single VPS (e.g., Hetzner CX32 -- 4 vCPU, 8GB RAM, 80GB disk) runs one AnyClaw container per user via `docker run` (or a compose project per user). Each container is the exact same image as the self-hosted distribution, with supervisord inside running the full process set.
 
 **VPS layout:**
 
 ```
-VPS (e.g., Hetzner CX32 -- 4 vCPU, 8GB RAM, 80GB disk)
+VPS
   ├── /opt/anyclaw/users/
   │     ├── user-abc123/
-  │     │     ├── docker-compose.yml    (AnyClaw three-container stack)
-  │     │     └── data/                 (PocketBase data, git repo, snapshots)
+  │     │     ├── docker-compose.yml    # single `anyclaw` service
+  │     │     └── data/                 # bind-mounted to /data in container
   │     ├── user-def456/
   │     │     ├── docker-compose.yml
   │     │     └── data/
   │     └── ...
-  ├── /opt/openclaw/
-  │     └── docker-compose.yml          (OpenClaw instance, shared by all users)
+  ├── /opt/openclaw/                    # shared OpenClaw instance (optional)
+  │     └── docker-compose.yml
   └── /opt/anyclaw/provisioner/
-        └── docker-compose.yml          (Provisioning service + broker)
+        └── docker-compose.yml          # provisioner + broker
 ```
 
-Each user gets their own Docker Compose project with isolated volumes. Port allocation is dynamic -- the provisioner assigns unique host ports per user and configures the tunnel client to route through the broker.
+Each user's container has its own `/data` bind-mount and its own supervisord supervising its own PocketBase, tunnel manager, dispatch server, logic service, and prod static server. Crashes in one user's container cannot affect another user. The agent subprocess inside each user's container is cgroup-limited by the container's own cpu/memory limits plus per-process limits applied by supervisord's rlimit config.
 
-**Co-hosting OpenClaw:** OpenClaw runs as a separate Docker Compose project on the same VPS. AnyClaw's agent adapter for OpenClaw connects to it via internal Docker networking. Cloud-hosted users who choose OpenClaw as their agent share this single OpenClaw instance (each user's requests are dispatched with their own API keys and isolated workspace context).
+**Why one container per user, not one container for all users:**
+- Container = multi-tenancy boundary. Supervisord inside = crash-isolation boundary within a single tenant.
+- Per-user volume isolation is free (separate bind-mounts).
+- Same image as self-hosted, so the distribution is battle-tested.
+- Migration path to per-user microVMs (Phase 2) is a straight substitution.
 
-#### Phase 2: Migrate to Fly.io (future)
+**Provisioner responsibilities:**
+- Allocate a unique `ANYCLAW_USER_TOKEN` per user.
+- Template `docker-compose.yml` per user with unique host ports (or no host ports at all, routing only through the tunnel manager).
+- Template per-user resource limits (`cpus`, `memory`) so one user cannot starve others.
+- Lifecycle: create, start, stop, destroy.
+- Idle shutdown: stop the container after 30 minutes of tunnel inactivity; wake on the next mobile app connection via the broker.
 
-When user count exceeds what a single VPS can handle (estimated 20-50 users depending on usage patterns), migrate to Fly.io Machines for per-user container isolation.
+**OpenClaw:** optionally run a single shared OpenClaw instance on the same VPS. Cloud-hosted users who choose OpenClaw as their agent dispatch to this shared instance with their own API keys and workspace context. Users who choose Claude Code run it inside their own container (as a transient subprocess spawned by their container's dispatch server).
 
-**Migration path:**
-- Each user's Docker Compose stack becomes a single Fly Machine running all three containers via `s6-overlay` process supervisor
-- Fly Volumes replace local bind mounts for persistent data
-- The provisioner becomes a Fly.io management API client
-- Idle shutdown: machines stop after 30 minutes of inactivity, wake on mobile app connect (3-5s boot)
-- OpenClaw moves to its own Fly Machine or stays on a dedicated VPS depending on scale
+#### Phase 2: E2B microVMs or Kubernetes Agent Sandbox CRD (future)
 
-**Fly.io cost model (per user/month, estimated):**
+When user count exceeds what a single VPS can handle (estimated 20-50 depending on usage), migrate to a per-user microVM model. The same container image runs unchanged -- the only differences are:
+
+- Scheduler: Kubernetes Agent Sandbox CRD or E2B API client instead of shell-driven `docker compose`.
+- Storage: Kubernetes PVCs or E2B persistent volumes instead of host bind-mounts.
+- Idle shutdown and wake: handled by the platform, not a custom provisioner.
+- Stronger isolation: microVM boundary instead of container boundary.
+
+The container's internal layout (supervisord + five processes + transient agent subprocess) does not change. This keeps the migration path tight.
+
+**Phase 2 cost estimate (per user/month):**
 
 | Resource | Cost |
-|----------|------|
-| Fly Machine (shared-cpu-1x, ~50% active time) | ~$1.50 |
-| Fly Volume (3GB) | ~$0.45 |
-| Bandwidth (5GB/month typical) | ~$0.00 |
-| **Infrastructure total** | **~$2.00/user/month** |
-| LLM tokens (bundled, ~$3-5 of usage) | ~$4.00 |
-| **Total COGS** | **~$6.00/user/month** |
+|---|---|
+| microVM compute (~50% active) | ~$1.50 |
+| Persistent storage (3GB) | ~$0.45 |
+| Bandwidth (5GB/month) | ~$0.00 |
+| **Infrastructure total** | **~$2.00/user** |
+| LLM tokens (bundled ~$3-5) | ~$4.00 |
+| **Total COGS** | **~$6.00/user** |
 
-This supports a subscription price point of $12-15/month with healthy margins. BYOK users (who supply their own LLM API keys) drop COGS to ~$2/month.
+Supports $12-15/month subscription pricing with healthy margins. BYOK users drop COGS to ~$2.
 
 ---
 
 ### 9. Technical Decisions (Resolved)
 
-All open questions from the original design have been resolved by the locked decisions in the main spec. Summary of resolutions:
+Resolutions from the main spec that affect this plan:
 
-| # | Original Question | Resolution |
-|---|-------------------|------------|
-| 1 | Tailwind v3 or v4? | **Tailwind v4** with CSS-first `@theme` config. No `tailwind.config.ts`. |
-| 2 | MCP transport (stdio vs HTTP/SSE)? | **HTTP/SSE from the start.** Cloud-ready from day one. |
-| 3 | Cloud hosting (Fly.io vs VPS)? | **Single VPS with Docker Compose first.** Migrate to Fly.io later. Co-host OpenClaw on same VPS. |
-| 4 | Skill versioning? | **Independent with compatibility check.** Skills declare `min_server_version`, server declares `min_skill_version`. Semver comparison at dispatch time. |
-| 5 | Dev workspace isolation? | **Dedicated sandbox container** with blocklist rules, resource limits (1 CPU, 1GB RAM), isolated network. Commands dispatched from control plane to sandbox via API. |
+| # | Question | Resolution |
+|---|---|---|
+| 1 | Tailwind v3 or v4? | **v4** with CSS-first `@theme`. No `tailwind.config.ts`. |
+| 2 | MCP transport? | **HTTP/SSE from the start.** |
+| 3 | Cloud hosting? | **Single VPS, one container per user.** Migrate to E2B / K8s Agent Sandbox later. |
+| 4 | Skill versioning? | **Independent with compatibility check** via YAML frontmatter. |
+| 5 | Dev workspace isolation? | **No sandbox container.** cgroup limits on the agent subprocess + `/.anyclaw/` not in agent writable path. |
+| 6 | Process model? | **One container, supervisord inside**, five supervised processes + transient agent subprocess. |
+| 7 | Agent file/shell tools? | **Native agent tools.** MCP only for deploy/rollback/snapshot/create_collection/ask_user/update_progress/list_versions. |
 
 ---
 
 ## New Gaps
 
-The following new technical decisions emerged from applying the locked decisions above. These need resolution before implementation.
+The three-container, sandbox-API, and Docker-socket-proxy gaps from earlier drafts are resolved by the supervisord-in-one-container design. The following gaps remain and must be resolved before implementation.
 
 **1. PocketBase API token provisioning and rotation**
 
-PocketBase API tokens (not email/password) are the locked auth mechanism. Open questions:
-- How is the initial API token created? PocketBase does not natively support pre-seeded API tokens -- it requires an admin account to generate them. The install script may need to create an admin account first, generate a token via the API, then disable password-based admin login.
-- How are tokens rotated? If a token is compromised, the user needs a way to regenerate it. This likely requires a control plane endpoint or a mobile app settings action.
-- How many tokens are needed? The app server and control plane each need one. Should they share a token or have separate tokens with different scopes?
+PocketBase API tokens (not email/password) are the locked auth mechanism (#20). Open questions:
+- PocketBase does not natively support pre-seeded API tokens -- it requires an admin account to generate them. The install script and the container's first-boot sequence need a deterministic way to: (a) create an initial admin user non-interactively, (b) use it to generate a long-lived API token, (c) ideally disable interactive admin login afterwards so the only auth path is the token.
+- Rotation: how does the user regenerate a token if it is compromised? Likely a dispatch server endpoint + a mobile app settings action.
+- One token or multiple? The dispatch server and the logic service both need PocketBase access. A single token shared via environment variable is simplest but has a larger blast radius on compromise. Separate tokens per process would require per-process credential injection.
 
 **2. API key encryption scheme in PocketBase**
 
-API keys are stored encrypted in PocketBase (not env vars). Open questions:
-- What encryption algorithm? AES-256-GCM is the obvious choice, but the encryption key itself needs to be stored somewhere. If it is in the .env file, we have merely moved the problem.
-- Should the encryption key be derived from the PocketBase API token (so there is only one secret to protect)?
-- How does the control plane decrypt keys at runtime? It needs the decryption key in memory. If the container restarts, it must be able to recover the key from a persistent source.
-- PocketBase does not have built-in field-level encryption. This must be application-level encryption (encrypt before writing, decrypt after reading). The `api_keys` collection stores ciphertext, not plaintext.
+API keys for LLM providers are stored encrypted in PocketBase (#21). Open questions:
+- Algorithm: AES-256-GCM is the obvious choice. Decided.
+- Where does the master key live? Options: (a) in `.env` as `ANYCLAW_MASTER_KEY`, loaded into supervisord's environment and passed to the dispatch server; (b) derived from the PocketBase API token so there is only one secret; (c) in a host keyring (macOS Keychain, Linux libsecret) for native installs only. The installer currently puts it in `.env` -- is that acceptable?
+- PocketBase has no built-in field-level encryption. The `api_keys` collection stores ciphertext blobs. The dispatch server encrypts on write and decrypts on read. This must be implemented end-to-end in the dispatch server.
+- Key rotation: if the master key leaks, the user needs a path to re-encrypt all stored ciphertexts under a new key. Requires a rotation command in the dispatch server.
 
-**3. Sandbox container command API design**
+**3. cgroup limits for the transient agent subprocess**
 
-The sandbox container exposes a command execution API on port 3005. Open questions:
-- What is the API contract? Likely `POST /exec` with `{ command, workdir, timeout }` and streaming stdout/stderr response.
-- How does the control plane authenticate to the sandbox? The sandbox is on an internal-only network, but should there still be a shared secret or is network isolation sufficient?
-- How does the blocklist work? String matching on the command? Parsing the command into executable + args and checking against a list? What about commands invoked indirectly (e.g., `bash -c "rm -rf /"`)?
-- Should the sandbox have internet access for `npm install`? Currently the sandbox is on an internal-only network (`sandbox_net: internal: true`), which blocks all external traffic. But `npm install` requires registry access. Options: (a) give the sandbox default network access too, (b) run an npm registry proxy on the control plane, (c) pre-install common packages in the sandbox image.
+The agent subprocess is spawned per task with resource limits so a runaway `npm install`, `vite build`, or model invocation cannot starve the supervised processes. Open questions:
+- On Linux hosts with systemd and cgroup delegation: `systemd-run --scope --user --property=MemoryMax=2G --property=CPUQuota=150% ...` is clean but requires systemd in the container (non-trivial) or delegation to the host systemd (requires `--cgroupns=host` and privileged access).
+- On container-only hosts (Docker Desktop on Mac, most minimal Linux distros): no systemd available. Fall back to `sh -c 'ulimit -v $((2*1024*1024)); exec ...'` for memory and a separate cpulimit/cgroup v2 manipulation for CPU. Less precise.
+- On Kubernetes (Phase 2): the agent subprocess can be its own Pod with standard resource limits. Different code path from the self-hosted case.
+- What are the right default limits? 2GB RAM and 150% of 1 CPU are plausible starting points but need real-world tuning.
 
-**4. Control plane Docker socket access**
+**4. Tailwind v4 `@theme` token definition**
 
-The control plane needs Docker socket access to restart the app container and dispatch commands to the sandbox. Open questions:
-- Is mounting `/var/run/docker.sock` acceptable for the security model? It gives the control plane root-equivalent access to the host.
-- Should we use a more restricted approach like a Docker socket proxy (e.g., Tecnativa docker-socket-proxy) that only allows specific API calls (restart container, exec in container)?
-- For cloud-hosted mode, Docker socket access works differently on Fly.io. This needs a separate mechanism (Fly Machines API) for the Phase 2 migration.
+The style guide references semantic color tokens but the exact `@theme` block in `app.css` is not defined. Open questions:
+- What is the default light-theme CSS? Tailwind v4 uses `@theme { --color-primary: ...; }` syntax.
+- Dark mode: `@theme` supports `@media (prefers-color-scheme: dark)` overrides or a `.dark` class. Which pattern does the app use, and how does the agent know when to add dark-mode overrides?
+- Can the agent add new `@theme` tokens, or must it only use predefined ones? Allowing additions means the agent can introduce inconsistencies; forbidding them means some features cannot be built without a style-guide update first.
 
-**5. Tailwind v4 `@theme` token definition**
+**5. VPS provisioner design for cloud-hosted mode**
 
-The style guide references semantic color tokens but the exact `@theme` block content is not defined. Open questions:
-- What is the exact CSS for the default theme in `app.css`? Tailwind v4 uses `@theme { --color-primary: ...; }` syntax.
-- Should the agent be allowed to add new `@theme` tokens, or only use pre-defined ones? Adding tokens means editing `app.css`, which could break the theme if done incorrectly.
-- How does dark mode work with Tailwind v4? The `@theme` block supports `@media (prefers-color-scheme: dark)` overrides, but the exact pattern needs to be specified in the style guide.
-
-**6. VPS provisioner design for cloud-hosted mode**
-
-The VPS-first cloud hosting model needs a provisioner service. Open questions:
-- How does the provisioner allocate ports for each user's Docker Compose stack? Each user needs unique host ports for PocketBase, logic, frontend, etc. (or all traffic routes through the tunnel and no host ports are exposed).
-- How does the provisioner manage per-user Docker Compose projects? It needs to template the `docker-compose.yml` per user, manage lifecycle (create, start, stop, destroy), and handle resource limits.
-- What is the resource limit per user on the shared VPS? How many concurrent users can a 4 vCPU / 8GB RAM VPS support?
-- How does OpenClaw share across cloud users? Each user dispatches tasks to a shared OpenClaw instance, but with their own API keys and workspace paths. The adapter needs to handle concurrent requests from multiple users safely.
+Per-user container provisioning on a shared VPS. Open questions:
+- Port allocation: does the provisioner assign unique host ports per user, or run all user containers with no exposed ports and rely entirely on their tunnel manager for ingress? The tunnel-only approach is cleaner (no port exhaustion, no host firewall rules) but requires the broker to route per-user WSS correctly.
+- Templating: the provisioner needs to generate a per-user `docker-compose.yml` or `docker run` invocation with unique bind-mount paths, container names, and environment variables. Store templates where? Render at runtime or at user-creation time?
+- Resource limits per user: what `cpus` / `memory` limits prevent one user from starving the VPS? A 4 vCPU / 8GB VPS might support 8-16 users with 0.5 CPU / 512MB each, but active usage is bursty during agent runs.
+- Idle detection and wake: how does the provisioner know a user's container is idle? Options: (a) tunnel manager heartbeat, (b) dispatch server `/last-activity` endpoint, (c) container CPU metrics. Wake on the first broker message directed at the user.
+- Shared OpenClaw concurrency: if a single OpenClaw instance serves multiple cloud users, how are concurrent task dispatches isolated? Each user's workspace bind-mount is different, but OpenClaw process state must not bleed between users. This might be solved by spawning per-user OpenClaw subprocesses inside the shared OpenClaw container, or by giving each user their own OpenClaw container (closer to per-user isolation anyway).

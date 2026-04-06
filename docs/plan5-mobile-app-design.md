@@ -2,11 +2,11 @@
 
 **Goal:** Build the AnyClaw companion mobile app -- a thin Expo (React Native) shell that wraps the agent-built web UI in a WebView, manages server connections, dispatches tasks to the coding agent, and provides version history with rollback.
 
-**Architecture:** The app has two layers: (1) a native shell built with Expo Router (tabs + stack navigation) that handles connection setup, task dispatch, version history, and settings; (2) a full-screen WebView that loads the agent-built React frontend from the user's server. The native shell and WebView communicate via a postMessage/onMessage JS bridge. The app authenticates via the broker at `broker.anyclawapp.com`, then communicates with two server-side containers: the **control plane** (task dispatch, health checks, restart API) and the **app server** (WebView content, PocketBase data). All traffic is NaCl-encrypted on top of TLS.
+**Architecture:** The app has two layers: (1) a native shell built with Expo Router (tabs + stack navigation) that handles connection setup, task dispatch, version history, and settings; (2) a full-screen WebView that loads the agent-built React frontend from the user's server. The native shell and WebView communicate via a postMessage/onMessage JS bridge. The app authenticates via the broker at `broker.anyclawapp.com`, then connects through a **single tunnel endpoint** (a relay subdomain brokered via `broker.anyclawapp.com`) to the user's host. On the host, a tunnel manager multiplexes incoming traffic across three supervised processes using path-based routing: `/pb/*` → PocketBase (data + Realtime SSE), `/api/*` → dispatch/MCP server (task submission, rollback, version history, emergency controls), `/app/*` → prod static server (the agent-built WebView content). All traffic is NaCl-encrypted on top of TLS.
 
 **Tech Stack:** Expo SDK 52, expo-router v4, react-native-webview, expo-secure-store, expo-notifications, zustand (state management), React Native Reanimated (animations), tweetnacl (NaCl encryption).
 
-**Locked decisions applied:** Task dispatch UI is a dedicated "Request" tab + full-screen modal/bottom sheet (not FAB). Min Android API 28 (Android 9.0). WebView auth via JS bridge injection. Realtime via PocketBase SSE + REST. NaCl E2E encryption. OAuth: Google + Apple + GitHub. Domain: `anyclawapp.com`, broker at `broker.anyclawapp.com`. Three-container server architecture (app server, control plane, sandbox).
+**Locked decisions applied:** Task dispatch UI is a dedicated "Request" tab + full-screen modal/bottom sheet (not FAB). Min Android API 28 (Android 9.0). WebView auth via JS bridge injection. Realtime via PocketBase SSE + REST. NaCl E2E encryption. OAuth: Google + Apple + GitHub. Domain: `anyclawapp.com`, broker at `broker.anyclawapp.com`. Supervised-process server architecture (PocketBase, tunnel manager, dispatch/MCP server, logic service, prod static server) — no container splits; path-based routing through a single tunnel.
 
 ---
 
@@ -244,13 +244,13 @@ export default function MainLayout() {
 
 ### Loading the Agent-Built UI
 
-The WebView loads the production frontend from the user's server. The URL does **not** include the auth token -- tokens are injected via the JS bridge after page load to avoid exposing them in URLs, server logs, or referrer headers.
+The WebView loads the production frontend from the user's server through the single tunnel endpoint, under the `/app/*` path. The URL does **not** include the auth token -- tokens are injected via the JS bridge after page load to avoid exposing them in URLs, server logs, or referrer headers.
 
 ```
-https://<tunnel-host>/app
+https://<tunnel-host>/app/
 ```
 
-In Phase 1 (broker relay), the tunnel host is a subdomain on the broker (e.g., `abc123.relay.anyclawapp.com`). In Phase 2 (WebRTC), the WebView connects to a local HTTP server that proxies over the data channel -- but this is transparent to the WebView component.
+In Phase 1 (broker relay), the tunnel host is a subdomain on the broker (e.g., `abc123.relay.anyclawapp.com`). The host's tunnel manager multiplexes `/pb/*`, `/api/*`, and `/app/*` to the corresponding supervised processes (PocketBase, dispatch/MCP server, prod static server). In Phase 2 (WebRTC), the WebView connects to a local HTTP server that proxies over the data channel -- but this is transparent to the WebView component, and the same path-based routing applies on the host side.
 
 **Auth flow:** The native shell loads the page without a token. The page's JS waits for the bridge to inject a `session-token` message. Once received, the frontend uses the token for all API calls. This is the most secure option -- the token never appears in URLs, logs, or browser history.
 
@@ -271,7 +271,7 @@ export function WebViewShell() {
   const [isLoading, setIsLoading] = useState(true);
 
   // Auth token is NOT in the URL -- injected via JS bridge after page load
-  const uri = `${serverUrl}/app`;
+  const uri = `${serverUrl}/app/`;
 
   const onMessage = useCallback((event: WebViewMessageEvent) => {
     const msg = parseBridgeMessage(event.nativeEvent.data);
@@ -435,10 +435,12 @@ pb.collection("_deployments").subscribe("*", (event) => {
 | Scenario | Detection | Behavior |
 |----------|-----------|----------|
 | Server unreachable | WebView `onError` fires | Show native error screen with "Retry" button and connection status |
-| Server returns 5xx | WebView `onHttpError` with status >= 500 | Same as above |
-| Server returns 401 | WebView `onHttpError` with status 401 | Attempt token refresh; if that fails, redirect to login |
+| `/app/*` returns 5xx (logic service or prod static server crashed) | WebView `onHttpError` with status >= 500 | Show native "App is broken" screen with a prominent "Open Version History" button that routes to the Versions tab. The dispatch/MCP server on `/api/*` is a separately supervised process that `restart=always`, so version history + rollback remain available even while the agent-built app is down. |
+| `/app/*` returns 401 | WebView `onHttpError` with status 401 | Attempt token refresh; if that fails, redirect to login |
 | WebView JS crash | WebView `onRenderProcessGone` (Android) / `onContentProcessDidTerminate` (iOS) | Auto-reload the WebView, show brief toast |
 | Slow load (>10s) | Timer started on load begin | Show "Still loading..." overlay with option to retry |
+
+**Emergency rollback path:** Because the dispatch/MCP server is supervised with `restart=always` and lives outside the agent's writable path, `POST /api/rollback` and `GET /api/versions` are available whenever the host is reachable — even if the logic service is crash-looping from bad agent code or the prod static server returned a broken bundle. The native shell never depends on `/app/*` being healthy to render the Versions tab; it talks directly to `/api/*` and `/pb/*`.
 
 ---
 
@@ -618,22 +620,26 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
 ### Server Communication for Tasks
 
-Tasks are dispatched and monitored through the **control plane** container's REST API. The mobile app does NOT communicate directly with the coding agent -- it goes through the control plane's adapter layer. The app server (separate container) serves WebView content and PocketBase data.
+Tasks are dispatched and monitored through the **dispatch/MCP server**'s REST API, reached via the `/api/*` path on the single tunnel. The mobile app does NOT communicate directly with the coding agent -- it goes through the dispatch server's adapter layer, which spawns the agent as a transient subprocess per task.
 
-**Three-container model (from mobile app's perspective):**
-- **Control plane** -- always available, handles task dispatch, health checks, restart API. The mobile app sends task requests here.
-- **App server** -- serves the agent-built frontend (WebView content) and runs PocketBase. Can be restarted by user or agent without losing task dispatch capability.
-- **Sandbox** -- runs agent commands. Mobile app never talks to this directly.
+**Supervised-process model (from mobile app's perspective):**
+- **Dispatch/MCP server** (`/api/*`) -- a supervised process with `restart=always`. Handles task dispatch, clarification answers, cancellation, version history, emergency rollback, and logic-service restart. Its source is outside the agent's writable path, so it remains available even when agent-authored code (the logic service) is broken. This is the "control plane" capability from the old design, now just a process rather than a container.
+- **PocketBase** (`/pb/*`) -- a supervised process. Stores task state, versions, clarification Q&A, and streams updates over Realtime SSE.
+- **Prod static server** (`/app/*`) -- a supervised process that serves the agent-built React bundle into the WebView.
+- **Logic service** -- agent-modifiable Node.js service; supervised with `restart=on-failure`. The mobile app never talks to it directly; the WebView frontend calls it for custom endpoints.
+- **Agent subprocess** -- spawned per task by the dispatch server with cgroup limits. Transient. Mobile app never contacts it directly.
 
-**Endpoints (served by the control plane):**
+**Endpoints (served by the dispatch/MCP server under `/api/*`):**
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/tasks` | Submit a new task. Body: `{ request: string }`. Returns `{ taskId: string }`. |
 | POST | `/api/tasks/:id/answer` | Answer a clarifying question. Body: `{ answer: string }`. |
 | POST | `/api/tasks/:id/cancel` | Cancel a running task. |
-| GET | `/api/health` | Health check for app server + sandbox status. |
-| POST | `/api/server/restart` | Restart the app server container. |
+| GET | `/api/versions` | List deployment history. |
+| POST | `/api/rollback` | Emergency rollback — atomic code + DB snapshot restore. Always available. |
+| POST | `/api/restart-app` | Restart the logic service (agent code) after a crash loop. |
+| GET | `/api/health` | Health check for all supervised processes. |
 
 **Realtime communication: PocketBase SSE + REST**
 
@@ -643,7 +649,7 @@ All realtime updates flow through **PocketBase Realtime SSE** (server-to-client 
 - **Clarification questions** -- Agent writes a question to the task record in PocketBase. SSE pushes it to the mobile app. User answers via REST POST to the control plane.
 - **Task history** -- Fetched via PocketBase REST API. Past tasks persist in PocketBase and can be browsed offline if cached.
 
-**Task state persistence:** Task state lives in PocketBase. If the user closes the app during a clarification question, the question persists in PocketBase. When the user reopens the app, it reconnects to PocketBase SSE and resumes where it left off -- the pending question reappears immediately.
+**Task state persistence:** Task state lives in PocketBase (`/pb/*`) — this is the single source of truth. The dispatch/MCP server writes to PocketBase when it accepts a task, and both the dispatch server and the agent subprocess update the same `_tasks` records throughout the task lifecycle. There is no separate task store in the dispatch server. Because PocketBase is its own supervised process (not coupled to the logic service), it stays up across logic-service crashes, so task state survives even when the agent-authored app is broken. If the user closes the app during a clarification question, the question persists in PocketBase; when the user reopens the app, it reconnects to PocketBase SSE on `/pb/*` and resumes where it left off.
 
 ```typescript
 // lib/pocketbase.ts — task status subscription
@@ -916,7 +922,7 @@ export const useVersionStore = create<VersionStore>((set, get) => ({
 
   rollbackTo: async (versionId) => {
     const api = getApi();
-    const result = await api.post(`/api/versions/${versionId}/rollback`);
+    const result = await api.post(`/api/rollback`, { versionId });
     // After rollback, refresh the version list
     await get().fetchVersions();
     return result;
@@ -935,7 +941,7 @@ Rollback is always user-initiated. The flow has a mandatory confirmation step:
    - If the version has a DB snapshot: "Database will also be restored to this version's state."
    - If the version does NOT have a DB snapshot: "Note: Only code will be reverted. Database changes since this version will remain."
    - Two buttons: "Cancel" and "Confirm Rollback".
-4. On confirm, the app calls POST `/api/versions/:id/rollback`.
+4. On confirm, the app calls POST `/api/rollback` with `{ versionId }` on the dispatch/MCP server.
 5. The server performs the rollback (git checkout + optional DB restore).
 6. The server emits a deploy event on the `_deployments` collection.
 7. The WebView reloads. The version list refreshes to show the restored version as current.
@@ -1073,8 +1079,9 @@ If the user has one server and it is online, the app auto-connects. If multiple 
    }
    ```
 4. The app stores these in the connection store and in `expo-secure-store` for reconnection on app restart.
-5. The WebView loads `https://abc123.relay.anyclawapp.com/app` (auth token injected via JS bridge, not URL).
-6. The PocketBase client connects to `https://abc123.relay.anyclawapp.com/pb` for realtime subscriptions.
+5. The WebView loads `https://abc123.relay.anyclawapp.com/app/` (auth token injected via JS bridge, not URL). The host's tunnel manager routes this to the prod static server.
+6. The PocketBase client connects to `https://abc123.relay.anyclawapp.com/pb` for realtime subscriptions. The tunnel manager routes this to the PocketBase process.
+7. The native shell's task/versions API calls go to `https://abc123.relay.anyclawapp.com/api/*`, routed to the dispatch/MCP server.
 
 ### Connection Store
 
@@ -1403,6 +1410,10 @@ All open questions from the original design have been resolved by the locked dec
 
 Technical decisions that emerged from applying the locked decisions to this design. These need resolution before implementation.
 
+**Resolved by the supervised-process architecture:**
+- ~~Control plane vs app server URL routing~~ — path-based routing through a single tunnel: `/pb/*` → PocketBase, `/api/*` → dispatch/MCP server, `/app/*` → prod static server. Availability across crashes comes from independent process supervision, not from separate subdomains.
+- ~~Task state ownership~~ — PocketBase is the single source of truth. The dispatch/MCP server writes `_tasks` records directly; there is no second task store. PocketBase runs as its own supervised process, so task state stays available even when the logic service is crashed.
+
 ### 1. NaCl encryption for WebView traffic
 
 The locked decision requires NaCl E2E encryption on all traffic through the broker relay. For native REST/SSE calls, this is straightforward (encrypt in `lib/crypto.ts`). But the WebView loads HTML/CSS/JS assets and makes its own PocketBase API calls. **Options:**
@@ -1424,17 +1435,7 @@ The current design generates a keypair on first connection and caches it. **Ques
 
 **Decision needed:** Key rotation policy and revocation mechanism.
 
-### 3. Control plane vs app server URL routing
-
-The mobile app now talks to two separate containers (control plane for task dispatch, app server for WebView/PocketBase). Through the broker relay, these are behind a single relay subdomain. **Questions:**
-
-- Does the relay use path-based routing (`/cp/*` for control plane, `/app/*` for app server, `/pb/*` for PocketBase)?
-- Or does each container get its own relay subdomain (`cp.abc123.relay.anyclawapp.com` vs `app.abc123.relay.anyclawapp.com`)?
-- The control plane must remain reachable even when the app server is down (restarting). How does the relay handle this?
-
-**Decision needed:** URL routing scheme for multi-container relay.
-
-### 4. OAuth token storage and refresh
+### 3. OAuth token storage and refresh
 
 With OAuth (Google/Apple/GitHub) replacing email/password, the auth flow changes. **Questions:**
 
@@ -1444,17 +1445,7 @@ With OAuth (Google/Apple/GitHub) replacing email/password, the auth flow changes
 
 **Decision needed:** Broker JWT strategy and OAuth token lifecycle.
 
-### 5. Task dispatch: control plane REST vs PocketBase
-
-Task dispatch goes to the control plane, but task state lives in PocketBase (on the app server). **Questions:**
-
-- Does the control plane write task state to PocketBase, or does it maintain its own task state store?
-- If PocketBase is on the app server and the app server is down, the control plane can still accept tasks -- but where does it store them until the app server comes back?
-- Should the control plane have its own lightweight PocketBase instance for task state, separate from the app server's PocketBase?
-
-**Decision needed:** Task state ownership between control plane and app server.
-
-### 6. Full-screen modal/bottom sheet interaction for task dispatch
+### 4. Full-screen modal/bottom sheet interaction for task dispatch
 
 The locked decision says "dedicated Request tab + full-screen modal/bottom sheet" but the current code shows the task card inline in the tab. **Questions:**
 

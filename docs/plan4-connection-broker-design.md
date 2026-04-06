@@ -4,6 +4,8 @@
 
 **Guiding constraint:** The broker must be cheap to operate. In Phase 1 it relays all user traffic, so the design must minimize per-user bandwidth and make the transition to Phase 2 (P2P) as fast as possible.
 
+**Relationship to the user's host process architecture:** Per the main spec's Process Architecture section, the user's side is a single host (one Docker container or native install) running supervised processes: PocketBase, Tunnel Manager, Dispatch/MCP server, Logic service, and Prod static server. The broker treats the user's side as a single endpoint — one persistent WSS connection per user, maintained by the **Tunnel Manager** process (a supervised, always-restart process on the host). The broker relays encrypted bytes through this single tunnel and does not know or care that multiple processes live behind it. Multiplexing across the host's internal services (PocketBase on port 8090, Dispatch/MCP on port 3000, Prod static on port 4000) is performed by the Tunnel Manager on the user's side; the broker sees only opaque frames.
+
 ---
 
 ## 1. Auth System
@@ -83,14 +85,14 @@ A background job runs hourly to `DELETE FROM sessions WHERE expires_at < now()`.
 
 ### 2.1 Registration Flow
 
-When a self-hosted AnyClaw server starts, it registers with the broker:
+When a self-hosted AnyClaw host starts, the **Tunnel Manager** process (one of the supervised processes on the user's host) registers with the broker on behalf of the whole host:
 
-1. The server reads its config file which contains: `broker_url`, `user_email`, `server_token`. The `server_token` is generated during initial setup (a one-time pairing step in the mobile app that creates a token scoped to the user).
+1. The Tunnel Manager reads its config file which contains: `broker_url`, `user_email`, `server_token`. The `server_token` is generated during initial setup (a one-time pairing step in the mobile app that creates a token scoped to the user).
 2. `POST /servers/register` with body `{ server_token, server_name, version, capabilities }`.
    - The broker validates `server_token` against the `server_tokens` table (links to a user_id).
-   - Creates or updates a row in the `servers` table.
+   - Creates or updates a row in the `servers` table. (Here "server" in the DB schema refers to the user's host as a whole, not an individual internal process.)
    - Returns `{ server_id, heartbeat_interval_ms: 30000, wss_relay_url }`.
-3. The server opens a persistent WebSocket to the relay URL (Phase 1) or to the signaling endpoint (Phase 2).
+3. The Tunnel Manager opens a persistent WebSocket to the relay URL (Phase 1) or to the signaling endpoint (Phase 2). This is the single tunnel the broker uses for all traffic to this host. If the Tunnel Manager crashes, supervisord restarts it (`restart=always`) and it reconnects automatically — other supervised processes on the host are unaffected.
 
 **Server token pairing (one-time setup):**
 - In the mobile app settings, user taps "Add Server".
@@ -175,7 +177,7 @@ CREATE INDEX idx_device_keys_server ON device_keys(server_id);
 ### 3.1 Architecture
 
 ```
-Mobile App          Connection Broker              User's Server
+Mobile App          Connection Broker         User's Host (Tunnel Manager process)
     |                      |                            |
     |-- WSS connect ------>|                            |
     |   (Bearer token)     |                            |
@@ -183,13 +185,20 @@ Mobile App          Connection Broker              User's Server
     |                      |     (server_token)         |
     |                      |                            |
     |== encrypted frames =>|== encrypted frames =======>|
-    |<= encrypted frames ==|<= encrypted frames =======|
+    |<= encrypted frames ==|<= encrypted frames ========|
+                                                         |
+                                            internal loopback fan-out:
+                                              → PocketBase        (127.0.0.1:8090)
+                                              → Dispatch / MCP    (127.0.0.1:3000)
+                                              → Prod static       (127.0.0.1:4000)
 ```
 
 The broker runs two WebSocket listener endpoints:
 
 1. **`wss://broker.anyclawapp.com/relay/client`** -- mobile app connects here. Auth via `Authorization: Bearer <session_token>` in the WebSocket upgrade request headers (supported by all WS clients).
-2. **`wss://broker.anyclawapp.com/relay/server`** -- AnyClaw server connects here. Auth via `server_token` query parameter in the upgrade URL (since the server-side WS client controls the URL).
+2. **`wss://broker.anyclawapp.com/relay/server`** -- the user's host Tunnel Manager process connects here. Auth via `server_token` query parameter in the upgrade URL (since the host-side WS client controls the URL).
+
+The broker has no knowledge of what lives behind the tunnel. It relays opaque encrypted frames. Routing to the host's internal services (PocketBase, Dispatch/MCP, Prod static) is entirely the Tunnel Manager's responsibility.
 
 ### 3.2 Connection Establishment
 
@@ -779,7 +788,19 @@ The current design generates one X25519 keypair per device-server pair during th
 - Section 5.6.5 says counters reset to 0 on reconnect. If the same WebSocket connection drops and reconnects very quickly, there is a theoretical risk of nonce reuse if frames were in-flight during the drop.
 - **Safer alternative:** Persist the last-used nonce counter and always start above it. But this adds state management complexity. Need to evaluate whether the theoretical risk justifies the complexity.
 
-### Gap 7: VPS Provider Selection
+### Gap 7: Tunnel Manager Internal Multiplexing (Subdomain vs Path Routing)
+
+The Process Architecture update in the main spec introduced three internal services behind a single tunnel on the user's host: PocketBase (port 8090), Dispatch/MCP (port 3000), and Prod static (port 4000). The Tunnel Manager must route each relayed request to the correct internal service, but the broker and the mobile app currently treat the tunnel as a single opaque pipe. Open questions:
+
+- **Routing strategy:** Should the mobile app address services by **subdomain** (e.g. `pb.<server-id>.anyclawapp.com`, `api.<server-id>.anyclawapp.com`, `app.<server-id>.anyclawapp.com`) with the Tunnel Manager inspecting a virtual Host header, or by **path prefix** on a single host (e.g. `/pb/*`, `/api/*`, `/app/*`)? Subdomain routing is cleaner for cookies/CORS and matches how PocketBase and the prod static server expect to be reached at a root path; path routing is simpler for the broker (one hostname) but requires rewriting paths inside the Tunnel Manager and may break absolute URLs in the agent-built React app.
+- **Where is the decision enforced?** Does the mobile WebView hit real per-service subdomains that resolve to the broker, or does the mobile-side client library embed a routing tag in each frame (e.g. `{ service: "pb" | "dispatch" | "prod", ...}`) that the Tunnel Manager reads after decryption? The latter avoids any broker-side DNS/TLS gymnastics but puts the routing decision entirely inside encrypted payloads.
+- **Relationship to the multiplexing envelope:** Section 3.3's `client_id` envelope multiplexes **across mobile clients**, not across internal services. A second dimension (service id) is needed. Proposal: extend the data envelope to `{ type: "data", client_id, service: "pb" | "dispatch" | "prod", payload: <encrypted> }` where `service` stays in the clear so the Tunnel Manager can route without decrypting.
+- **WebSocket vs HTTP semantics:** PocketBase Realtime uses SSE; the Dispatch/MCP server also uses SSE (per spec decision #4 and #13). The Tunnel Manager must keep long-lived per-client streams open against multiple internal services simultaneously. Does the framing format need explicit stream open/close control messages per `(client_id, service)` pair?
+- **Impact on Phase 2 (WebRTC):** With a direct P2P data channel, the same routing tag scheme still applies — the Tunnel Manager becomes the data channel peer and performs the same fan-out. Subdomain routing would not work over a raw data channel at all, which is another argument for in-envelope service tagging.
+
+Recommendation to revisit during Plan 4 implementation: start with **in-envelope `service` tag** (works for both Phase 1 WSS and Phase 2 WebRTC, no DNS/cert complications), and treat subdomain routing as a purely cosmetic option the agent-built React app can use for links the user opens outside the WebView.
+
+### Gap 8: VPS Provider Selection
 
 - The locked decision says "single VPS first" but does not specify the provider. Options: Hetzner (cheapest, EU and US datacenters), DigitalOcean, Linode/Akamai, Vultr, OVH.
 - Selection criteria: US East availability, Docker support, bandwidth pricing, reliability, SSH-based deploy simplicity.
