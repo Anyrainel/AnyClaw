@@ -958,6 +958,7 @@ services:
       - git_repo:/app/repo
       - pb_data:/app/pb_data:ro
       - snapshots:/app/snapshots
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # restart app, dispatch to sandbox
     depends_on:
       app:
         condition: service_healthy
@@ -980,10 +981,6 @@ services:
       - BROKER_URL=${BROKER_URL:-https://broker.anyclawapp.com}
       - ANYCLAW_USER_TOKEN=${ANYCLAW_USER_TOKEN}
       - DOCKER_HOST=unix:///var/run/docker.sock
-    # Docker socket access for restarting the app container
-    # and dispatching commands to the sandbox container
-    volumes_extra:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------
   # Container 3: Sandbox
