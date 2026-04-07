@@ -14,7 +14,7 @@ export function createProdStaticApp(opts: ProdStaticOptions): Express {
     existsSync(opts.buildDir) &&
     readdirSync(opts.buildDir).includes("index.html");
 
-  app.use((req, res, next) => {
+  app.use((_req, res, next) => {
     if (hasIndex()) return next();
     res.status(200).type("html").send(PLACEHOLDER_HTML);
   });
