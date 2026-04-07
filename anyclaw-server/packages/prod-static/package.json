@@ -1,0 +1,19 @@
+{
+  "name": "@anyclaw/prod-static",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "supertest": "^7.0.0",
+    "@types/supertest": "^6.0.2"
+  }
+}
