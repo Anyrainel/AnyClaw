@@ -13,6 +13,74 @@ AnyClaw is a self-evolving mobile UI layer powered by a personal AI coding agent
 3. **An agent dispatch layer** — a pluggable adapter interface that lets the mobile app submit work requests to the user's chosen coding agent, including support for agent-initiated clarifying questions.
 4. **A companion mobile app** — a thin native shell (WebView for agent-built UI, task submission with Q&A, version history/rollback, settings).
 
+## Product Principles
+
+These principles shape every product decision and inform the agent's skill prompts. They are not implementation details — they are how AnyClaw should *feel* to use.
+
+### Voice & Tone
+
+- **Direct and easy to understand.** Optimize for fast reading, not personality. Users want to know if something works and why it failed.
+- **Non-technical by default.** Explain things assuming the user has never written code. Use plain words for technical concepts.
+- **No humor, no whimsy.** Funny error messages waste the user's time. State the problem and the next step.
+- **The agent is the customer support.** There is no human on the other end. Every error message, every status update, every clarification must be self-contained and actionable.
+
+### The User Cannot See the Code
+
+This is the central constraint that shapes everything else. The user only sees the mobile app and the WebView. They cannot inspect the agent's work, debug code, or verify implementation details. Therefore:
+
+- **Empower the user to understand the app through the UI alone.** If a feature exists, the UI must make it discoverable and self-explanatory.
+- **Errors must be explicit.** Never silently fall back to a default that hides failure. A feature that works the first time and fails the second time because of a hidden fallback is far worse than one that fails clearly both times.
+- **Robustness via full test cycles.** The agent must validate everything before deploying. The user is not at the screen during builds — there's no manual smoke test.
+- **Versions are the user's control surface.** Every change is a versioned, rollback-able event. The version description is the user's only window into what changed.
+
+### Agent Behavior
+
+- **Ask only fundamental questions.** Don't pepper the user with detail. Make reasonable defaults and surface them in the version description so the user can adjust later.
+- **Learn from past interactions.** The agent should infer preferences from prior conversations and prior deployments rather than re-asking every time. (Implementation: agent reads past versions and clarification history before asking new questions.)
+- **Always run the full test cycle.** Lint, typecheck, build, smoke tests — every time, before promoting to prod.
+- **Domain modeling first.** Code should reflect the user's mental model. Name things after what they mean, not what they technically are.
+- **Separate concerns, co-locate related logic.** Files that change together belong together. But never let a file grow so large that editing becomes painful (and token-expensive).
+- **Comments are for agents, not humans.** Only write comments that capture context not in the code itself, or TODOs for temporary states. No "this function adds two numbers" noise.
+
+### Design Language
+
+A confident, calm aesthetic that gets out of the way of the user's data. Concrete properties:
+
+- **Soft corners.** Medium radius (8px default for cards/buttons, 4px for inputs, 12px for sheets). Never sharp.
+- **Generous whitespace.** Calm density. Breathing room between elements over packed efficiency.
+- **Restrained color.** Mostly grayscale UI with one accent color (user-chosen during onboarding). The accent is for primary actions and key data points only — never for decoration.
+- **Strong typographic hierarchy.** Clear scale (e.g., 12/14/16/20/28/40px) so structure is visible at a glance. Bold for emphasis, not color.
+- **Subtle elevation.** Soft shadows over heavy borders. Layered surfaces, not boxed regions.
+- **Warm neutrals.** Light mode background is a warm off-white (not pure `#fff`). Dark mode is a deep neutral (not pure black). High contrast for text, but never harsh.
+- **System-aware.** Respects the user's system theme, font scale, and accessibility settings by default. User can override in settings.
+
+The complete `@theme` block (specific oklch values, spacing scale, type scale) ships with the install and is documented in the style guide skill.
+
+### User Preferences (Onboarding)
+
+On first launch, the mobile app asks a small set of impactful questions. Nothing nuanced — only choices that change the everyday experience for non-technical users:
+
+| Question | Options | Default |
+|----------|---------|---------|
+| Theme | System / Light / Dark | System |
+| Font size | Small / Medium / Large | Pulled from system accessibility (`PixelRatio.getFontScale()` on RN; respects iOS Dynamic Type and Android font scale) |
+| Font family | Sans / Serif | Sans |
+| Language | Device locale, with override | Device locale |
+| Accent color | 6 curated options (e.g., Blue, Teal, Green, Amber, Rose, Violet) | Blue |
+
+Preferences are stored in PocketBase under `user_preferences` and exposed to the agent-built frontend via a global hook (`usePreferences()`). All agent-generated UI reads these and adapts. Changes in Settings take effect immediately, without re-deploying.
+
+The agent **never** asks the user about visual preferences during a task. It reads from the preference store.
+
+### Empty State as Canonical Example
+
+When a user first connects, the WebView shows a default "Welcome to AnyClaw" page. This page serves two purposes:
+
+1. **Onboards the user.** Explains how to use the Request button, what kinds of features the agent can build, and shows example prompts ("Try: 'Build me a daily mood tracker'").
+2. **Is the canonical example for the agent.** The page is written using the exact patterns the style guide skill prescribes — file structure, component composition, data fetching, theme tokens, error handling, loading states. The agent reads it as the authoritative example of "how AnyClaw code should look."
+
+When the user replaces it with their first real feature, the welcome page is preserved as `dev/_examples/welcome.tsx` so the agent can still reference it.
+
 ## Deployment Modes
 
 **Hybrid: self-hosted or cloud-hosted. Both modes produce the same server layout.**
@@ -486,6 +554,10 @@ All decisions below are binding for implementation.
 | E2E encryption | NaCl (libsodium-wrappers) on top of TLS |
 | Secret encryption | AES-256-GCM in dispatch server |
 | Broker | Node.js or Go API server, Hetzner (US East) |
+
+## Pricing
+
+**Self-hosted is free, indefinitely.** Cloud-hosted pricing is deferred until we have real cost data from running the infrastructure. The broker (auth + signaling) is free for both tiers.
 
 ## Monetization
 
