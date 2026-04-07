@@ -1,0 +1,7 @@
+@import 'tailwindcss';
+
+/* Plan 6 fills in real color values. This is only a placeholder to prove the
+   template builds. */
+@theme {
+  --color-primary: #000000;
+}
