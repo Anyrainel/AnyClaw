@@ -12,7 +12,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "libsodium-wrappers": "^0.7.13",
+    "libsodium-wrappers": "0.7.15",
     "simple-git": "^3.24.0"
   },
   "devDependencies": {
