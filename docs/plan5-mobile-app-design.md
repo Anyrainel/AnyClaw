@@ -938,6 +938,303 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
 
 ---
 
+## 9b. Onboarding Flow & User Preferences
+
+This section locks the first-run experience and the preference store that backs the design language defined in the main spec ("Product Principles → Design Language" and "User Preferences (Onboarding)"). The goal: get the user from "just installed the app" to "looking at their first agent-built page" in under two minutes, while capturing the small set of preferences that change every screen the agent will later generate.
+
+### 9b.1 Onboarding screen sequence
+
+The onboarding flow runs **once**, on first launch, immediately after broker OAuth login (§9.1) and **before** server pairing (§9.3). It lives in `app/(onboarding)/` as its own stack so it can be re-entered later from Settings (see §9b.4).
+
+Order of screens:
+
+| # | Route | Screen | Purpose |
+|---|-------|--------|---------|
+| 1 | `/onboarding/welcome` | **Welcome** | "Welcome to AnyClaw." One-paragraph plain-language explanation: "AnyClaw builds tools for you. You ask, it builds, you use. No code." Single primary button: **Get started**. |
+| 2 | `/onboarding/theme` | **Theme** | Three large tappable cards: **System** (default), **Light**, **Dark**. Selecting a card immediately re-themes the screen behind the cards as a live preview. **Skip** in top right. |
+| 3 | `/onboarding/font-size` | **Font size** | Three samples ("Aa") at Small / Medium / Large. Default is **System** (whatever `PixelRatio.getFontScale()` returns at launch). Picking one of S/M/L overrides the system value. A "Use system size" link resets to system. |
+| 4 | `/onboarding/font-family` | **Font family** | Two samples: **Sans** (default, Inter) and **Serif** (Source Serif). Live preview of a paragraph. |
+| 5 | `/onboarding/language` | **Language** | Auto-detected from `Localization.locale` (expo-localization). Shows the detected language pre-selected with a "Change" affordance that opens a searchable list of supported BCP 47 locales. |
+| 6 | `/onboarding/accent` | **Accent color** | Six curated swatches in a 3×2 grid: **Blue** (default), **Teal**, **Green**, **Amber**, **Rose**, **Violet**. Tapping a swatch immediately recolors the primary button on screen as live preview. |
+| 7 | `/onboarding/pair` | **Pair with your server** | The existing pairing flow from §9.3 (BIP39 verification code). Cannot be skipped — without a server there is nothing to do. |
+| 8 | `/onboarding/try` | **Try a request** | After successful pairing, a final screen with three example prompt chips: *"Build me a daily mood tracker"*, *"Show me my last 7 days of weather"*, *"Make a simple pomodoro timer"*. Tapping a chip pre-fills the dispatch sheet. A **Skip and explore** link drops the user on the Home tab without dispatching. |
+
+Every screen except the Welcome and Pair screens has a **Skip** action in the top-right that accepts the current default and advances. A linear progress dots indicator at the bottom shows position in the flow.
+
+The flow is implemented as an Expo Router group `app/(onboarding)/_layout.tsx` with `headerShown: false` and `gestureEnabled: false` so the user cannot swipe back into a half-finished state. A `useOnboardingComplete()` selector in the auth gate (see §5 root layout) redirects to `/onboarding/welcome` if `prefs.onboarding_completed_at == null`.
+
+### 9b.2 PocketBase `user_preferences` collection
+
+Schema (one row per user, enforced by a unique index on `user_id`):
+
+| Field | Type | Constraint | Notes |
+|-------|------|------------|-------|
+| `id` | text (PB default) | pk | |
+| `user_id` | relation → `users` | required, unique, cascade delete | One row per user. |
+| `theme` | select (single) | required, one of: `system`, `light`, `dark` | Default `system`. |
+| `font_size` | select (single) | required, one of: `system`, `small`, `medium`, `large` | Default `system`. The `system` value means "follow `PixelRatio.getFontScale()` at runtime"; the other three are explicit overrides. |
+| `font_family` | select (single) | required, one of: `sans`, `serif` | Default `sans`. |
+| `language` | text | required, BCP 47 (e.g., `en-US`, `fr-FR`, `pt-BR`) | Default: client-detected locale at first sync. |
+| `accent_color` | select (single) | required, one of: `blue`, `teal`, `green`, `amber`, `rose`, `violet` | Default `blue`. |
+| `onboarding_completed_at` | date | optional | Set when the user reaches the end of the flow (or skips to pairing successfully). Null = re-run onboarding on next launch. |
+| `created` / `updated` | autodate | PB defaults | |
+
+Access rules: `@request.auth.id = user_id` for list/view/update; create is allowed for the authenticated user once.
+
+The collection is **realtime-subscribed** by the mobile client (see §11) so changes from another device propagate live.
+
+### 9b.3 System integration code
+
+System preference reading, persistence, and PocketBase sync live in `lib/preferences/`. The store is a Zustand slice backed by `expo-secure-store` for offline-first reads, with PocketBase as the source of truth when online.
+
+```ts
+// lib/preferences/types.ts
+export type Theme = 'system' | 'light' | 'dark';
+export type FontSize = 'system' | 'small' | 'medium' | 'large';
+export type FontFamily = 'sans' | 'serif';
+export type AccentColor = 'blue' | 'teal' | 'green' | 'amber' | 'rose' | 'violet';
+
+export interface UserPreferences {
+  theme: Theme;
+  font_size: FontSize;
+  font_family: FontFamily;
+  language: string;          // BCP 47
+  accent_color: AccentColor;
+  onboarding_completed_at: string | null;
+}
+
+export const DEFAULT_PREFERENCES: UserPreferences = {
+  theme: 'system',
+  font_size: 'system',
+  font_family: 'sans',
+  language: 'en-US',
+  accent_color: 'blue',
+  onboarding_completed_at: null,
+};
+```
+
+```ts
+// lib/preferences/system.ts
+import { Appearance, PixelRatio } from 'react-native';
+import * as Localization from 'expo-localization';
+
+// Read once at startup; the resolved theme/scale are recomputed live via subscriptions below.
+export function readSystemTheme(): 'light' | 'dark' {
+  return Appearance.getColorScheme() ?? 'light';
+}
+
+export function readSystemFontScale(): number {
+  // iOS Dynamic Type / Android font scale. 1.0 = default.
+  return PixelRatio.getFontScale();
+}
+
+export function readSystemLocale(): string {
+  // expo-localization returns BCP 47 like "en-US"
+  return Localization.getLocales()[0]?.languageTag ?? 'en-US';
+}
+
+// Subscribe to live system changes. Returns an unsubscribe fn.
+export function subscribeToSystemChanges(onChange: () => void): () => void {
+  const themeSub = Appearance.addChangeListener(onChange);
+  // RN does not currently emit a font-scale event; we re-read on app foreground instead.
+  const { AppState } = require('react-native');
+  const appSub = AppState.addEventListener('change', (state: string) => {
+    if (state === 'active') onChange();
+  });
+  return () => {
+    themeSub.remove();
+    appSub.remove();
+  };
+}
+```
+
+```ts
+// lib/preferences/store.ts
+import { create } from 'zustand';
+import * as SecureStore from 'expo-secure-store';
+import { pb } from '@/lib/pb';
+import {
+  UserPreferences,
+  DEFAULT_PREFERENCES,
+} from './types';
+import {
+  readSystemTheme,
+  readSystemFontScale,
+  readSystemLocale,
+  subscribeToSystemChanges,
+} from './system';
+
+const SECURE_KEY = 'anyclaw.user_preferences.v1';
+
+interface PrefState {
+  prefs: UserPreferences;
+  resolvedTheme: 'light' | 'dark';   // after applying 'system'
+  resolvedFontScale: number;         // after applying 'system' or override
+  hydrated: boolean;
+  hydrate: () => Promise<void>;
+  set: (patch: Partial<UserPreferences>) => Promise<void>;
+  reset: () => Promise<void>;
+}
+
+const FONT_SCALE_MAP: Record<Exclude<UserPreferences['font_size'], 'system'>, number> = {
+  small: 0.85,
+  medium: 1.0,
+  large: 1.2,
+};
+
+function resolve(prefs: UserPreferences) {
+  const resolvedTheme =
+    prefs.theme === 'system' ? readSystemTheme() : prefs.theme;
+  const resolvedFontScale =
+    prefs.font_size === 'system'
+      ? readSystemFontScale()
+      : FONT_SCALE_MAP[prefs.font_size];
+  return { resolvedTheme, resolvedFontScale };
+}
+
+export const usePreferencesStore = create<PrefState>((set, get) => ({
+  prefs: DEFAULT_PREFERENCES,
+  resolvedTheme: 'light',
+  resolvedFontScale: 1.0,
+  hydrated: false,
+
+  hydrate: async () => {
+    // 1. Offline-first: load from SecureStore
+    let prefs = DEFAULT_PREFERENCES;
+    const cached = await SecureStore.getItemAsync(SECURE_KEY);
+    if (cached) {
+      try { prefs = { ...DEFAULT_PREFERENCES, ...JSON.parse(cached) }; }
+      catch { /* corrupted, fall through to defaults */ }
+    } else {
+      // First launch: seed from system locale
+      prefs = { ...prefs, language: readSystemLocale() };
+    }
+
+    set({ prefs, ...resolve(prefs), hydrated: true });
+
+    // 2. If logged in, fetch authoritative copy from PocketBase
+    if (pb.authStore.isValid) {
+      try {
+        const remote = await pb
+          .collection('user_preferences')
+          .getFirstListItem(`user_id="${pb.authStore.model!.id}"`);
+        const merged: UserPreferences = {
+          theme: remote.theme,
+          font_size: remote.font_size,
+          font_family: remote.font_family,
+          language: remote.language,
+          accent_color: remote.accent_color,
+          onboarding_completed_at: remote.onboarding_completed_at ?? null,
+        };
+        await SecureStore.setItemAsync(SECURE_KEY, JSON.stringify(merged));
+        set({ prefs: merged, ...resolve(merged) });
+      } catch {
+        // No remote row yet, or offline. Local copy stands.
+      }
+    }
+
+    // 3. Live system change subscription
+    subscribeToSystemChanges(() => {
+      const { prefs: current } = get();
+      set({ ...resolve(current) });
+    });
+  },
+
+  set: async (patch) => {
+    const next = { ...get().prefs, ...patch };
+    set({ prefs: next, ...resolve(next) });
+
+    // Always persist locally first (offline-safe)
+    await SecureStore.setItemAsync(SECURE_KEY, JSON.stringify(next));
+
+    // Best-effort sync to PocketBase
+    if (pb.authStore.isValid) {
+      try {
+        const userId = pb.authStore.model!.id;
+        const existing = await pb
+          .collection('user_preferences')
+          .getFirstListItem(`user_id="${userId}"`)
+          .catch(() => null);
+        if (existing) {
+          await pb.collection('user_preferences').update(existing.id, next);
+        } else {
+          await pb.collection('user_preferences').create({ user_id: userId, ...next });
+        }
+      } catch {
+        // Sync queue picks this up on reconnect (see §11).
+      }
+    }
+  },
+
+  reset: async () => {
+    await SecureStore.deleteItemAsync(SECURE_KEY);
+    const seeded: UserPreferences = {
+      ...DEFAULT_PREFERENCES,
+      language: readSystemLocale(),
+      onboarding_completed_at: null,
+    };
+    set({ prefs: seeded, ...resolve(seeded) });
+    if (pb.authStore.isValid) {
+      try {
+        const userId = pb.authStore.model!.id;
+        const existing = await pb
+          .collection('user_preferences')
+          .getFirstListItem(`user_id="${userId}"`)
+          .catch(() => null);
+        if (existing) {
+          await pb.collection('user_preferences').update(existing.id, seeded);
+        }
+      } catch { /* offline; will reconcile later */ }
+    }
+  },
+}));
+```
+
+The root layout calls `usePreferencesStore.getState().hydrate()` once on mount, before rendering the navigation tree, so the very first frame paints with the correct theme and font scale.
+
+### 9b.4 Re-onboarding from Settings
+
+The Settings screen (§13) gains a destructive-style row at the bottom of the **Personalization** section:
+
+> **Reset preferences** — *Restores defaults and re-runs the onboarding flow.*
+
+Tapping it shows a confirmation sheet ("This will clear your theme, font, language, and accent color choices. Pair info is unaffected.") and on confirm calls `usePreferencesStore.getState().reset()`, then navigates to `/onboarding/welcome`. Because `onboarding_completed_at` is now null, the auth gate keeps the user inside the onboarding stack until they finish (or skip) again.
+
+Server pairing state is kept entirely separate (in the connection store, §9.6), so resetting preferences never disconnects the user from their server.
+
+### 9b.5 Skipping individual steps
+
+Every onboarding step except Welcome and Pair has a **Skip** action. Skipping a step:
+
+1. Leaves the field at its existing value (which is the default on first run, or the previous value if re-onboarding).
+2. Advances to the next screen without writing a "user explicitly chose this" marker — there is no such marker; the schema only stores values, not provenance.
+3. Is fully reversible later from Settings.
+
+The flow can be skipped end-to-end by tapping Skip on every step; the user lands directly at pairing. This is intentional: power users who just want to connect should not be slowed down.
+
+### 9b.6 The `usePreferences()` hook (read path for agent-built frontends)
+
+Agent-generated React code in the WebView never touches Zustand or PocketBase directly. Instead, every page reads preferences through a single hook exported from the canonical example at `dev/_examples/welcome.tsx` and re-exported from `dev/lib/preferences.ts`:
+
+```ts
+// dev/lib/preferences.ts  (lives in the user's prod static bundle)
+export interface Preferences {
+  theme: 'light' | 'dark';     // already resolved — never 'system'
+  fontScale: number;           // already resolved — number, not enum
+  fontFamily: 'sans' | 'serif';
+  language: string;            // BCP 47
+  accent: 'blue' | 'teal' | 'green' | 'amber' | 'rose' | 'violet';
+}
+
+export function usePreferences(): Preferences { /* … */ }
+```
+
+Mechanics: the native shell injects the resolved preferences into the WebView via the bridge protocol (§6.2) on every navigation and on every change in the Zustand store. The WebView side stores them in a React context, and `usePreferences()` is a thin `useContext` wrapper. Because the values are *resolved* (no `'system'` sentinel, no abstract `'small'/'medium'/'large'` enum), agent-built components can use them directly: `style={{ fontSize: 16 * prefs.fontScale }}`, `className={prefs.theme === 'dark' ? '...' : '...'}`, `data-accent={prefs.accent}`.
+
+The canonical welcome page in `dev/_examples/welcome.tsx` is the authoritative reference. The style guide skill instructs the agent: *"Never read system theme APIs directly. Never query PocketBase for preferences. Always call `usePreferences()`. See `dev/_examples/welcome.tsx` for the pattern."* This keeps every agent-built page consistent with the user's choices and re-themes instantly when the user changes a setting.
+
+---
+
 ## 10. NaCl E2E Encryption
 
 ### Library and key lifecycle

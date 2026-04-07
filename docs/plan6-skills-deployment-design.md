@@ -14,12 +14,13 @@
 
 Skills are Markdown prompts that teach a coding agent how to work inside AnyClaw. They are authored once in `/.anyclaw/skills/` and packaged differently per agent platform (OpenClaw skills directory, Claude Code slash commands, or a concatenated system prompt for generic agents).
 
-The four skills:
+The five skills:
 
 | Skill | Purpose | When used |
 |---|---|---|
 | `anyclaw-build-feature` | End-to-end workflow for turning a feature request into a deployed version | Every user task |
-| `anyclaw-style-guide` | Tailwind v4 tokens, component patterns, file layout, state management | Any frontend work |
+| `anyclaw-style-guide` | Tailwind v4 tokens, component patterns, file layout, state management, voice & tone | Any frontend work |
+| `anyclaw-canonical-example` | Points the agent at `dev/_examples/welcome.tsx` as the authoritative example before any new code is written | Every task that writes frontend code |
 | `anyclaw-refactor` | Cleanup pass: extract duplication, remove dead code, tighten types | Periodic / on trigger |
 | `anyclaw-describe-version` | Non-technical version descriptions for the user's history screen | Every deploy |
 
@@ -76,6 +77,27 @@ code in `/.anyclaw/` is read-only and must never be modified.
 
 Follow this workflow exactly. Do not skip steps.
 
+## Step 0: Learn From the Past
+
+Before you ask the user anything or write any code, read the history. The
+user cannot see your code, so the only signal you have about their
+preferences is what you and previous agent runs have already done and said.
+
+1. Call `anyclaw_list_versions` and read the descriptions of recent
+   deployments. They tell you what kinds of features the user has built,
+   what language they use to describe things, and what defaults they have
+   already accepted.
+2. Read the `clarifications` collection in PocketBase for any prior
+   `anyclaw_ask_user` exchanges. If a question was already answered once,
+   do not ask it again — apply the answer.
+3. Read `user_preferences` from PocketBase (theme, font, accent, language).
+   These are NOT optional. Every UI you build adapts to them via the
+   `usePreferences()` hook. You do not ask the user about visual choices.
+4. Read `dev/_examples/welcome.tsx`. This is the canonical example —
+   the file structure, theme tokens, data fetching shape, error handling,
+   loading and empty states demonstrated there are how AnyClaw code should
+   look. See the `anyclaw-canonical-example` skill.
+
 ## Step 1: Understand the Request
 
 Read the user's feature request carefully. Identify:
@@ -84,16 +106,28 @@ Read the user's feature request carefully. Identify:
 - What UI the user expects to see
 - Whether this interacts with any existing features
 
-If ANYTHING is ambiguous, use `anyclaw_ask_user` to clarify BEFORE planning.
-Good clarifying questions:
+Then ask ONLY fundamental questions — questions whose answers change the
+architecture of the feature. Do NOT ask the user about details, visual
+choices, naming, or anything you can pick a reasonable default for. The
+user is non-technical and reading their phone. Every question is friction.
+
+Good fundamental questions (architecture-changing):
 - "Should this data be private, or would you want to share it later?"
 - "Do you want this as a separate page or added to an existing page?"
 - "How often should this update — real-time, hourly, daily?"
-- "Should I notify you when [event]?"
 
-Do NOT ask more than 3 questions in a single round. Prioritize questions that
-most affect the architecture. Follow up in a second round if needed. Do not
-ask questions just to appear thorough.
+Bad detail questions (NEVER ask these — pick a default and surface it in
+the version description so the user can adjust later):
+- "What color should the button be?" (read `user_preferences.accent`)
+- "What should I call the collection?" (pick a sensible name)
+- "Should the chart use bars or lines?" (pick one, mention it in the
+  version description)
+- "How many items per page?" (pick 20)
+
+Do NOT ask more than 3 questions in a single round. Use `anyclaw_ask_user`
+only when you genuinely cannot pick a default that the user could later
+change with one sentence. Always check the past clarification history
+first — if the same question was already answered, reuse the answer.
 
 ## Step 2: Plan the Feature
 
@@ -132,29 +166,65 @@ Update progress: "Implementing backend for [feature]..."
 
 ## Step 5: Implement — Frontend Layer
 
-Follow the `anyclaw-style-guide` skill for all CSS and component conventions.
+Before writing a single component, re-read `dev/_examples/welcome.tsx`.
+Match its file structure, its data fetching pattern, its error and loading
+and empty state shapes. Follow the `anyclaw-style-guide` skill for all
+CSS, component conventions, voice & tone, and the `usePreferences()` hook.
+
 Pages in `packages/frontend/src/pages/`, shared components in
 `packages/frontend/src/components/`, feature-specific components alongside
 their page. Use the PocketBase JS SDK for CRUD and the logic service for
-custom endpoints. Always handle loading, error, and empty states.
+custom endpoints.
+
+Mandatory for every screen:
+- Loading state with clear progress text — never just a spinner.
+- Error state with an explicit, plain-language message and a suggested
+  next step. Never "something went wrong."
+- Empty state that is self-explanatory and tells the user what they can
+  do next. Every list, every feature.
+- Reads `usePreferences()` so theme/font/accent are honored.
+
+Domain modeling first. Name things after what they mean to the user, not
+what they technically are. `MoodEntry`, not `Record`. `weeklyAverage`,
+not `data2`.
+
+Separate concerns, co-locate related logic. Files that change together
+belong in the same folder. Never let a single file grow past 200 lines —
+split before that. Big files are painful to edit and waste tokens.
+
+Comments are for future agents, not humans. Only write a comment when it
+captures context that the code itself cannot show — a non-obvious
+constraint, an external API quirk, a TODO with a real next step. Do not
+write comments that restate what the code does.
+
+Make errors explicit. Never silently fall back to a default that hides
+failure. A feature that fails clearly is far better than one that pretends
+to work but does the wrong thing.
 
 Update progress: "Building UI for [feature]..."
 
 ## Step 6: Test in Dev
 
-In your worktree, run the validation suite using your own shell tool:
+The user is not at the screen during builds. There is no manual smoke
+test. You are the only check. ALWAYS run the FULL cycle, every time, in
+this order, in your worktree:
 
-1. `npm run lint` — fix all warnings/errors
+1. `npm run lint` — fix all warnings and errors
 2. `npm run typecheck` — no errors, no `any`, no `@ts-ignore`
 3. `npm run build` — must succeed
 4. `npm run test` — all tests pass
+5. **Smoke test.** Start the dev server in the background. Hit every new
+   route with curl and assert a 2xx response and a sensible body. Open
+   every new page with a headless check (or a `fetch` + HTML assert) and
+   confirm it renders without runtime errors. Verify any feature that
+   touches existing code still works.
 
-If the feature adds API routes, start the dev server in the background and
-curl the endpoints. If it touches existing features, verify they still work.
+Skipping any step is not allowed, even if the change "looks safe." The
+user cannot see the code — robustness comes from this cycle.
 
-Do NOT proceed to deploy if any step fails. Iterate until clean. After three
-failed attempts on the same error, use `anyclaw_ask_user` to explain the
-problem and ask for guidance.
+Do NOT proceed to deploy if any step fails. Iterate until clean. After
+three failed attempts on the same error, use `anyclaw_ask_user` to explain
+the problem in plain language and ask for guidance.
 
 ## Step 7: Write Version Description
 
@@ -179,11 +249,20 @@ Update progress: "Deployed! [feature] is live."
 
 - NEVER edit files under `/data/prod/` or `/.anyclaw/`.
 - NEVER edit PocketBase internals. Use `anyclaw_create_collection`.
-- NEVER deploy without passing all validation steps.
+- NEVER deploy without passing all validation steps (lint, typecheck,
+  build, tests, smoke test).
 - NEVER delete existing collections unless the user explicitly asks.
+- NEVER swallow an error or silently fall back. Surface failure clearly,
+  in the UI and in the version description.
+- NEVER ask the user about visual choices — read `user_preferences`.
+- NEVER ask a question that was already answered in a prior task. Read
+  the clarification history first.
+- ALWAYS read `dev/_examples/welcome.tsx` before writing any new
+  frontend code.
 - ALWAYS snapshot before risky schema changes (`anyclaw_deploy` does this
   automatically; call `anyclaw_snapshot_db` for manual experiments).
 - ALWAYS post progress updates so the user sees what's happening.
+- ALWAYS write loading, error, and empty states for every screen.
 - If you need a new npm package, install it in the appropriate workspace.
   Prefer well-known, maintained packages. Avoid packages with fewer than
   1000 weekly downloads unless there is no alternative.
@@ -203,9 +282,65 @@ min_server_version: "0.1.0"
 # anyclaw-style-guide
 
 You are building the frontend UI for an AnyClaw personal web app. This guide
-defines exact conventions for all React components and CSS. Consistency
-matters — the user sees every feature you build side by side, so they must
-look like they belong together.
+defines exact conventions for all React components, CSS, and any text the
+user will read. Consistency matters — the user sees every feature you build
+side by side, so they must look like they belong together.
+
+The user is non-technical and cannot see the code. The UI is the entire
+product surface. Every label, every error, every empty state has to stand
+on its own without the user ever asking "what does this mean?"
+
+Before you write anything, read `dev/_examples/welcome.tsx`. It is the
+canonical example of every pattern in this guide. When in doubt, copy
+its shape.
+
+## Voice & tone (for any text the user will read)
+
+Every string you put in the UI — labels, buttons, headings, error
+messages, empty-state copy, version descriptions — follows these rules:
+
+- **Direct.** State the thing. "Saved." not "Successfully saved your
+  entry." "No entries yet." not "It looks like there's nothing here yet!"
+- **Plain language.** No jargon. Not "endpoint," "collection," "schema,"
+  "request," "deserialize." Talk about what the user sees.
+- **Concise.** Short sentences. Cut every word that does not earn its
+  place.
+- **No humor, no whimsy.** No exclamation points except for "Saved!"-tier
+  brevity. No mascots, no jokes, no apologies.
+- **Errors are explicit and actionable.** Never "Something went wrong."
+  Always: what happened, in plain words, plus the next step the user can
+  take. Example: "Couldn't reach the server. Check your connection and
+  try again." not "Network error."
+- **Loading states are informative.** Never just a spinner with no text.
+  Say what is happening: "Loading your entries..." or "Saving...".
+- **Empty states are self-explanatory.** Every list, every feature, every
+  page must have an empty state that tells the user what this thing is
+  and what they can do to fill it. The empty state IS the onboarding.
+
+## Reading user preferences
+
+The user picks theme, font size, font family, language, and accent color
+during onboarding. These live in PocketBase under `user_preferences`. You
+read them with the `usePreferences()` hook from `hooks/usePreferences.ts`:
+
+```tsx
+import { usePreferences } from "@/hooks/usePreferences";
+
+function MyPage() {
+  const prefs = usePreferences();   // { theme, fontSize, fontFamily, accent, language }
+  // ...
+}
+```
+
+The `@theme` tokens already adapt to the preferences automatically — you
+do not hardcode colors or font sizes. You only need to read `prefs`
+directly when:
+- Choosing a chart accent color (`prefs.accent`)
+- Localizing a date or number (`prefs.language`)
+- Conditionally rendering a translated string
+
+You NEVER ask the user about visual preferences. If a question about
+appearance comes up, the answer is in `user_preferences`.
 
 ## CSS: Tailwind v4, CSS-first config
 
@@ -389,21 +524,51 @@ Always `rounded-xl` for cards.
 />
 ```
 
-### Empty state
+### Empty state (REQUIRED on every list and every feature)
+The empty state introduces the feature. It tells the user what this is
+and what they can do next. It is not optional. Every list, every page,
+every feature has one.
+
 ```tsx
-<div className="flex flex-col items-center justify-center py-12 text-center">
-  <p className="text-muted text-sm">No entries yet</p>
-  <button className="mt-3 text-primary text-sm font-medium">
+<div className="flex flex-col items-center justify-center py-12 px-6 text-center space-y-3">
+  <h2 className="text-lg font-medium text-foreground">No mood entries yet</h2>
+  <p className="text-sm text-muted max-w-xs">
+    Track how you're feeling each day to see patterns over time.
+  </p>
+  <button className="bg-primary text-primary-fg rounded-lg px-4 py-2 text-sm font-medium min-h-[44px]">
     Add your first entry
   </button>
 </div>
 ```
 
-### Loading state
+### Loading state (REQUIRED on every async screen)
+Always include text describing what is loading. A naked spinner is not
+acceptable — the user needs to know what is happening.
+
 ```tsx
-<div className="flex items-center justify-center py-12">
-  <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary
-    border-t-transparent" />
+<div className="flex flex-col items-center justify-center py-12 space-y-3">
+  <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+  <p className="text-sm text-muted">Loading your entries...</p>
+</div>
+```
+
+### Error state (REQUIRED — never show "Something went wrong")
+Errors are explicit. Say what failed, in plain language, and tell the
+user what they can do next. Never hide the failure with a silent
+fallback.
+
+```tsx
+<div className="flex flex-col items-center justify-center py-12 px-6 text-center space-y-3">
+  <h2 className="text-lg font-medium text-foreground">Couldn't load your entries</h2>
+  <p className="text-sm text-muted max-w-xs">
+    The server didn't respond. Check your connection and try again.
+  </p>
+  <button
+    onClick={retry}
+    className="bg-surface border border-border rounded-lg px-4 py-2 text-sm font-medium min-h-[44px]"
+  >
+    Try again
+  </button>
 </div>
 ```
 
@@ -582,6 +747,24 @@ You are writing a version description for a deployment of an AnyClaw
 personal web app. This appears in the user's version history. The user is
 NOT a developer. Write for a normal person.
 
+## Voice
+
+Direct, concise, non-technical. No humor, no filler, no apologies. Read
+the description aloud — if it sounds like a friendly assistant trying to
+be charming, rewrite it. The user wants to know what changed and whether
+it works.
+
+## Format
+
+1. **Lead with the user-facing change.** First sentence: what the user
+   can now do. Not what was coded, not what was refactored, not what
+   files were touched.
+2. **Then any caveats.** If you picked a default the user might want to
+   change, say so in one sentence ("Set to update every hour — let me
+   know if you want a different schedule.").
+3. **Then any background behavior.** If something runs on a schedule or
+   in the background, say what it does and when.
+
 ## Rules
 
 1. Start with what the user can now DO, not what you coded.
@@ -590,9 +773,12 @@ NOT a developer. Write for a normal person.
 4. If visual, describe what the user will see.
 5. If background, explain what happens and when.
 6. Do NOT mention file names, function names, components, collections,
-   API routes, or database schemas.
+   API routes, database schemas, or any other implementation detail.
 7. Do NOT say "I" or "the agent." Describe what changed, not who changed it.
 8. Present tense: "You can now..." not "Added the ability to..."
+9. No exclamation points. No "🎉", no emojis, no celebration language.
+10. If you picked a default that affects how the feature behaves, surface
+    it in one sentence so the user can adjust later.
 
 ## Good examples
 
@@ -625,7 +811,61 @@ Bug fix:
 
 ---
 
-### 6. Skill Packaging
+### 6. Skill: anyclaw-canonical-example
+
+Shipped as `/.anyclaw/skills/anyclaw-canonical-example.md`:
+
+```markdown
+---
+skill_version: "1.0.0"
+min_server_version: "0.1.0"
+---
+# anyclaw-canonical-example
+
+There is one file in this codebase that is the authoritative example of
+how AnyClaw frontend code should look: `dev/_examples/welcome.tsx`.
+
+You MUST read it before you write any new frontend code. Every task,
+every time. It is short. It demonstrates every pattern you need:
+
+- **File structure** — how a page is laid out, where types live, where
+  helpers live, where the default export goes.
+- **Theme tokens** — exclusively semantic Tailwind classes
+  (`bg-surface`, `text-foreground`, `bg-primary`). Never raw colors.
+- **Reading user preferences** — calling `usePreferences()` and using
+  the result.
+- **Data fetching pattern** — PocketBase SDK, real-time subscription,
+  cleanup on unmount, typed records.
+- **Loading state** — text plus spinner, never just a spinner.
+- **Error state** — explicit message, suggested next step, retry
+  button. Never silent fallback.
+- **Empty state** — self-explanatory copy that introduces the feature
+  and tells the user what to do next.
+- **Voice** — direct, plain, no humor, no exclamation marks (except
+  for one-word confirmations).
+
+How to use this skill:
+
+1. Open `dev/_examples/welcome.tsx` with your read tool.
+2. Identify the pattern in it that matches the kind of thing you are
+   about to build (list page, detail page, form, chart).
+3. Copy that shape. Rename, retype, swap the data source, but keep
+   the structure.
+4. If you are about to deviate from the example's pattern, stop and
+   ask yourself why. Deviation is allowed only when the example
+   genuinely does not cover your case.
+
+The welcome page is preserved on disk even after the user replaces the
+home screen with their first real feature. It is read-only reference
+material for you. Do not modify it.
+
+If `dev/_examples/welcome.tsx` is missing, that is a bug in the install
+— stop and report it via `anyclaw_ask_user`.
+```
+
+---
+
+### 7. Skill Packaging
 
 Skills are authored once in `/.anyclaw/skills/` and packaged into three formats at install time by `/.anyclaw/scripts/package-skills.sh`.
 
@@ -634,6 +874,7 @@ Skills are authored once in `/.anyclaw/skills/` and packaged into three formats 
 /.anyclaw/skills/
   anyclaw-build-feature.md
   anyclaw-style-guide.md
+  anyclaw-canonical-example.md
   anyclaw-refactor.md
   anyclaw-describe-version.md
 ```
@@ -650,7 +891,7 @@ In all three packages, YAML frontmatter is stripped from the content before deli
 
 ---
 
-### 7. Skill Versioning
+### 8. Skill Versioning
 
 Decision #24: independent versioning with compatibility check.
 
@@ -693,7 +934,7 @@ There is no three-container split. Crash isolation comes from supervisor restart
 
 ---
 
-### 8. Process Architecture
+### 9. Process Architecture
 
 Inside one container (or one host), the supervisor runs:
 
@@ -714,7 +955,7 @@ The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owne
 
 ---
 
-### 9. Filesystem Layout
+### 10. Filesystem Layout
 
 ```
 /data/                              # Persistent volume / bind-mount
@@ -769,7 +1010,7 @@ The path split is the security boundary that replaces the old sandbox container.
 
 ---
 
-### 10. systemd Unit Files (native install, user mode)
+### 11. systemd Unit Files (native install, user mode)
 
 Decision #25: systemd in user mode is preferred for native installs. Files live at `~/.config/systemd/user/` (copied from `/.anyclaw/systemd/`).
 
@@ -951,7 +1192,7 @@ stderr_logfile=/var/log/anyclaw/prod-static.err
 
 ---
 
-### 11. Dockerfile
+### 12. Dockerfile
 
 ```dockerfile
 # syntax=docker/dockerfile:1.6
@@ -1017,7 +1258,7 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyclaw.conf"]
 
 ---
 
-### 12. docker-compose.yml (self-hosted single service)
+### 13. docker-compose.yml (self-hosted single service)
 
 ```yaml
 services:
@@ -1048,7 +1289,7 @@ One service. Supervisord inside runs the five processes. Only the tunnel manager
 
 ---
 
-### 13. Install Script
+### 14. Install Script
 
 Invocation:
 ```bash
@@ -1256,7 +1497,204 @@ Key properties:
 
 ---
 
-### 14. Cloud Hosting
+### 15. Default Welcome Page
+
+The first time the user opens the WebView after install, they see a
+default page that ships with the AnyClaw distribution. It is not just a
+splash screen — it is a working page that does three jobs at once:
+
+1. **Onboards the user.** Introduces AnyClaw, explains the Request
+   button, and shows three example prompts the user can copy.
+2. **Demonstrates every pattern the style guide prescribes.** File
+   layout, theme tokens, `usePreferences()`, PocketBase data fetching,
+   loading state, error state, empty state, voice & tone. Anything an
+   agent might need to write later is shown here in working form.
+3. **Is the canonical example for the agent.** The `anyclaw-canonical-example`
+   skill points the agent at this exact file. Every future task reads it
+   before writing new code.
+
+**Lifecycle.** The file ships at `dev/packages/frontend/src/pages/Home.tsx`
+on first install AND is also written to `dev/_examples/welcome.tsx`. When
+the user replaces the home screen with their first real feature, the
+`Home.tsx` copy is overwritten — but the `_examples/welcome.tsx` copy is
+preserved and never modified by the agent. The install script and the
+deploy tool both treat `dev/_examples/` as protected (read-only to the
+agent skill prompts; the underlying filesystem permissions allow writes
+only by the install/upgrade scripts).
+
+**The file** (`dev/_examples/welcome.tsx`):
+
+```tsx
+import { useEffect, useState } from "react";
+import { Sparkles, MessageSquare } from "lucide-react";
+import { pb } from "@/lib/pocketbase";
+import { usePreferences } from "@/hooks/usePreferences";
+
+type RecentTask = {
+  id: string;
+  title: string;
+  status: "running" | "done" | "failed";
+  created: string;
+};
+
+const EXAMPLE_PROMPTS = [
+  "Build me a daily mood tracker with a weekly chart",
+  "Make a reading list I can add books to from a URL",
+  "Create a workout log that shows my weekly volume",
+];
+
+export default function Welcome() {
+  const prefs = usePreferences();
+  const [tasks, setTasks] = useState<RecentTask[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const records = await pb
+          .collection("tasks")
+          .getList<RecentTask>(1, 5, { sort: "-created" });
+        if (!cancelled) setTasks(records.items);
+      } catch (e) {
+        if (!cancelled) setError("Couldn't load your recent tasks.");
+      }
+    }
+
+    load();
+    const unsub = pb
+      .collection("tasks")
+      .subscribe<RecentTask>("*", () => load());
+
+    return () => {
+      cancelled = true;
+      unsub.then((fn) => fn());
+    };
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto max-w-xl p-4 sm:p-6 space-y-8">
+        <header className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" />
+            <span className="text-sm text-muted">Welcome to AnyClaw</span>
+          </div>
+          <h1 className="text-2xl font-semibold">
+            Your personal app, built on request.
+          </h1>
+          <p className="text-base text-muted">
+            Tap the Request button to ask for a feature in plain words.
+            AnyClaw will build it, test it, and deploy it here.
+          </p>
+        </header>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Try one of these</h2>
+          <ul className="space-y-2">
+            {EXAMPLE_PROMPTS.map((prompt) => (
+              <li
+                key={prompt}
+                className="bg-surface border border-border rounded-xl p-4 shadow-sm"
+              >
+                <div className="flex items-start gap-3">
+                  <MessageSquare className="h-4 w-4 text-muted mt-1 shrink-0" />
+                  <p className="text-sm text-foreground">{prompt}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Recent activity</h2>
+
+          {tasks === null && error === null && (
+            <div className="flex flex-col items-center justify-center py-10 space-y-3">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <p className="text-sm text-muted">Loading recent tasks...</p>
+            </div>
+          )}
+
+          {error && (
+            <div className="flex flex-col items-center justify-center py-10 px-6 text-center space-y-3">
+              <h3 className="text-base font-medium">Couldn't load tasks</h3>
+              <p className="text-sm text-muted max-w-xs">
+                The server didn't respond. Check your connection and pull
+                down to refresh.
+              </p>
+            </div>
+          )}
+
+          {tasks && tasks.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-10 px-6 text-center space-y-3">
+              <h3 className="text-base font-medium">Nothing here yet</h3>
+              <p className="text-sm text-muted max-w-xs">
+                When you make your first request, it will show up here so
+                you can track its progress.
+              </p>
+            </div>
+          )}
+
+          {tasks && tasks.length > 0 && (
+            <ul className="space-y-2">
+              {tasks.map((t) => (
+                <li
+                  key={t.id}
+                  className="bg-surface border border-border rounded-xl p-4 shadow-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm text-foreground">{t.title}</p>
+                    <StatusPill status={t.status} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <footer className="pt-4 border-t border-border">
+          <p className="text-xs text-muted">
+            Theme: {prefs.theme}. Accent: {prefs.accent}. Change anything
+            from Settings.
+          </p>
+        </footer>
+      </div>
+    </main>
+  );
+}
+
+function StatusPill({ status }: { status: RecentTask["status"] }) {
+  const map = {
+    running: "bg-warning text-foreground",
+    done: "bg-success text-foreground",
+    failed: "bg-danger text-danger-fg",
+  } as const;
+  const label = { running: "Running", done: "Done", failed: "Failed" }[status];
+  return (
+    <span className={`text-xs font-medium rounded-md px-2 py-1 ${map[status]}`}>
+      {label}
+    </span>
+  );
+}
+```
+
+This file demonstrates, in order: a typed PocketBase fetch with cleanup;
+a real-time subscription; explicit loading, error, and empty states (each
+with its own copy that stands on its own); semantic theme tokens
+exclusively; the `usePreferences()` hook reading user settings; a small
+co-located helper component (`StatusPill`) under the same file because
+it is feature-specific; lucide-react icons; mobile-first spacing; and
+voice that is direct, plain, and free of humor.
+
+The agent reads this file at the start of every task. If a future
+feature needs a list page, a status badge, an empty state, or a typed
+PocketBase fetch, the shape is already here.
+
+---
+
+### 16. Cloud Hosting
 
 #### Phase 1: Hetzner VPS, one container per user
 
@@ -1322,7 +1760,7 @@ Supports $12–15/month pricing with healthy margins; BYOK users drop COGS to ~$
 
 ---
 
-### 15. Hosting OpenClaw Alongside AnyClaw
+### 17. Hosting OpenClaw Alongside AnyClaw
 
 Cloud-hosted users who choose OpenClaw as their agent get their own OpenClaw instance — not a shared one. The one-container-per-user model (decision #22) makes this clean:
 
