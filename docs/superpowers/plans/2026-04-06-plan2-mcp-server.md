@@ -3,10 +3,10 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the AnyClaw MCP server package exposing 7 HTTP/SSE tools on `127.0.0.1:4100/mcp` with per-task bearer auth, backed by PocketBase and Plan 1 deploy/snapshot/version infrastructure.
-**Architecture:** A new `packages/mcp-server/` package inside the Plan 1 monorepo. Exports `mountMcp(app)` which the dispatch process mounts on its Express app. Tool handlers wrap Plan 1 managers (`DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore`) and an admin `PocketBase` client. Per-task bearer tokens are registered at task spawn, captured in a closure, and looked up on every request.
+**Architecture:** A new `packages/mcp-server/` package inside the Plan 1 monorepo. Exports `mountMcp(app, ctx)` which the Plan 1 `@anyclaw/dispatch` entrypoint mounts on its shared Express app (same app as Plan 3's REST API and Plan 1's health endpoint, port 4100). The MCP server does NOT call `app.listen` itself. Tool handlers wrap Plan 1 managers (`DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore`) from `@anyclaw/shared` and an admin `PocketBase` client. Per-task bearer tokens are registered at task spawn, captured in a closure, and looked up on every request.
 **Tech Stack:** @modelcontextprotocol/sdk ^1.12, express ^4.21, zod ^3.23, pocketbase ^0.25, vitest ^2.0, msw ^2.4, tsx, typescript ^5.6
-**Dependencies:** Plan 1 (Server Infrastructure Foundation) must be complete. This plan assumes `@anyclaw/deploy` exports `DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore` with the signatures referenced below, that `/data/.anyclaw/pb-token` and `/data/.anyclaw/mcp-tokens/` exist, and that the monorepo workspace already builds.
-**Plans that depend on this:** Plan 3 (Agent Dispatch) — will import `registerTaskToken` / `revokeTaskToken` and `mountMcp`.
+**Dependencies:** Plan 1 (Server Infrastructure Foundation) must be complete. This plan assumes `@anyclaw/shared` exports `DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore` with the signatures referenced below, that `/data/.anyclaw/pb-token` and `/data/.anyclaw/mcp-tokens/` exist, and that the npm workspaces monorepo already builds. The dispatch package `@anyclaw/dispatch` (scaffolded by Plan 1) will import and mount this package.
+**Plans that depend on this:** Plan 3 (Agent Dispatch) — will import `mountMcp`, `registerTaskToken`, `revokeTaskToken` from `@anyclaw/mcp-server` and call `mountMcp(app, ctx)` on the shared dispatch Express app.
 
 ---
 
@@ -80,7 +80,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     },
     "dependencies": {
       "@modelcontextprotocol/sdk": "^1.12.0",
-      "@anyclaw/deploy": "workspace:*",
+      "@anyclaw/shared": "*",
       "pocketbase": "^0.25.0",
       "zod": "^3.23.0",
       "express": "^4.21.0"
@@ -145,7 +145,8 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 - [ ] **1.7 Create placeholder `src/index.ts`:**
   ```typescript
   import type { Express } from "express";
-  export function mountMcp(_app: Express): void {
+  export type McpContext = Record<string, never>;
+  export function mountMcp(_app: Express, _ctx: McpContext = {}): void {
     throw new Error("mountMcp not implemented yet");
   }
   ```
@@ -407,17 +408,17 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
   }
 
   describe("ensureInternalCollections", () => {
-    it("creates all five collections on first run", async () => {
+    it("creates all six collections on first run", async () => {
       const pb = makePbMock();
       await ensureInternalCollections(pb as any);
       const names = [...pb.existing.keys()].sort();
-      expect(names).toEqual(["_agent_messages", "_api_keys", "_tasks", "_user_preferences", "_versions"]);
+      expect(names).toEqual(["_agent_messages", "_api_keys", "_deployments", "_tasks", "_user_preferences", "_versions"]);
     });
     it("is idempotent", async () => {
       const pb = makePbMock();
       await ensureInternalCollections(pb as any);
       await ensureInternalCollections(pb as any);
-      expect(pb.collections.create).toHaveBeenCalledTimes(5);
+      expect(pb.collections.create).toHaveBeenCalledTimes(6);
     });
     it("_tasks has expected fields", async () => {
       const pb = makePbMock();
@@ -523,7 +524,20 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     ...ADMIN_ONLY,
   };
 
-  const ALL: CollSpec[] = [TASKS, AGENT_MESSAGES, VERSIONS, USER_PREFS, API_KEYS];
+  const DEPLOYMENTS: CollSpec = {
+    name: "_deployments",
+    schema: [
+      { name: "version_tag",    type: "text", required: true, options: { max: 64 } },
+      { name: "description",    type: "text", required: true },
+      { name: "created_at",     type: "autodate" },
+      { name: "git_sha",        type: "text" },
+      { name: "db_snapshot_id", type: "text" },
+    ],
+    indexes: ["CREATE INDEX idx_deployments_created ON _deployments (created_at)"],
+    ...ADMIN_ONLY,
+  };
+
+  const ALL: CollSpec[] = [TASKS, AGENT_MESSAGES, VERSIONS, USER_PREFS, API_KEYS, DEPLOYMENTS];
 
   export async function ensureInternalCollections(pb: PocketBase): Promise<void> {
     for (const spec of ALL) {
@@ -537,7 +551,9 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
   }
   ```
 - [ ] **4.4 Run test, confirm GREEN.**
-- [ ] **4.5 Commit:** `plan2/task4: _tasks/_agent_messages/_versions/_user_preferences/_api_keys bootstrap`
+- [ ] **4.5 Commit:** `plan2/task4: _tasks/_agent_messages/_versions/_user_preferences/_api_keys/_deployments bootstrap`
+
+Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.run()` is the single writer — on a successful deploy it writes a row to BOTH `_versions` (existing behavior) AND `_deployments` (new, for Plan 5 subscriptions). Plan 5 subscribes to `_deployments` create events. This keeps the MCP tool a pure delegator.
 
 ---
 
@@ -845,8 +861,8 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
   });
 
   let defaultMgr: () => SnapshotManagerLike = () => {
-    // Lazy import to keep @anyclaw/deploy optional for unit tests.
-    const { snapshotManager } = require("@anyclaw/deploy") as { snapshotManager: SnapshotManagerLike };
+    // Lazy import to keep @anyclaw/shared optional for unit tests.
+    const { snapshotManager } = require("@anyclaw/shared") as { snapshotManager: SnapshotManagerLike };
     return snapshotManager;
   };
 
@@ -961,7 +977,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     snapshotId: z.string(),
   });
 
-  let defaultSnap: () => SnapshotManagerLike = () => (require("@anyclaw/deploy") as any).snapshotManager;
+  let defaultSnap: () => SnapshotManagerLike = () => (require("@anyclaw/shared") as any).snapshotManager;
 
   export function makeCreateCollectionHandler(
     snapFactory: () => SnapshotManagerLike = defaultSnap,
@@ -1228,7 +1244,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     }),
   });
 
-  let defaultMgr: () => DeployManagerLike = () => (require("@anyclaw/deploy") as any).deployManager;
+  let defaultMgr: () => DeployManagerLike = () => (require("@anyclaw/shared") as any).deployManager;
 
   export function makeDeployHandler(factory: () => DeployManagerLike = defaultMgr) {
     return withErrorHandling(async (
@@ -1308,7 +1324,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     gitCommit: z.string(),
   });
 
-  let defaultMgr: () => RollbackManagerLike = () => (require("@anyclaw/deploy") as any).rollbackManager;
+  let defaultMgr: () => RollbackManagerLike = () => (require("@anyclaw/shared") as any).rollbackManager;
 
   export function makeRollbackHandler(factory: () => RollbackManagerLike = defaultMgr) {
     return withErrorHandling(async (input: z.infer<typeof rollbackInput>) => {
@@ -1340,6 +1356,8 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 ---
 
 ## Task 13 — `mountMcp` HTTP/SSE Wiring
+
+Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Express app. It does NOT call `app.listen`. Plan 1's `@anyclaw/dispatch` entrypoint owns the Express app and the single `listen(4100)` call; it imports `mountMcp` from `@anyclaw/mcp-server` and calls it before starting the server. Plan 3's REST API routes mount onto the same app.
 
 - [ ] **13.1 Write failing test:** `src/__tests__/mount-mcp.test.ts`:
   ```typescript
@@ -1448,7 +1466,9 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     "A version description of at least 10 characters is required for every deployment.",
   ].join(" ");
 
-  export function mountMcp(app: Express): void {
+  export type McpContext = Record<string, never>;
+
+  export function mountMcp(app: Express, _ctx: McpContext = {}): void {
     app.post("/mcp", requireBearerToken, async (req: Request, res: Response) => {
       try {
         const taskId = resolveTaskFromToken(req);
@@ -1610,8 +1630,8 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
   import { Client } from "@modelcontextprotocol/sdk/client/index.js";
   import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-  // Stub @anyclaw/deploy before importing the server module.
-  vi.mock("@anyclaw/deploy", () => ({
+  // Stub @anyclaw/shared before importing the server module.
+  vi.mock("@anyclaw/shared", () => ({
     deployManager: {
       run: vi.fn().mockResolvedValue({
         version: "v1.0.1",
@@ -1672,7 +1692,7 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
       expect((res.structuredContent as any).version).toBe("v1.0.1");
       expect((res.structuredContent as any).validationResults.lint).toBe(true);
 
-      const { deployManager } = await import("@anyclaw/deploy");
+      const { deployManager } = await import("@anyclaw/shared");
       expect((deployManager as any).run).toHaveBeenCalledWith({
         taskId: "int-task",
         versionDescription: "adds mood tracking feature",
@@ -1720,12 +1740,12 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
 - [ ] `npm run -w @anyclaw/mcp-server build` succeeds (typecheck clean).
 - [ ] The package exports `mountMcp`, `registerTaskToken`, `revokeTaskToken`, `ensureInternalCollections`, `resumeTasksOnStartup`, and `pocketBaseTasksRepo` for consumption by Plan 3's dispatch server.
 - [ ] All 7 tools are registered and gated by the per-task bearer middleware.
-- [ ] The seven collections (`_tasks`, `_agent_messages`, `_versions`, `_user_preferences`, `_api_keys`) can be bootstrapped by calling `ensureInternalCollections(pb)` during install.
+- [ ] The six collections (`_tasks`, `_agent_messages`, `_versions`, `_user_preferences`, `_api_keys`, `_deployments`) can be bootstrapped by calling `ensureInternalCollections(pb)` during install.
 
 ## Hand-off Notes for Plan 3
 
-Plan 3 (Agent Dispatch) will:
-1. Instantiate the Express app, call `mountMcp(app)`, and `app.listen(4100, '127.0.0.1')`.
+Plan 1's `@anyclaw/dispatch` package owns the Express app and the single `app.listen(4100, '127.0.0.1')` call. Plan 3 (Agent Dispatch) will:
+1. In the dispatch entrypoint, `import { mountMcp } from '@anyclaw/mcp-server'` and call `mountMcp(app, ctx)` on the shared dispatch Express app BEFORE `app.listen`. Plan 3's REST API routes mount onto the same app. The health endpoint from Plan 1 also lives on the same app.
 2. On task spawn, call `registerTaskToken(taskId, crypto.randomUUID())` and inject the token into the agent subprocess via `ANYCLAW_MCP_TOKEN`.
 3. On task terminate, call `revokeTaskToken(taskId)`.
 4. On startup, instantiate `pocketBaseTasksRepo(pb)` and call `resumeTasksOnStartup(repo)` before accepting new work.

@@ -24,7 +24,7 @@ Create the Expo managed-workflow project at the repo root under `mobile/` with T
 
 - `npx create-expo-app@latest mobile -t tabs@52`
 - Prune the generated tabs; we rebuild routing in Task 3.
-- Install: `expo-router expo-secure-store expo-notifications expo-auth-session expo-web-browser expo-haptics expo-device expo-constants expo-localization react-native-webview react-native-reanimated react-native-safe-area-context react-native-gesture-handler zustand pocketbase libsodium-wrappers tweetnacl-util date-fns`
+- Install: `expo-router expo-secure-store expo-notifications expo-auth-session expo-web-browser expo-haptics expo-device expo-constants expo-localization react-native-webview react-native-reanimated react-native-safe-area-context react-native-gesture-handler zustand pocketbase@^0.25.0 libsodium-wrappers tweetnacl-util date-fns`
 - Dev deps: `jest-expo @testing-library/react-native @testing-library/jest-native @types/libsodium-wrappers`
 - Configure `app.json` exactly as the design doc section 3 specifies (scheme `anyclaw`, iOS deploymentTarget 15.1, Android minSdkVersion 28, plugins `expo-router` + `expo-secure-store`).
 - Configure `tsconfig.json` with strict mode and the `@/*` path alias → `./`.
@@ -111,7 +111,7 @@ Implement `lib/preferences/types.ts`, `system.ts`, and `store.ts` per design doc
 Requirements:
 - `usePreferencesStore` exposes `prefs`, `resolvedTheme`, `resolvedFontScale`, `hydrated`, `hydrate()`, `set(patch)`, `reset()`.
 - `resolve(prefs)` maps `'system'` theme → `Appearance.getColorScheme()` and `'system'` font size → `PixelRatio.getFontScale()`; explicit overrides go through `FONT_SCALE_MAP` (`small: 0.85, medium: 1.0, large: 1.2`).
-- `hydrate()` seeds from SecureStore, falls back to `DEFAULT_PREFERENCES` with `language` from `Localization.getLocales()[0].languageTag`, then best-effort fetches from PocketBase `user_preferences`.
+- `hydrate()` seeds from SecureStore, falls back to `DEFAULT_PREFERENCES` with `language` from `Localization.getLocales()[0].languageTag`, then best-effort fetches from PocketBase `_user_preferences`.
 - `set(patch)` always writes SecureStore first, then best-effort PocketBase upsert.
 - `reset()` clears SecureStore, reseeds defaults, and clears `onboarding_completed_at`.
 
@@ -160,7 +160,7 @@ Implement `lib/broker.ts` per design doc §9.1:
 
 Implement `lib/api.ts` per design doc §10.
 
-- `ApiClient` class with `configure({ baseUrl, sessionToken, serverId, debug })`, `get<T>(path)`, `post<T>(path, body)`.
+- `ApiClient` class with `configure({ baseUrl, sessionToken, serverId, debug })`, `get<T>(path)`, `post<T>(path, body)`. `baseUrl` always points at the dispatch REST API root (`/api/*`, port 4100 on the host; in the paired-over-broker case, requests go to `https://broker.anyclawapp.com/relay/client` and are routed via the in-envelope `service` tag). The full host surface the app talks to: `POST /api/tasks`, `POST /api/tasks/:id/answer`, `POST /api/tasks/:id/cancel`, `POST /api/rollback`, `POST /api/restart-app`, `GET /api/versions`, `GET /api/health`, `GET /api/settings`, `PATCH /api/settings`, `POST /api/device/register`.
 - POST wraps body in `encryptJSON` under the loaded pairing keys, sends with headers `content-type: application/x-nacl-box`, `authorization: Bearer ...`, `x-anyclaw-client-pk: <base64>`, and decrypts the response.
 - GET sends no body, decrypts the response envelope.
 - Non-2xx responses throw `Error("HTTP ${status}")`.
@@ -185,7 +185,7 @@ Implement `lib/api.ts` per design doc §10.
 Implement `lib/pocketbase.ts` per design doc §11.
 
 - `initPocketBase(relayUrl, pbAuthToken, serverId)`, `getPocketBase()`.
-- `subscribeToTask(taskId, onUpdate)`, `subscribeToAgentMessages(onMessage)`, `subscribeToDeployments(onDeploy)` — all decrypt envelope records via `loadPairingKeys` before passing to the callback, and return an unsubscribe function.
+- `subscribeToTask(taskId, onUpdate)` subscribes to the `_tasks` collection, `subscribeToAgentMessages(onMessage)` subscribes to `_agent_messages`, `subscribeToDeployments(onDeploy)` subscribes to `_deployments` — all decrypt envelope records via `loadPairingKeys` before passing to the callback, and return an unsubscribe function. All subscriptions are routed through the broker relay using the `pb` service tag.
 - A `reconnectPolicy` wrapper that, on SSE error, re-fetches the latest record for the active task via REST before resuming — the "catch up missed updates after a drop" behavior from §11.
 
 **Tests first (`lib/__tests__/pocketbase.test.ts`):** mock the `pocketbase` module.
@@ -274,7 +274,7 @@ Implement `stores/settings.ts` per design doc §13 — but use `expo-secure-stor
 
 **Tests first:**
 1. `hydrate` loads from SecureStore.
-2. `update({ clarificationMode: 'pause-indefinitely' })` writes SecureStore and mirrors to `/api/settings`.
+2. `update({ clarificationMode: 'pause-indefinitely' })` writes SecureStore and mirrors to the host via `PATCH /api/settings`. `hydrate()` may pull current server values via `GET /api/settings`.
 3. `update({ debugEncryptedTraffic: true })` writes SecureStore but does **not** hit the network.
 4. Mirror network failure does not throw (best-effort).
 
@@ -344,7 +344,7 @@ Implement `lib/bridge.ts` per design doc §6.2 plus a `buildResolvedPreferencesP
 **16b. Logic:**
 - `onMessage` handler dispatches on `bridge-ready` by `sendBridgeMessage({ type: 'session-token', token: sessionToken })` immediately followed by the resolved preferences payload.
 - Subscribe to `usePreferencesStore` — on change, push a `preferences` bridge message into the WebView.
-- Subscribe to `_deployments` via `subscribeToDeployments` — on create, `ref.current?.reload()` and `useVersionStore.getState().fetchVersions()`.
+- Subscribe to `_deployments` via `subscribeToDeployments` (uses the `pb` service tag through the broker relay) — on create, `ref.current?.reload()` and `useVersionStore.getState().fetchVersions()`.
 - Error handling matrix from §6.4: 401 triggers silent broker JWT refresh then reload; 5xx shows "app broken" screen with an "Open Version History" CTA; `onError` (tunnel down) shows the reconnect card.
 - `ConnectionStatus` header badge reflects `useConnectionStore.connectionState`.
 
