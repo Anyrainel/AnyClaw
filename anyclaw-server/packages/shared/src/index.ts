@@ -4,3 +4,4 @@ export * from "./snapshots.js";
 export * from "./versionStore.js";
 export * from "./worktrees.js";
 export * from "./deployManager.js";
+export * from "./rollbackManager.js";
