@@ -538,6 +538,77 @@ All open decisions from the subsystem design docs have been resolved. These are 
 | 23 | Agent execution model | Agent runs natively as a transient subprocess. Uses its own built-in tools for files and shell commands. AnyClaw MCP tools only for things the agent can't do natively (deploy, rollback, snapshot, ask_user, update_progress, create_collection). cgroup limits prevent runaway commands from starving supervised processes. | Coding agents already know how to run commands — that's their job. MCP tools should add value, not duplicate native capability. |
 | 24 | Skill versioning | Independent with compatibility check. Skills declare minimum server version. Server rejects incompatible skills. | Faster iteration on prompts without requiring full server update. |
 
+### Gap Resolutions (Post-Remaster)
+
+Additional decisions made after the architecture simplification, closing out the new gap list that emerged from remastering the design docs.
+
+#### Process Supervision & Execution
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 25 | Supervisor choice | **systemd** (user mode preferred) as primary. **supervisord** as fallback for minimal containers without systemd. | OpenClaw already uses systemd. `systemd --user` + `systemd-run --user --scope` works without root on any distro with cgroup v2 delegation (Ubuntu 22.04+, Debian 12+, Fedora). |
+| 26 | Resource limits (cgroup/JobObject) | **Deferred.** Design a `ResourceLimits` interface as a no-op for MVP. Populate later when real abuse patterns emerge. | Premature optimization. Trust the agent for MVP, monitor, lock down based on real data. |
+| 27 | Linux-first for MVP | Yes. Windows/macOS self-hosters use WSL2 or a Linux VM. | Cross-platform cgroup abstraction is not worth the MVP complexity. |
+| 28 | Restart prod logic service after deploy | `systemctl --user restart anyclaw-logic` (or supervisord equivalent). The dispatch server invokes this via a controlled shell out. | Standard supervisor mechanism. No custom plumbing. |
+| 29 | Filesystem permission bootstrapping | Install script runs as root once during setup. Creates users (`anyclaw-infra`, `anyclaw-agent`), sets directory ownership. After install, services run as non-root users. | Standard Linux install pattern. |
+
+#### Security & Encryption
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 30 | NaCl library | `libsodium-wrappers` (WASM) on both mobile and server. | Industry standard. Works everywhere including React Native. Maintained by the libsodium team. |
+| 31 | NaCl key lifecycle | Long-lived keypair per (device, server) pair, generated at pairing. Stored in platform secure storage (iOS Keychain / Android Keystore / libsecret on Linux / Credential Manager on Windows). **No rotation for MVP.** Re-pair flow on device loss. | Attack surface focus is machine compromise + API key leaks, not conversation privacy. Simple is correct. |
+| 32 | Pairing MITM protection | Display a 4-word verification code (BIP39 wordlist) derived from the shared secret on both sides. User visually confirms before proceeding. | Industry standard (Signal, Threema, WhatsApp all use this pattern). |
+| 33 | WebView traffic encryption boundary | **TLS-only for static assets** (HTML/CSS/JS from prod static server). **NaCl additionally for sensitive API payloads** (PocketBase API calls carrying user data, dispatch API calls). Clean separation, minimal WebView complexity. | Option (d) from Plan 5 Gap 1 — middle ground. Assets are public-ish; user data is private. |
+| 34 | Debug mode for encrypted traffic | Opt-in flag in mobile app settings. When enabled, the client logs decrypted traffic locally only (never on broker). | Simple troubleshooting path without compromising default privacy. |
+| 35 | MCP loopback auth | Per-task bearer token. Written to a file only the agent's user can read, injected via `ANYCLAW_MCP_TOKEN` env var. | Cross-platform, simple, sufficient for loopback. |
+
+#### Task Isolation & Workspace
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 36 | Task workspace isolation | **Worktree-per-task from day one.** Each task runs in its own git worktree under `dev/.worktrees/task-<id>/`. On success: merge worktree branch to `main`, delete worktree. On failure: delete worktree without merging. | Simple to set up, gives isolation from day one, and parallelization just requires removing the queue serialization later. |
+| 37 | Merge conflicts (future parallelism) | A dedicated "merge agent" handles conflicts when multiple parallel tasks touch the same files. Not needed for MVP (sequential tasks can't conflict). | Deferred to when parallelism ships. |
+| 38 | Task checkpoint schema | Hybrid: agent-agnostic step tracking (`lastCompletedStep`, `filesModified`) for UI + optional agent-specific blob for internal resume state. | UI can show progress generically; agent can resume precisely. |
+| 39 | ask_user resume after restart | On dispatch server restart, the resumed agent first checks `_agent_messages` for pending questions. If one is unanswered, the adapter waits for the answer (respecting the user's timeout mode) before re-dispatching. | No duplicate questions. Consistent with "pause indefinitely" semantics. |
+
+#### Delivery & Reliability
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 40 | Task delivery guarantee | **Exactly-once.** Client generates task UUID. Dispatch server does idempotent upsert to PocketBase `_tasks`. On restart, any task in `working` state without a running subprocess is atomically moved to `failed` with reason `"server_restart"`. User can always retry with a new UUID. | User instructions must never be lost or duplicated. This is the reliability guarantee AnyClaw owns. |
+| 41 | OpenClaw gateway failures | Deferred to post-MVP. Handle reactively when specific failure modes emerge. | Premature. Different failure modes need different handling. |
+| 42 | Queue stall detection | Hard timeout only (no heartbeat required). If a task runs longer than its configured max (default: 30 minutes), it's force-cancelled and marked failed. | Simple. Heartbeat complexity not justified for MVP. |
+
+#### Routing & Networking
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 43 | Tunnel multiplexing | In-envelope service tag: `{ type, client_id, service: "pb"|"api"|"app", payload }`. Tunnel manager routes to PocketBase (`pb`), dispatch/MCP server (`api`), or prod static server (`app`) based on the tag. | No DNS/subdomain gymnastics. Mobile app and tunnel both know the routing table. |
+| 44 | VPS provider | **Hetzner** (US East + EU datacenters, Docker-ready, generous bandwidth, lowest cost for reliable service). | Proven choice for small-scale self-hosting. |
+
+#### Mobile App Auth & Keys
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 45 | OAuth strategy | **Broker-issued JWT after OAuth validation.** Broker stores provider refresh tokens server-side. Broker exposes `/auth/refresh` endpoint. Access tokens are short-lived JWTs (15 min). | Standard pattern. Used by Supabase, Firebase Auth, Clerk, Auth0. |
+| 46 | Apple Sign In first-login quirk | Broker persists user details (name, email) from the first OAuth callback. Subsequent logins only provide the user ID. | Apple's documented behavior. Standard mitigation. |
+
+#### PocketBase & Secret Management
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 47 | PocketBase API token provisioning | Install script runs `./pocketbase superuser create` non-interactively with generated credentials, calls the admin API to generate a long-lived API token, then stores the token in `/data/.anyclaw/pb-token`. Superuser account remains for emergency admin access. | Non-interactive, repeatable, standard approach. |
+| 48 | Master encryption key | Generated at install time. Stored at `/data/.anyclaw/master.key` with mode `0600`, owned by the `anyclaw-infra` user. For cloud hosting, derived from a per-user provisioning secret. | Simple, standard. Key rotation is a later concern. |
+| 49 | Encrypted secrets algorithm | AES-256-GCM. Implemented in the dispatch server, which encrypts on write to PocketBase and decrypts on read. | Industry standard authenticated encryption. |
+
+#### Style Guide Specifics
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 50 | Tailwind v4 `@theme` tokens | Style guide skill will ship with a complete default `@theme` block in `app.css` (colors, spacing, typography, shadows) documented. Agent uses existing tokens; cannot add new `@theme` tokens without user approval via `anyclaw_ask_user`. | Consistency across agent-built UI. User-approved extension path. |
+| 51 | Dark mode pattern | `@media (prefers-color-scheme: dark)` overrides in the default `@theme` block. Agent follows the pattern for any new themes. | Automatic, no toggle needed initially. |
+
 ## Out of Scope (for now)
 
 - Offline / degraded connectivity support (server down = app shows reconnect screen)
