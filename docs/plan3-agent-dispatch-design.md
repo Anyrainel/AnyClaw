@@ -1,117 +1,109 @@
 # Plan 3: Agent Dispatch Layer -- Design Document
 
-**Goal:** Define the pluggable adapter layer that lets the AnyClaw mobile app submit work requests to the user's coding agent, relay clarifying questions back to the user, and report progress/completion/failure. The adapter is agent-agnostic: initial implementations cover OpenClaw and Claude Code, with a generic webhook adapter for future agents (Codex, Aider, Gemini CLI, etc.).
+**Goal:** Define the pluggable adapter layer that lets the AnyClaw mobile app submit work requests to the user's coding agent, relay clarifying questions back to the user, and report progress/completion/failure. Initial adapters cover OpenClaw and Claude Code, with a generic webhook adapter for future agents (Codex, Aider, Gemini CLI).
 
 **Depends on:** Plan 1 (Server Infrastructure) for PocketBase runtime and the supervised-process host layout.
 
 ---
 
-## 1. Where the Adapter Runs
+## 1. Overview
 
-The adapter runs **on the user's host, inside the Dispatch / MCP Server process** -- not in the mobile app, not in the broker, and not in the logic service. The dispatch/MCP server is one of the supervised processes defined in the main spec's "Process Architecture" section. It is NOT a container; it is a long-lived Node.js process managed by supervisord / systemd / pm2 alongside PocketBase, the tunnel manager, and the logic service.
+The agent dispatch layer is the bridge between a mobile user typing "add a mood tracker" and a coding agent actually building it. It owns:
 
-**Supervised-process architecture (locked decision):**
+1. **Task lifecycle** -- input, clarification, work, deploy, done/failed -- including exactly-once submission semantics.
+2. **Pluggable `AgentAdapter` interface** -- a uniform contract that each supported agent implements.
+3. **Per-task git worktree** -- each task gets its own isolated workspace under `dev/.worktrees/`.
+4. **Clarification relay** -- a universal `anyclaw_ask_user` MCP tool that works identically for every adapter.
+5. **REST API** exposed to the mobile app over the WSS tunnel.
+6. **Persistence and resume** so that a dispatch-server restart never loses an in-flight task.
 
-All AnyClaw services run as independent supervised processes on a single host (or inside a single cloud container with supervisord). There are no sub-containers. Crash isolation comes from process supervision with per-process restart policies, not from container boundaries.
-
-The dispatch/MCP server is the small, stable "control plane" process. Its responsibilities:
-
-1. Task dispatch REST API (`POST /tasks`, `POST /tasks/:id/answer`, etc.).
-2. MCP HTTP/SSE endpoint for the agent to call AnyClaw MCP tools.
-3. Emergency endpoints that always work even when the user's app is broken: `POST /rollback`, `POST /restart-app`.
-4. Owning the `AdapterManager`, which spawns and supervises the transient agent subprocess for each task.
-
-**The dispatch/MCP server source files live under `.anyclaw/` on the host filesystem and are NOT in the agent's writable path.** The `anyclaw_write_file` MCP tool path-checks every write against the agent workspace (`dev/`) and rejects anything outside it. The agent literally cannot edit the process that supervises it.
-
-**Rationale for placing the adapter in the dispatch/MCP server:**
-
-- The dispatch server is always running, always reachable, and `restart=always` under the supervisor. The mobile app can always submit tasks, even if the logic service is broken by bad agent code.
-- The dispatch server already owns the MCP HTTP/SSE endpoint the agent talks to. Spawning the agent subprocess from the same process means the adapter can inject the MCP endpoint URL, set `ANYCLAW_TASK_ID` in the child environment, and manage the process lifecycle cleanly.
-- Task state lives in PocketBase (another supervised process on the same host, reachable at `localhost:8090`). No cross-container networking, no Docker socket, no volume sharing.
-- The broker is a thin signaling relay. Putting dispatch logic there would make it stateful, expensive, and a single point of failure.
-
-**Communication path:**
-
-```
-Mobile App  --[WSS tunnel via Tunnel Manager]--> Dispatch / MCP Server process
-                                                      |
-                                                      +--> AdapterManager
-                                                      |        |
-                                                      |        +--> OpenClawAdapter
-                                                      |        |     --[WS]--> OpenClaw on localhost
-                                                      |        |     (existing user install or spawned)
-                                                      |        |
-                                                      |        +--> ClaudeCodeAdapter
-                                                      |        |     --[spawn]--> claude -p (child process,
-                                                      |        |                    cwd=dev/, cgroup limits)
-                                                      |        |
-                                                      |        +--> WebhookAdapter
-                                                      |              --[HTTP]--> user-configured URL
-                                                      |
-                                                      +--> PocketBase (localhost:8090)
-                                                      |      task state persistence
-                                                      |
-                                                      +--> MCP HTTP/SSE endpoint (localhost, same process)
-                                                             the agent subprocess connects back here
-```
-
-The mobile app talks to the dispatch/MCP server over the existing WSS tunnel (terminated by the Tunnel Manager process and forwarded to the dispatch server on localhost). The adapter translates between AnyClaw's task protocol and the specific agent's protocol. Everything runs on one host and talks over loopback.
-
-**Task isolation.** Since the locked decision is single-active-task + queue, each task gets a fresh subprocess spawn. The agent subprocess is transient: it does not survive the task. Future parallelization can spawn multiple subprocesses pointing at different per-task working directories (e.g., `dev-task1/`, `dev-task2/`) without changing the dispatch model. For MVP, all tasks share `dev/` sequentially.
+Single active task + queue for MVP (locked decision #1). The design is isolation-first so future parallelization is a scheduler change, not an architectural rewrite.
 
 ---
 
-## 2. Adapter Interface
+## 2. Architecture
 
-### 2.1 Core Types
+### 2.1 Where it runs
+
+The dispatch layer runs **inside the Dispatch / MCP Server process** -- one of the supervised processes defined in the main spec's "Process Architecture" section. It is a long-lived Node.js process managed by systemd (primary) or supervisord (fallback) alongside PocketBase, the Tunnel Manager, the Logic Service, and the Prod Static Server.
+
+The dispatch/MCP server is the "control plane": the small, stable process that always works even when the agent-written logic service is broken. Responsibilities:
+
+1. Task dispatch REST API (`POST /api/tasks`, etc.).
+2. MCP HTTP/SSE endpoint the agent calls back into.
+3. Emergency endpoints (`POST /api/rollback`, `POST /api/restart-app`).
+4. Owning the `AdapterManager`, which spawns and supervises the transient agent subprocess per task.
+
+**Source file protection.** The dispatch/MCP server's source files live under `.anyclaw/` and are NOT inside the agent's writable path. The agent's `cwd` is a per-task worktree under `dev/.worktrees/`. It literally cannot edit the process that supervises it.
+
+### 2.2 Communication path
+
+```
+Mobile App
+    │ WSS (encrypted, NaCl over TLS)
+    ▼
+Tunnel Manager (supervised process)
+    │ loopback HTTP/SSE
+    ▼
+Dispatch / MCP Server (supervised process)
+    │
+    ├── AdapterManager
+    │     ├── OpenClawAdapter ──WS──> OpenClaw gateway (127.0.0.1:18789)
+    │     ├── ClaudeCodeAdapter ──spawn──> `claude -p` (cwd=worktree)
+    │     └── WebhookAdapter ──HTTP──> user-configured URL
+    │
+    ├── MCP HTTP/SSE endpoint (same process, loopback)
+    │     the agent subprocess connects back here for anyclaw_* tools
+    │
+    └── PocketBase client ──loopback──> PocketBase (127.0.0.1:8090)
+          persistence: tasks, clarifications, activity log, queue
+```
+
+All hops inside the host are loopback. Only the mobile hop traverses the WSS tunnel.
+
+---
+
+## 3. AgentAdapter Interface
+
+### 3.1 Core types
 
 ```typescript
-// --- Task identity ---
-
-/** Opaque handle returned by dispatch(). Adapters define the internal shape. */
+/** Opaque handle returned by dispatch(). Adapters define the adapterRef shape. */
 type TaskHandle = {
-  taskId: string;           // AnyClaw-assigned UUID
-  adapterRef: string;       // Adapter-specific reference (e.g., session ID, run ID, PID)
+  taskId: string;           // AnyClaw-assigned UUID (client-generated)
+  adapterRef: string;       // Adapter-specific reference (session ID, run ID, PID)
 };
 
-// --- Task lifecycle states ---
-
 type TaskState =
-  | "queued"        // submitted but adapter hasn't started it yet
-  | "clarifying"    // agent is asking a question; waiting for user answer
+  | "queued"        // submitted, not yet started
+  | "clarifying"    // agent asked a question; waiting for user
   | "working"       // agent is implementing
-  | "deploying"     // agent is running validation + promoting to prod
+  | "deploying"     // validation + promotion to prod
   | "done"          // success
   | "failed"        // unrecoverable error
   | "cancelled";    // user cancelled
 
-// --- Status payload ---
-
 interface TaskStatus {
   state: TaskState;
-  /** When state === "clarifying", the agent's question. */
+  /** When state === "clarifying", the agent's current question. */
   question?: string;
   /** When state === "done", the version description the agent wrote. */
   versionDescription?: string;
   /** When state === "failed", a human-readable error. */
   error?: string;
-  /** Short progress summary, e.g. "Running type checker..." */
+  /** Short summary, e.g. "Running type checker...". */
   progressSummary?: string;
-  /** Monotonically increasing. Lets the mobile app skip stale status updates. */
+  /** Monotonically increasing. Lets the mobile app skip stale updates. */
   seq: number;
-  /** ISO 8601 timestamp of this status snapshot. */
+  /** ISO 8601 timestamp of this snapshot. */
   updatedAt: string;
 }
 
-// --- Activity log ---
-
 interface ActivityEntry {
-  timestamp: string;   // ISO 8601
+  timestamp: string;
   message: string;
   type: "info" | "tool_use" | "warning" | "error";
 }
-
-// --- Adapter errors ---
 
 class AdapterError extends Error {
   constructor(
@@ -126,40 +118,34 @@ class AdapterError extends Error {
 }
 
 type AdapterErrorCode =
-  | "AGENT_UNREACHABLE"     // cannot connect to agent gateway or spawn subprocess
-  | "AUTH_FAILED"           // bad token or expired credentials
-  | "TASK_NOT_FOUND"        // handle refers to unknown task
-  | "AGENT_BUSY"            // agent is already working on another task
-  | "TIMEOUT"               // operation exceeded deadline
-  | "CANCELLED"             // task was cancelled
-  | "INTERNAL";             // unexpected adapter error
+  | "AGENT_UNREACHABLE"
+  | "AUTH_FAILED"
+  | "TASK_NOT_FOUND"
+  | "AGENT_BUSY"
+  | "TIMEOUT"
+  | "CANCELLED"
+  | "INTERNAL";
 ```
 
-### 2.2 AgentAdapter Interface
+### 3.2 Interface
 
 ```typescript
 interface AgentAdapter {
-  /** Human-readable adapter name for UI display ("OpenClaw", "Claude Code"). */
+  /** Human-readable adapter name ("OpenClaw", "Claude Code"). */
   readonly name: string;
 
-  /**
-   * Check whether the agent is reachable and ready to accept work.
-   * Returns quickly (< 5s). Used by the mobile app's status indicator.
-   */
+  /** Quick reachability probe (< 5s). Used by the mobile app's status indicator. */
   healthCheck(): Promise<{ ok: boolean; detail?: string }>;
 
   /**
    * Submit a new task. The adapter translates the request into the agent's
    * native protocol and starts the agent session (typically by spawning a
-   * subprocess).
+   * subprocess into the per-task worktree).
    *
-   * @param taskId - AnyClaw-assigned UUID for this task.
-   * @param request - The user's natural-language feature request.
-   * @param systemContext - Injected instructions (MCP endpoint URL, cwd, allowed tools).
-   * @param signal - AbortSignal for cancellation. When aborted, the adapter
-   *                 MUST attempt to stop the agent and resolve the promise
-   *                 with state "cancelled". Timeout is enforced by the caller.
-   * @returns The initial TaskStatus (typically state "queued" or "working").
+   * @param taskId       Client-generated UUID for this task.
+   * @param request      The user's natural-language feature request.
+   * @param systemContext  cwd (worktree), MCP endpoint, allowed tools, etc.
+   * @param signal       AbortSignal for cancellation/timeout.
    * @throws AdapterError on connection/auth/spawn failures.
    */
   dispatch(
@@ -170,132 +156,269 @@ interface AgentAdapter {
   ): Promise<TaskHandle>;
 
   /**
-   * Subscribe to status changes for a running task. Returns an async iterable
-   * that yields TaskStatus objects whenever the state or progress changes.
-   * The iterable completes when the task reaches a terminal state
-   * (done | failed | cancelled).
-   *
-   * Adapters MUST yield at least one status on subscription (the current state)
-   * and MUST yield the terminal status before completing.
+   * Subscribe to status changes. Yields at least one status on subscription
+   * (the current state) and MUST yield the terminal status before completing.
    */
   subscribe(handle: TaskHandle, signal: AbortSignal): AsyncIterable<TaskStatus>;
 
-  /**
-   * Send the user's answer to a clarifying question.
-   * Only valid when the current state is "clarifying".
-   *
-   * @throws AdapterError with code TASK_NOT_FOUND or INTERNAL.
-   */
+  /** Send the user's answer. No-op for adapters where the answer flows via the
+   *  anyclaw_ask_user MCP tool blocking inside the same process. */
   answerQuestion(handle: TaskHandle, answer: string): Promise<void>;
 
-  /**
-   * Request cancellation. The adapter should attempt a graceful stop
-   * (SIGTERM -> SIGKILL for subprocess adapters, abort RPC for gateway adapters).
-   * The subscribe() iterable will eventually yield state "cancelled".
-   * Calling cancel on an already-terminal task is a no-op.
-   */
+  /** Graceful stop (SIGTERM -> SIGKILL or abort RPC). Idempotent. */
   cancel(handle: TaskHandle): Promise<void>;
 
-  /**
-   * Get the activity log since the given sequence number.
-   * Returns an empty array if the adapter does not support activity logs.
-   * Optional -- callers must handle the method being absent.
-   */
-  getActivityLog?(
-    handle: TaskHandle,
-    sinceSeq?: number
-  ): Promise<ActivityEntry[]>;
+  /** Optional. Activity log since sequence N. */
+  getActivityLog?(handle: TaskHandle, sinceSeq?: number): Promise<ActivityEntry[]>;
 
-  /**
-   * Tear down any persistent connections (WebSocket, child process handles).
-   * Called on dispatch server shutdown.
-   */
+  /** Resume after dispatch-server restart (see Section 6). */
+  resumeTask?(
+    taskId: string,
+    sessionId: string,
+    systemContext: SystemContext,
+    signal: AbortSignal
+  ): Promise<TaskHandle>;
+
+  /** Tear down connections and subprocess handles. Called on shutdown. */
   dispose(): Promise<void>;
 }
 
 interface SystemContext {
-  /** Absolute path to the agent workspace. This is always the `dev/` directory
-   *  for MVP. The agent's own file tools operate natively on this path. */
+  /** Absolute path to the task's git worktree under dev/.worktrees/task-<id>/. */
   cwd: string;
-  /** URL of the MCP HTTP/SSE endpoint the agent connects back to.
-   *  Always loopback, e.g. "http://127.0.0.1:4100/mcp". */
+  /** Loopback MCP HTTP/SSE URL, e.g. "http://127.0.0.1:4100/mcp". */
   mcpEndpointUrl: string;
-  /** Path to an MCP config file the adapter generates per task
-   *  (for agents like Claude Code that take --mcp-config). */
+  /** Per-task MCP bearer token. Written to the env and mcp-config. */
+  mcpBearerToken: string;
+  /** Per-task MCP config file path (for agents that take --mcp-config). */
   mcpConfigPath: string;
-  /** System prompt additions that instruct the agent to use AnyClaw tools. */
+  /** System prompt additions that point the agent at the anyclaw_* tools. */
   systemPrompt: string;
-  /** List of MCP tools the agent is allowed to call without permission prompts. */
+  /** Tools the agent may call without interactive permission prompts. */
   allowedTools: string[];
-  /** cgroup path (Linux) or job-object handle name (Windows) that limits the
-   *  child process's CPU and memory. The AdapterManager creates this per task
-   *  and passes it to the adapter so the agent spawn can be placed into it. */
+  /** Opaque handle for the per-task cgroup / JobObject. No-op for MVP. */
   resourceLimitHandle?: string;
 }
 ```
 
-### 2.3 Timeout Semantics
+### 3.3 Timeout semantics
 
-Timeouts are NOT managed inside adapters. The caller (AdapterManager) enforces them:
+Timeouts are enforced by `AdapterManager`, not inside adapters. Adapters honor the `AbortSignal` passed to `dispatch()` and `subscribe()`; the manager wires up the deadline.
 
 ```typescript
-class AdapterManager {
-  private adapter: AgentAdapter;
-  private config: DispatchConfig;
-
-  async dispatchTask(taskId: string, request: string): Promise<TaskHandle> {
-    const controller = new AbortController();
-
-    // Hard timeout: kill the task if it exceeds the budget
-    const timer = setTimeout(
-      () => controller.abort(new AdapterError(
-        `Task exceeded ${this.config.maxTaskDurationMs}ms`,
-        "TIMEOUT",
-        false
-      )),
-      this.config.maxTaskDurationMs  // default: 15 minutes
-    );
-
-    try {
-      const handle = await this.adapter.dispatch(
-        taskId,
-        request,
-        this.buildSystemContext(taskId),
-        controller.signal
-      );
-      return handle;
-    } finally {
-      // Note: timer is NOT cleared here. It continues running and will
-      // abort the task if it's still going after the deadline.
-      // It IS cleared when subscribe() yields a terminal state.
-    }
-  }
-}
-
 interface DispatchConfig {
-  /** Max time a single task can run before forced cancellation. Default: 900000 (15 min). */
+  /** Max wall-clock per task. Default 900_000 (15 min). */
   maxTaskDurationMs: number;
-  /** Max time to wait for agent to become reachable. Default: 10000 (10s). */
+  /** Max time to wait for agent to become reachable. Default 10_000. */
   healthCheckTimeoutMs: number;
-  /** Max time between status updates before declaring the agent stalled. Default: 120000 (2 min). */
-  stallTimeoutMs: number;
+  /** User-configured clarification timeout mode. */
+  clarificationTimeoutMode: "best_judgment" | "pause_indefinitely";
+  /** Default 300_000 (5 min); ignored in pause_indefinitely mode. */
+  clarificationTimeoutMs: number;
 }
 ```
 
 ---
 
-## 3. OpenClaw Adapter
+## 4. Task Lifecycle
 
-### 3.1 Connection
+### 4.1 State machine
 
-The OpenClaw adapter connects to a locally-running OpenClaw gateway. Two modes:
+```
+          ┌──────────┐
+submit -->│  queued  │
+          └────┬─────┘
+               │ scheduler picks task, adapter.dispatch()
+               ▼
+          ┌──────────┐      agent calls anyclaw_ask_user
+          │ working  │◄────────────┐
+          └────┬─────┘             │
+               │                   │
+     agent asks│question       user│answers
+               ▼                   │
+          ┌────────────┐           │
+          │ clarifying │───────────┘
+          └────┬───────┘
+               │ agent calls anyclaw_deploy
+               ▼
+          ┌───────────┐
+          │ deploying │
+          └────┬──────┘
+               │
+        ┌──────┴──────┐
+        ▼             ▼
+   ┌────────┐    ┌────────┐
+   │  done  │    │ failed │
+   └────────┘    └────────┘
 
-1. **Existing install (plugin mode).** The user already runs OpenClaw on the same host. The adapter connects to it at `ws://127.0.0.1:18789` (configurable via `OPENCLAW_GATEWAY_PORT`).
-2. **Bundled install (standalone mode).** The AnyClaw installer set up OpenClaw as another supervised process on the same host. The adapter connects the same way -- it is just loopback regardless.
+   cancel() from any non-terminal state → cancelled
+```
 
-There is no cross-container networking. The WebSocket goes over loopback on a single host. Protocol version 3.
+Terminal states: `done`, `failed`, `cancelled`. Once a task reaches a terminal state, its row in `tasks` is immutable.
 
-**Handshake sequence:**
+### 4.2 Exact transitions
+
+| From | Event | To | Side effect |
+|------|-------|----|----|
+| (none) | `POST /api/tasks` with new UUID | `queued` | Row inserted in `tasks`, push to `task_queue`. |
+| (none) | `POST /api/tasks` with existing UUID | (no-op) | Idempotent upsert returns current status. |
+| `queued` | Scheduler picks task | `working` | Create worktree, spawn adapter. |
+| `working` | `anyclaw_ask_user` tool called | `clarifying` | Write to `task_clarifications`, push notification. |
+| `clarifying` | Answer written via REST | `working` | Tool resolves, agent continues. |
+| `working` | `anyclaw_deploy` tool called | `deploying` | Progress event. |
+| `deploying` | Validation pass + git merge + prod copy | `done` | Merge worktree branch to `main`, delete worktree. |
+| `deploying` | Validation fail | `failed` | Delete worktree, leave `main` untouched. |
+| any non-terminal | `POST /api/tasks/:id/cancel` | `cancelled` | SIGTERM agent, delete worktree. |
+| any non-terminal | Wall-clock > `maxTaskDurationMs` | `failed` | SIGKILL agent, delete worktree, error = "task_timeout". |
+| `working`/`deploying` | Dispatch server restart, no running subprocess | `failed` | Error = "server_restart". See 4.4. |
+| `clarifying` | Dispatch server restart | `clarifying` | Preserved; resumed from persisted question. |
+
+### 4.3 Exactly-once delivery (locked decision #40)
+
+1. **Client generates the task UUID** in the mobile app. This is the idempotency key.
+2. `POST /api/tasks { taskId, request }` is an **idempotent upsert** against `tasks.taskId` (unique index). A retried submission returns the existing row unchanged.
+3. On dispatch-server startup, any task row in state `working` or `deploying` **without a currently running subprocess** is atomically moved to `failed` with `error = "server_restart"`. The mobile app sees the terminal state and can resubmit under a new UUID.
+4. Tasks in `queued` or `clarifying` are not touched by the startup sweep (they have no subprocess; they are resumed normally).
+
+The user can always retry a failed task by re-submitting with a new UUID. No instruction is lost; no instruction is duplicated.
+
+### 4.4 Server restart sweep
+
+```typescript
+async function sweepOnStartup(pb: PocketBase): Promise<void> {
+  // Move in-flight tasks to failed. They had subprocesses; those subprocesses
+  // died when we did.
+  await pb.collection("tasks").update(
+    'state = "working" || state = "deploying"',
+    { state: "failed", error: "server_restart" }
+  );
+}
+```
+
+Tasks in `clarifying` are handled by the resume logic in Section 6.
+
+---
+
+## 5. Worktree-Per-Task (Locked Decision #36)
+
+Each task runs in its own git worktree. This gives full isolation from day one and makes future parallelization a scheduler change.
+
+### 5.1 Layout
+
+```
+dev/                              # main git repo (branch: main)
+├── src/ ...                      # canonical working tree
+└── .worktrees/
+    ├── task-a7f3e8c1/            # worktree for task a7f3e8c1 (branch: task/a7f3e8c1)
+    │   └── src/ ...
+    └── task-d2b9f0a5/             # worktree for task d2b9f0a5 (branch: task/d2b9f0a5)
+        └── src/ ...
+```
+
+For MVP there is at most one worktree active at a time (single-task queue). The directory structure is already prepared for concurrent tasks.
+
+### 5.2 Create / merge / cleanup
+
+```typescript
+class WorktreeManager {
+  constructor(private devRoot: string) {}
+
+  async create(taskId: string): Promise<string> {
+    const branch = `task/${taskId}`;
+    const path = join(this.devRoot, ".worktrees", `task-${taskId}`);
+    await exec(`git -C "${this.devRoot}" worktree add -b ${branch} "${path}" main`);
+    return path;
+  }
+
+  /** On successful deploy: fast-forward or merge the worktree branch into main, then remove it. */
+  async mergeAndRemove(taskId: string): Promise<void> {
+    const branch = `task/${taskId}`;
+    const path = join(this.devRoot, ".worktrees", `task-${taskId}`);
+
+    // The agent has already committed in the worktree (either directly or via anyclaw_deploy).
+    await exec(`git -C "${this.devRoot}" merge --ff-only ${branch}`);
+    await exec(`git -C "${this.devRoot}" worktree remove "${path}"`);
+    await exec(`git -C "${this.devRoot}" branch -d ${branch}`);
+  }
+
+  /** On failure/cancel: drop the worktree and delete the branch. main stays untouched. */
+  async discard(taskId: string): Promise<void> {
+    const branch = `task/${taskId}`;
+    const path = join(this.devRoot, ".worktrees", `task-${taskId}`);
+    await exec(`git -C "${this.devRoot}" worktree remove --force "${path}"`).catch(() => {});
+    await exec(`git -C "${this.devRoot}" branch -D ${branch}`).catch(() => {});
+  }
+}
+```
+
+### 5.3 Merge flow on successful deploy
+
+Triggered inside the `anyclaw_deploy` MCP tool handler (part of Plan 2):
+
+1. Run validation in the worktree (lint, typecheck, build, smoke tests).
+2. Snapshot the DB (`anyclaw_snapshot_db`).
+3. Commit staged changes in the worktree (`git commit` on `task/<id>`).
+4. `WorktreeManager.mergeAndRemove(taskId)` -- fast-forward `main`.
+5. Copy built artifacts to the prod static directory.
+6. `systemctl --user restart anyclaw-logic` (decision #28).
+7. Emit terminal `done` status with the version description.
+
+If any step fails, the deploy tool throws; the adapter marks the task `failed` and the manager calls `WorktreeManager.discard(taskId)`. `main` and prod are never touched.
+
+### 5.4 Merge conflicts
+
+Impossible under MVP (sequential). When parallelism ships, a dedicated "merge agent" handles conflicts (decision #37). Not part of this plan.
+
+---
+
+## 6. Resource Limits (Locked Decision #26)
+
+Resource limits are **deferred** for MVP. The interface is in place so limits can be added without changing adapters. The MVP implementation is a no-op.
+
+```typescript
+interface ResourceLimits {
+  /** Called before the child is spawned. Returns an opaque handle placed in
+   *  SystemContext.resourceLimitHandle, or null if limits are disabled. */
+  prepare(taskId: string, config: ResourceLimitConfig): Promise<string | null>;
+
+  /** Called immediately after spawn to place the PID into the group. No-op if
+   *  prepare returned null. */
+  apply(pid: number, handle: string): Promise<void>;
+
+  /** Called when the task completes. Cleans up the cgroup / Job Object. */
+  release(handle: string): Promise<void>;
+}
+
+interface ResourceLimitConfig {
+  cpuQuotaPercent: number;    // e.g. 200 = 2 cores
+  memoryMaxMb: number;
+  pidsMax?: number;
+}
+
+/** MVP implementation: no-op. */
+class NoopResourceLimits implements ResourceLimits {
+  async prepare() { return null; }
+  async apply() {}
+  async release() {}
+}
+```
+
+Post-MVP, real implementations will target:
+- Linux: `systemd-run --user --scope -p CPUQuota=... -p MemoryMax=...` (decision #25 chose systemd user mode).
+- Windows: Job Objects via native addon.
+- macOS: `setrlimit` preload + wall-clock cap.
+
+The adapters and manager already pass the handle through; enabling limits later is a config flip.
+
+---
+
+## 7. OpenClaw Adapter
+
+### 7.1 Connection
+
+Connects to a locally-running OpenClaw gateway at `ws://127.0.0.1:18789` over loopback. Two modes are the same code path: the user's existing install or an AnyClaw-bundled supervised process. Protocol version 3.
+
+**Handshake:**
 
 ```
 Gateway --> Client:  { type: "event", event: "connect.challenge", payload: { nonce, ts } }
@@ -304,14 +427,14 @@ Client  --> Gateway: { type: "req", id: "1", method: "connect", params: {
                          client: { name: "anyclaw-adapter", version: "1.0.0" },
                          role: "operator",
                          scopes: ["operator.read", "operator.write"],
-                         auth: { token: process.env.OPENCLAW_GATEWAY_TOKEN }
+                         auth: { token: OPENCLAW_GATEWAY_TOKEN }
                        }}
-Gateway --> Client:  { type: "res", id: "1", ok: true, payload: { ... hello-ok ... } }
+Gateway --> Client:  { type: "res", id: "1", ok: true, payload: { ...hello... } }
 ```
 
-### 3.2 Task Dispatch
+The token is stored AES-256-GCM-encrypted in PocketBase (`settings.openclawConfig.gatewayToken`) and decrypted at adapter construction time.
 
-Tasks are submitted using `chat.send`, which creates or continues a session:
+### 7.2 Implementation
 
 ```typescript
 import WebSocket from "ws";
@@ -320,130 +443,91 @@ class OpenClawAdapter implements AgentAdapter {
   readonly name = "OpenClaw";
   private ws: WebSocket | null = null;
   private reqId = 0;
-  private pendingRpcs = new Map<string, {
-    resolve: (payload: any) => void;
-    reject: (err: Error) => void;
-  }>();
+  private pendingRpcs = new Map<string, { resolve: (p: any) => void; reject: (e: Error) => void }>();
   private eventListeners = new Map<string, Set<(payload: any) => void>>();
 
   constructor(private config: {
-    gatewayUrl: string;   // default: "ws://127.0.0.1:18789"
-    token: string;        // OPENCLAW_GATEWAY_TOKEN (decrypted from PocketBase)
-    workspace: string;    // OpenClaw workspace name for AnyClaw tasks
+    gatewayUrl: string;   // "ws://127.0.0.1:18789"
+    token: string;        // decrypted from PocketBase
+    workspace: string;    // OpenClaw workspace for AnyClaw tasks
   }) {}
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {
-    try {
-      await this.ensureConnected();
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, detail: String(err) };
-    }
+    try { await this.ensureConnected(); return { ok: true }; }
+    catch (err) { return { ok: false, detail: String(err) }; }
   }
 
-  async dispatch(
-    taskId: string,
-    request: string,
-    systemContext: SystemContext,
-    signal: AbortSignal
-  ): Promise<TaskHandle> {
+  async dispatch(taskId: string, request: string, ctx: SystemContext, signal: AbortSignal): Promise<TaskHandle> {
     await this.ensureConnected();
-
-    // Send the task as a chat message in the AnyClaw workspace.
-    // The system prompt (loaded via OpenClaw skills) instructs the agent
-    // to use anyclaw_* MCP tools reachable at systemContext.mcpEndpointUrl.
     const res = await this.rpc("chat.send", {
       workspace: this.config.workspace,
       message: { role: "user", content: request },
       idempotencyKey: taskId,
       metadata: {
         anyClawTaskId: taskId,
-        mcpEndpointUrl: systemContext.mcpEndpointUrl,
-        cwd: systemContext.cwd,
+        mcpEndpointUrl: ctx.mcpEndpointUrl,
+        cwd: ctx.cwd,
       }
     }, signal);
-
     return { taskId, adapterRef: res.runId };
   }
 
   async *subscribe(handle: TaskHandle, signal: AbortSignal): AsyncIterable<TaskStatus> {
     await this.ensureConnected();
     let seq = 0;
-
     await this.rpc("sessions.subscribe", { runId: handle.adapterRef }, signal);
 
-    const statusQueue = new AsyncQueue<TaskStatus>();
-
+    const queue = new AsyncQueue<TaskStatus>();
     const onEvent = (payload: any) => {
-      const status = this.mapGatewayEventToStatus(payload, ++seq);
-      if (status) statusQueue.push(status);
-      if (status && isTerminal(status.state)) statusQueue.close();
+      const status = this.mapEventToStatus(payload, ++seq);
+      if (status) queue.push(status);
+      if (status && isTerminal(status.state)) queue.close();
     };
-
     this.addEventListener("session.message", onEvent);
     this.addEventListener("session.tool", onEvent);
 
     signal.addEventListener("abort", () => {
-      statusQueue.push({
-        state: "cancelled", seq: ++seq,
-        updatedAt: new Date().toISOString()
-      });
-      statusQueue.close();
+      queue.push({ state: "cancelled", seq: ++seq, updatedAt: new Date().toISOString() });
+      queue.close();
     });
 
     try {
-      for await (const status of statusQueue) {
-        yield status;
-      }
+      for await (const status of queue) yield status;
     } finally {
       this.removeEventListener("session.message", onEvent);
       this.removeEventListener("session.tool", onEvent);
     }
   }
 
-  async answerQuestion(handle: TaskHandle, answer: string): Promise<void> {
-    // No-op at the adapter level: the answer is written to PocketBase by
-    // the dispatch REST handler and picked up by the anyclaw_ask_user MCP
-    // tool via PocketBase realtime subscription. The OpenClaw gateway
-    // doesn't need to be notified -- the MCP tool blocking call resolves
-    // and the agent continues.
-  }
+  /** No-op: the answer is picked up by anyclaw_ask_user blocking inside the
+   *  dispatch server process via PocketBase realtime. */
+  async answerQuestion(): Promise<void> {}
 
   async cancel(handle: TaskHandle): Promise<void> {
-    await this.rpc("sessions.abort", {
-      runId: handle.adapterRef
-    }, AbortSignal.timeout(10_000));
+    await this.rpc("sessions.abort", { runId: handle.adapterRef }, AbortSignal.timeout(10_000));
   }
 
-  async dispose(): Promise<void> {
-    this.ws?.close();
-    this.ws = null;
-  }
+  async dispose(): Promise<void> { this.ws?.close(); this.ws = null; }
 
-  // --- Internal helpers ---
+  // --- internals ---
 
   private async ensureConnected(): Promise<void> {
     if (this.ws?.readyState === WebSocket.OPEN) return;
-
     this.ws = new WebSocket(this.config.gatewayUrl);
     await new Promise<void>((resolve, reject) => {
       this.ws!.once("open", resolve);
       this.ws!.once("error", reject);
     });
-
     await this.performHandshake();
-
     this.ws.on("message", (data) => {
       const frame = JSON.parse(data.toString());
       if (frame.type === "res" && this.pendingRpcs.has(frame.id)) {
         const rpc = this.pendingRpcs.get(frame.id)!;
         this.pendingRpcs.delete(frame.id);
-        frame.ok ? rpc.resolve(frame.payload) : rpc.reject(
-          new AdapterError(frame.error?.message ?? "RPC failed", "INTERNAL", false)
-        );
+        frame.ok ? rpc.resolve(frame.payload)
+                 : rpc.reject(new AdapterError(frame.error?.message ?? "RPC failed", "INTERNAL", false));
       } else if (frame.type === "event") {
-        const listeners = this.eventListeners.get(frame.event);
-        listeners?.forEach(fn => fn(frame.payload));
+        this.eventListeners.get(frame.event)?.forEach(fn => fn(frame.payload));
       }
     });
   }
@@ -460,9 +544,8 @@ class OpenClawAdapter implements AgentAdapter {
     });
   }
 
-  private mapGatewayEventToStatus(payload: any, seq: number): TaskStatus | null {
+  private mapEventToStatus(payload: any, seq: number): TaskStatus | null {
     const now = new Date().toISOString();
-
     if (payload.type === "tool_call" && payload.tool === "anyclaw_ask_user") {
       return { state: "clarifying", question: payload.args?.question, seq, updatedAt: now };
     }
@@ -487,223 +570,200 @@ class OpenClawAdapter implements AgentAdapter {
   private removeEventListener(event: string, fn: (p: any) => void) {
     this.eventListeners.get(event)?.delete(fn);
   }
+
   private async performHandshake(): Promise<void> {
-    const challenge = await new Promise<any>((resolve) => {
-      this.addEventListener("connect.challenge", resolve);
-    });
+    const challenge = await new Promise<any>((resolve) => this.addEventListener("connect.challenge", resolve));
     await this.rpc("connect", {
-      minProtocol: 3,
-      maxProtocol: 3,
+      minProtocol: 3, maxProtocol: 3,
       client: { name: "anyclaw-adapter", version: "1.0.0" },
       role: "operator",
       scopes: ["operator.read", "operator.write"],
-      auth: { token: this.config.token }
+      auth: { token: this.config.token },
     }, AbortSignal.timeout(5_000));
   }
 }
 ```
 
-### 3.3 Multi-Turn Clarification via Gateway
-
-OpenClaw's gateway natively supports multi-turn conversation within a session. The flow:
-
-1. Adapter sends `chat.send` with the user's request. Gateway returns `{ runId, status: "accepted" }`.
-2. The agent's reasoning loop runs. If the agent calls the `anyclaw_ask_user` MCP tool, the tool handler (inside the dispatch/MCP server process) writes the question to PocketBase and blocks on a realtime subscription waiting for the answer record.
-3. The adapter detects the `session.tool` event for `anyclaw_ask_user` and yields a `TaskStatus` with `state: "clarifying"`.
-4. The mobile app shows the question. When the user replies, the mobile app calls the dispatch REST API, which writes the answer to PocketBase.
-5. The `anyclaw_ask_user` MCP tool handler (subscribed to PocketBase realtime) picks up the answer and returns it to the agent.
-6. The agent continues its reasoning loop.
-
-This design means clarification works identically for every adapter: the `anyclaw_ask_user` MCP tool is the universal mechanism. The adapter-specific part is only how the adapter *detects* that the tool was called (OpenClaw: gateway events; Claude Code: subprocess stream; Webhook: callback POST).
+Clarification works identically to Claude Code: the agent calls `anyclaw_ask_user` and the tool blocks inside the dispatch server waiting on PocketBase realtime. The OpenClaw adapter only needs to **surface** the tool call as a status update (so the mobile app shows the question); it doesn't handle the answer itself.
 
 ---
 
-## 4. Claude Code Adapter
+## 8. Claude Code Adapter (Locked Decision #3)
 
-### 4.1 Approach: CLI `-p` Mode (Locked Decision)
+### 8.1 Execution model
 
-The Claude Code adapter uses the CLI's `-p` (print) mode for MVP. The dispatch/MCP server spawns `claude -p <request>` as a **transient child process** using Node's `child_process.spawn`. The process runs to completion and exits; when it exits, the task is over. There is no long-lived claude daemon.
+The adapter spawns `claude -p <request>` as a transient child of the dispatch/MCP server using `child_process.spawn`. The process runs to completion and exits; there is no long-lived daemon.
 
-**Why CLI `-p` over the TypeScript SDK:** The `-p` flag is simpler to implement and debug. All clarification goes through the `anyclaw_ask_user` MCP tool (which blocks inside the dispatch server process, not the adapter), so the SDK's multi-turn `AsyncIterable<SDKUserMessage>` capability is not needed. The adapter's job is to spawn, monitor, and kill a child process. Upgrade to `@anthropic-ai/claude-agent-sdk` later if richer lifecycle control is needed.
+- `cwd = systemContext.cwd` (the per-task worktree).
+- Claude Code's native `Read`, `Write`, `Edit`, `Bash` tools operate directly on the worktree.
+- `--mcp-config` points at a per-task JSON file that includes the loopback MCP URL and a per-task bearer token.
+- `--allowedTools` is scoped to the tools the adapter wants to permit without prompts.
+- `ANTHROPIC_API_KEY` is decrypted from PocketBase (`settings.claudeCodeConfig.apiKey`) and injected into `env`. Not in the environment of the dispatch server itself.
+- After spawn, the PID is placed into the per-task resource-limit handle (no-op for MVP).
 
-**Execution model:**
-
-- The child process is spawned with `cwd: systemContext.cwd`, which points at the agent workspace (`dev/`).
-- Claude Code's built-in `Read`, `Write`, `Edit`, `Bash` tools operate **natively** on the `dev/` directory. There is no sandbox proxy; the agent's own tools are what do file edits and shell commands.
-- The AnyClaw MCP server (running in the same dispatch/MCP server process that spawned the child) is reachable at `systemContext.mcpEndpointUrl` on loopback. The adapter writes a small MCP config file per task (`~/.anyclaw/tmp/mcp-<taskId>.json`) that points Claude Code at that endpoint, and passes it via `--mcp-config`.
-- **cgroup / resource limits (locked decision).** Before spawning, the AdapterManager creates a per-task cgroup (Linux) or Job Object (Windows) with CPU and memory caps, and places the child PID into it immediately after spawn. This prevents a runaway agent from starving PocketBase, the tunnel manager, or the dispatch server itself. On macOS (no cgroups), the adapter falls back to `ulimit`-style `resource.setrlimit` via a small preload shim plus wall-clock timeouts.
-- **Path write protection.** The dispatch/MCP server's own source files live in `.anyclaw/` and are not inside `dev/`. The agent cannot reach them with its own file tools because its `cwd` is `dev/` and the `anyclaw_write_file` MCP tool rejects paths that escape `dev/`. A bad agent can still crash its own process, but it cannot modify the dispatch server or PocketBase.
-
-### 4.2 Implementation
+### 8.2 Implementation
 
 ```typescript
 import { spawn, ChildProcess } from "child_process";
 import { writeFile } from "fs/promises";
-import { join } from "path";
 
 class ClaudeCodeAdapter implements AgentAdapter {
   readonly name = "Claude Code";
-  private activeProcesses = new Map<string, {
+  private active = new Map<string, {
     proc: ChildProcess;
     status: TaskStatus;
-    sessionId?: string;  // Claude Code session ID for resume
+    sessionId?: string;   // Claude Code session ID (for --resume)
   }>();
 
   constructor(private config: {
-    /** Path to claude binary. Default: "claude" (from PATH). */
-    executablePath: string;
-    /** Model override, e.g. "claude-sonnet-4-20250514". */
+    executablePath: string;          // default "claude"
     model?: string;
-    /** Max budget per task in USD. Default: 5.00 */
-    maxBudgetUsd: number;
-    /** Function that applies the per-task cgroup/JobObject to a PID. */
+    maxBudgetUsd: number;            // default 5.00
     applyResourceLimits: (pid: number, handle: string) => Promise<void>;
+    getApiKey: () => Promise<string>;
   }) {}
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {
     try {
-      const proc = spawn(this.config.executablePath, [
-        "-p", "Reply with OK",
-        "--max-turns", "1",
-        "--output-format", "json"
-      ], { timeout: 10_000 });
-
-      const result = await collectStdout(proc);
-      return { ok: result.includes("OK") };
-    } catch (err) {
-      return { ok: false, detail: String(err) };
-    }
+      const proc = spawn(this.config.executablePath,
+        ["-p", "Reply with OK", "--max-turns", "1", "--output-format", "json"],
+        { timeout: 10_000 });
+      const out = await collectStdout(proc);
+      return { ok: out.includes("OK") };
+    } catch (err) { return { ok: false, detail: String(err) }; }
   }
 
-  async dispatch(
-    taskId: string,
-    request: string,
-    systemContext: SystemContext,
-    signal: AbortSignal
-  ): Promise<TaskHandle> {
-    // Write a per-task MCP config file pointing claude at our loopback endpoint.
-    const mcpConfig = {
+  async dispatch(taskId: string, request: string, ctx: SystemContext, signal: AbortSignal): Promise<TaskHandle> {
+    // Write per-task MCP config
+    await writeFile(ctx.mcpConfigPath, JSON.stringify({
       mcpServers: {
         anyclaw: {
           type: "http",
-          url: systemContext.mcpEndpointUrl,
-          headers: { "x-anyclaw-task-id": taskId }
-        }
-      }
-    };
-    await writeFile(systemContext.mcpConfigPath, JSON.stringify(mcpConfig));
+          url: ctx.mcpEndpointUrl,
+          headers: {
+            "x-anyclaw-task-id": taskId,
+            "authorization": `Bearer ${ctx.mcpBearerToken}`,
+          },
+        },
+      },
+    }));
 
     const args = [
       "-p", request,
       "--output-format", "stream-json",
-      "--mcp-config", systemContext.mcpConfigPath,
-      "--allowedTools", systemContext.allowedTools.join(","),
+      "--mcp-config", ctx.mcpConfigPath,
+      "--allowedTools", ctx.allowedTools.join(","),
       "--max-budget", String(this.config.maxBudgetUsd),
     ];
     if (this.config.model) args.push("--model", this.config.model);
 
-    const apiKey = await this.getApiKey();
-
     const proc = spawn(this.config.executablePath, args, {
-      cwd: systemContext.cwd,  // always the dev/ directory
+      cwd: ctx.cwd,
       env: {
         ...process.env,
-        ANTHROPIC_API_KEY: apiKey,
+        ANTHROPIC_API_KEY: await this.config.getApiKey(),
         ANYCLAW_TASK_ID: taskId,
-        ANYCLAW_MCP_URL: systemContext.mcpEndpointUrl,
+        ANYCLAW_MCP_URL: ctx.mcpEndpointUrl,
+        ANYCLAW_MCP_TOKEN: ctx.mcpBearerToken,
       },
-      signal
+      signal,
     });
 
-    // Place the child into its per-task resource limit group immediately.
-    if (systemContext.resourceLimitHandle && proc.pid) {
-      await this.config.applyResourceLimits(proc.pid, systemContext.resourceLimitHandle);
+    if (ctx.resourceLimitHandle && proc.pid) {
+      await this.config.applyResourceLimits(proc.pid, ctx.resourceLimitHandle);
     }
 
     const session = {
       proc,
-      status: {
-        state: "working" as TaskState,
-        seq: 0,
-        updatedAt: new Date().toISOString()
-      } as TaskStatus,
-      sessionId: undefined as string | undefined
+      status: { state: "working" as TaskState, seq: 0, updatedAt: new Date().toISOString() } as TaskStatus,
+      sessionId: undefined as string | undefined,
     };
-    this.activeProcesses.set(taskId, session);
-
-    this.consumeOutputStream(taskId);
+    this.active.set(taskId, session);
+    this.consumeOutput(taskId);
     return { taskId, adapterRef: taskId };
   }
 
   async *subscribe(handle: TaskHandle, signal: AbortSignal): AsyncIterable<TaskStatus> {
-    const session = this.activeProcesses.get(handle.taskId);
+    const session = this.active.get(handle.taskId);
     if (!session) throw new AdapterError("Task not found", "TASK_NOT_FOUND", false);
 
-    const statusQueue = new AsyncQueue<TaskStatus>();
-    statusQueue.push(session.status);
+    const queue = new AsyncQueue<TaskStatus>();
+    queue.push(session.status);
 
     const watcher = setInterval(() => {
-      const s = this.activeProcesses.get(handle.taskId);
-      if (s && s.status.seq > (statusQueue.lastSeq ?? -1)) {
-        statusQueue.push(s.status);
-        if (isTerminal(s.status.state)) {
-          statusQueue.close();
-          clearInterval(watcher);
-        }
+      const s = this.active.get(handle.taskId);
+      if (s && s.status.seq > (queue.lastSeq ?? -1)) {
+        queue.push(s.status);
+        if (isTerminal(s.status.state)) { queue.close(); clearInterval(watcher); }
       }
     }, 500);
 
-    signal.addEventListener("abort", () => {
-      clearInterval(watcher);
-      statusQueue.close();
-    });
+    signal.addEventListener("abort", () => { clearInterval(watcher); queue.close(); });
 
-    for await (const status of statusQueue) {
-      yield status;
-    }
+    for await (const status of queue) yield status;
   }
 
-  async answerQuestion(handle: TaskHandle, answer: string): Promise<void> {
-    // No-op at the adapter level. The anyclaw_ask_user MCP tool (blocking
-    // inside the same dispatch/MCP server process) picks up the answer via
-    // PocketBase realtime as soon as the REST handler writes it.
+  async answerQuestion(): Promise<void> {
+    // No-op. anyclaw_ask_user picks up answers via PocketBase realtime in-process.
   }
 
   async cancel(handle: TaskHandle): Promise<void> {
-    const session = this.activeProcesses.get(handle.taskId);
-    if (!session || session.proc.killed) return;
-    session.proc.kill("SIGTERM");
-    setTimeout(() => {
-      if (!session.proc.killed) session.proc.kill("SIGKILL");
-    }, 5000);
+    const s = this.active.get(handle.taskId);
+    if (!s || s.proc.killed) return;
+    s.proc.kill("SIGTERM");
+    setTimeout(() => { if (!s.proc.killed) s.proc.kill("SIGKILL"); }, 5000);
+  }
+
+  async resumeTask(taskId: string, sessionId: string, ctx: SystemContext, signal: AbortSignal): Promise<TaskHandle> {
+    const args = [
+      "-p", "--resume", sessionId,
+      "--output-format", "stream-json",
+      "--mcp-config", ctx.mcpConfigPath,
+      "--allowedTools", ctx.allowedTools.join(","),
+    ];
+    const proc = spawn(this.config.executablePath, args, {
+      cwd: ctx.cwd,
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: await this.config.getApiKey(),
+        ANYCLAW_TASK_ID: taskId,
+        ANYCLAW_MCP_URL: ctx.mcpEndpointUrl,
+        ANYCLAW_MCP_TOKEN: ctx.mcpBearerToken,
+      },
+      signal,
+    });
+    if (ctx.resourceLimitHandle && proc.pid) {
+      await this.config.applyResourceLimits(proc.pid, ctx.resourceLimitHandle);
+    }
+    this.active.set(taskId, {
+      proc,
+      status: { state: "working", progressSummary: "Resuming after restart...", seq: 0, updatedAt: new Date().toISOString() },
+      sessionId,
+    });
+    this.consumeOutput(taskId);
+    return { taskId, adapterRef: taskId };
   }
 
   async dispose(): Promise<void> {
-    for (const [, session] of this.activeProcesses) {
-      if (!session.proc.killed) session.proc.kill("SIGTERM");
-    }
-    this.activeProcesses.clear();
+    for (const [, s] of this.active) if (!s.proc.killed) s.proc.kill("SIGTERM");
+    this.active.clear();
   }
 
-  // --- Internal ---
+  // --- internal ---
 
-  private async consumeOutputStream(taskId: string): Promise<void> {
-    const session = this.activeProcesses.get(taskId);
+  private async consumeOutput(taskId: string): Promise<void> {
+    const session = this.active.get(taskId);
     if (!session) return;
-
     const rl = createReadlineInterface(session.proc.stdout!);
-
     try {
       for await (const line of rl) {
         const event = JSON.parse(line);
-        this.updateStatusFromStreamEvent(taskId, event);
-
+        this.updateStatusFromEvent(taskId, event);
         if (event.type === "system" && event.session_id) {
           session.sessionId = event.session_id;
-          await this.persistSessionId(taskId, event.session_id);
+          await persistSessionId(taskId, event.session_id);
         }
       }
-
       const exitCode = await waitForExit(session.proc);
       if (!isTerminal(session.status.state)) {
         session.status = exitCode === 0
@@ -711,316 +771,191 @@ class ClaudeCodeAdapter implements AgentAdapter {
           : { state: "failed", error: `claude exited with code ${exitCode}`, seq: ++session.status.seq, updatedAt: new Date().toISOString() };
       }
     } catch (err) {
-      session.status = {
-        state: "failed",
-        error: String(err),
-        seq: ++session.status.seq,
-        updatedAt: new Date().toISOString()
-      };
+      session.status = { state: "failed", error: String(err), seq: ++session.status.seq, updatedAt: new Date().toISOString() };
     } finally {
-      await this.persistTaskState(taskId, session.status);
-      // Drop the slot after a grace period so late subscribers can still read the final status.
-      setTimeout(() => this.activeProcesses.delete(taskId), 5 * 60 * 1000);
+      await persistTaskStatus(taskId, session.status);
+      setTimeout(() => this.active.delete(taskId), 5 * 60 * 1000);
     }
   }
 
-  private updateStatusFromStreamEvent(taskId: string, event: any): void {
-    const session = this.activeProcesses.get(taskId);
+  private updateStatusFromEvent(taskId: string, event: any): void {
+    const session = this.active.get(taskId);
     if (!session) return;
     const now = new Date().toISOString();
     const seq = ++session.status.seq;
 
     if (event.type === "assistant" && event.message?.content) {
       for (const block of event.message.content) {
-        if (block.type === "tool_use") {
-          if (block.name === "anyclaw_ask_user") {
-            session.status = { state: "clarifying", question: block.input?.question, seq, updatedAt: now };
-            return;
-          }
-          if (block.name === "anyclaw_deploy") {
-            session.status = { state: "deploying", progressSummary: "Running validation and deploying...", seq, updatedAt: now };
-            return;
-          }
-          if (block.name === "anyclaw_update_progress") {
-            session.status = { state: "working", progressSummary: block.input?.message, seq, updatedAt: now };
-            return;
-          }
+        if (block.type !== "tool_use") continue;
+        if (block.name === "anyclaw_ask_user") {
+          session.status = { state: "clarifying", question: block.input?.question, seq, updatedAt: now };
+          return;
+        }
+        if (block.name === "anyclaw_deploy") {
+          session.status = { state: "deploying", progressSummary: "Running validation and deploying...", seq, updatedAt: now };
+          return;
+        }
+        if (block.name === "anyclaw_update_progress") {
+          session.status = { state: "working", progressSummary: block.input?.message, seq, updatedAt: now };
+          return;
         }
       }
     }
-
     if (event.type === "result") {
       session.status = { state: "done", versionDescription: event.result, seq, updatedAt: now };
     }
   }
-
-  /**
-   * Resume a task after dispatch-server restart by re-spawning claude with --resume.
-   * Claude Code maintains its session state in its own directory (~/.claude/) which
-   * is on the host filesystem and survives dispatch-server restarts naturally.
-   */
-  async resumeTask(
-    taskId: string,
-    sessionId: string,
-    systemContext: SystemContext,
-    signal: AbortSignal
-  ): Promise<TaskHandle> {
-    const apiKey = await this.getApiKey();
-
-    const args = [
-      "-p", "--resume", sessionId,
-      "--output-format", "stream-json",
-      "--mcp-config", systemContext.mcpConfigPath,
-      "--allowedTools", systemContext.allowedTools.join(","),
-    ];
-
-    const proc = spawn(this.config.executablePath, args, {
-      cwd: systemContext.cwd,
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: apiKey,
-        ANYCLAW_TASK_ID: taskId,
-        ANYCLAW_MCP_URL: systemContext.mcpEndpointUrl,
-      },
-      signal
-    });
-
-    if (systemContext.resourceLimitHandle && proc.pid) {
-      await this.config.applyResourceLimits(proc.pid, systemContext.resourceLimitHandle);
-    }
-
-    const session = {
-      proc,
-      status: {
-        state: "working" as TaskState,
-        progressSummary: "Resuming after restart...",
-        seq: 0,
-        updatedAt: new Date().toISOString()
-      } as TaskStatus,
-      sessionId
-    };
-    this.activeProcesses.set(taskId, session);
-    this.consumeOutputStream(taskId);
-
-    return { taskId, adapterRef: taskId };
-  }
-
-  private async getApiKey(): Promise<string> {
-    const pb = getPocketBase();
-    const settings = await pb.collection("settings").getFirstListItem("");
-    return decrypt(settings.claudeCodeConfig.apiKey);
-  }
-
-  private async persistSessionId(taskId: string, sessionId: string): Promise<void> {
-    const pb = getPocketBase();
-    await pb.collection("tasks").update(taskId, { sessionId });
-  }
-
-  private async persistTaskState(taskId: string, status: TaskStatus): Promise<void> {
-    const pb = getPocketBase();
-    await pb.collection("tasks").update(taskId, {
-      state: status.state,
-      progressSummary: status.progressSummary,
-      versionDescription: status.versionDescription,
-      error: status.error,
-      seq: status.seq,
-    });
-  }
 }
 ```
 
-### 4.3 Key Design Decisions for Claude Code
+### 8.3 Per-task session persistence
 
-**CLI `-p` mode (locked decision).** The adapter spawns `claude -p <request>` as a child process with `--output-format stream-json` for progress tracking. This is simpler than the TypeScript SDK and sufficient for MVP because all clarification is handled by the `anyclaw_ask_user` MCP tool (blocking inside the dispatch/MCP server process, not the adapter).
-
-**Native execution in `dev/`.** The child process runs with `cwd` set to the agent workspace (`dev/`). Claude Code's built-in `Read`, `Write`, `Edit`, `Bash` tools operate directly on files there. There is no sandbox container and no MCP proxy for file I/O.
-
-**cgroup / JobObject resource limits (locked decision).** Every spawned agent child is placed into a per-task cgroup (Linux) or Job Object (Windows) that caps CPU and memory. This prevents runaway agents from starving the supervised processes. Macroscopic isolation (can't break the dispatch server) comes from the agent not being able to write outside `dev/`.
-
-**MCP server on loopback.** The dispatch/MCP server process hosts the MCP HTTP/SSE endpoint on localhost. The adapter writes a per-task MCP config file (`--mcp-config`) that points claude at `http://127.0.0.1:<port>/mcp` and includes the task ID as a header so the MCP tools can correlate calls to the right task.
-
-**Budget cap: `maxBudgetUsd`.** Passed via `--max-budget`. Prevents runaway token spend. Default $5 per task.
-
-**Task state persistence and resume (locked decision).** The adapter persists the Claude Code session ID to PocketBase as soon as it appears in the stream-json output. On dispatch-server restart, the AdapterManager queries PocketBase for any tasks in a non-terminal state and calls `resumeTask()` with the persisted session ID. Claude Code's `--resume <sessionId>` flag restores the conversation context from `~/.claude/` on the host filesystem (which is untouched by the dispatch server restart, since both live on the same host). See Section 6.5.
-
-**API key from PocketBase (locked decision).** The `ANTHROPIC_API_KEY` is stored encrypted in PocketBase (not in environment variables). The adapter decrypts it at dispatch time and injects it into the child's environment.
-
-### 4.4 Authentication
-
-Claude Code authenticates via the `ANTHROPIC_API_KEY` environment variable, injected into the child process from the encrypted PocketBase store. No browser OAuth. The user configures the key through the mobile app settings screen.
+Claude Code writes its session directory under `~/.claude/` on the host. That directory is outside the dispatch server and untouched by its restart. As soon as `stream-json` reports the `session_id`, the adapter persists it to `tasks.sessionId`. On restart, the AdapterManager calls `resumeTask(sessionId)` which re-spawns with `--resume <sessionId>` and the agent continues.
 
 ---
 
-## 5. Non-Interactive Mode Patterns for Other Agents
+## 9. Generic Webhook Adapter
 
-All other CLI-based adapters follow the same spawn-child-on-loopback model as Claude Code: the dispatch server spawns the agent binary with `cwd = dev/`, puts the PID into the per-task cgroup/JobObject, and points it at the loopback MCP endpoint.
+For agents without a subprocess interface or native SDK (custom harnesses, remote hosted agents). The contract:
 
-### 5.1 Codex CLI (OpenAI)
-
-```bash
-codex exec "Add a mood tracker page with trend charts" \
-  --approval-mode full-auto \
-  --jsonl
-```
-
-**Adapter strategy:** Spawn `codex exec` as a child process of the dispatch server. Parse the JSONL stdout stream for progress events. Clarification is handled via the `anyclaw_ask_user` MCP tool. Cancellation via `SIGTERM` on the child. Set a stall timeout in case quiet-mode prompts still block.
+**Dispatch request (server → agent):**
 
 ```typescript
-class CodexAdapter implements AgentAdapter {
-  readonly name = "Codex CLI";
-
-  async dispatch(
-    taskId: string,
-    request: string,
-    systemContext: SystemContext,
-    signal: AbortSignal
-  ): Promise<TaskHandle> {
-    const proc = spawn("codex", [
-      "exec", request,
-      "--approval-mode", "full-auto",
-      "--jsonl",
-      "--mcp-config", systemContext.mcpConfigPath
-    ], {
-      cwd: systemContext.cwd,
-      env: {
-        ...process.env,
-        CODEX_QUIET_MODE: "1",
-        ANYCLAW_TASK_ID: taskId,
-        ANYCLAW_MCP_URL: systemContext.mcpEndpointUrl,
-      },
-      signal
-    });
-
-    if (systemContext.resourceLimitHandle && proc.pid) {
-      await applyResourceLimits(proc.pid, systemContext.resourceLimitHandle);
-    }
-
-    this.activeProcesses.set(taskId, proc);
-    return { taskId, adapterRef: taskId };
-  }
-  // subscribe() parses proc.stdout JSONL stream
-  // cancel() sends SIGTERM to proc
-  // answerQuestion() writes to PocketBase; anyclaw_ask_user MCP tool picks it up
+POST {dispatchUrl}
+{
+  taskId: string,
+  request: string,
+  callbackUrl: string,           // where the agent POSTs events
+  mcpEndpointUrl: string,        // loopback-only; the agent must be on-host to use MCP
+  mcpBearerToken: string,
+  cwd: string,                   // per-task worktree path
 }
 ```
 
-### 5.2 Aider
-
-```bash
-aider --message "Add a mood tracker page" --yes --no-auto-commits
-```
-
-**Adapter strategy:** Spawn `aider` as a child process with `--message`. Aider does not currently support MCP, so clarification via `anyclaw_ask_user` requires a workaround: the adapter runs aider in a loop, parsing its stdout for question patterns.
-
-**Limitation:** Multi-turn clarification within a single aider session is not supported in non-interactive mode. The adapter would:
-1. Run the first prompt with `--message`.
-2. If the output contains a question pattern, surface it via the REST API.
-3. Run a second `aider --message <answer> --yes` in the same repo.
-
-### 5.3 Gemini CLI
-
-```bash
-gemini -p "Add a mood tracker page" --non-interactive
-```
-
-Same child-process + stdout-parsing pattern as Codex.
-
-### 5.4 Generic Pattern
-
-All subprocess adapters share this skeleton:
+**Callback events (agent → server):**
 
 ```typescript
-abstract class SubprocessAdapter implements AgentAdapter {
-  protected activeProcesses = new Map<string, ChildProcess>();
+POST {callbackUrl}
+{
+  taskId: string,
+  event: "progress" | "clarifying" | "deploying" | "done" | "failed",
+  progressSummary?: string,
+  question?: string,
+  versionDescription?: string,
+  error?: string,
+}
+```
 
-  protected abstract buildCommand(
-    request: string,
-    systemContext: SystemContext,
-    taskId: string
-  ): { command: string; args: string[]; env: Record<string, string> };
+**Cancel:**
 
-  protected abstract parseOutput(line: string): TaskStatus | null;
+```typescript
+DELETE {dispatchUrl}
+{ taskId: string }
+```
 
-  async dispatch(
-    taskId: string,
-    request: string,
-    systemContext: SystemContext,
-    signal: AbortSignal
-  ): Promise<TaskHandle> {
-    const { command, args, env } = this.buildCommand(request, systemContext, taskId);
-    const proc = spawn(command, args, {
-      cwd: systemContext.cwd,                // always the dev/ directory
-      env: { ...process.env, ...env },
-      signal
+**Implementation skeleton:**
+
+```typescript
+class WebhookAdapter implements AgentAdapter {
+  readonly name = "Webhook";
+
+  constructor(private config: {
+    dispatchUrl: string;
+    callbackBaseUrl: string;
+    authHeader?: string;
+  }) {}
+
+  async dispatch(taskId: string, request: string, ctx: SystemContext, signal: AbortSignal): Promise<TaskHandle> {
+    const res = await fetch(this.config.dispatchUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.config.authHeader ? { Authorization: this.config.authHeader } : {}),
+      },
+      body: JSON.stringify({
+        taskId,
+        request,
+        callbackUrl: `${this.config.callbackBaseUrl}/api/webhook/callback`,
+        mcpEndpointUrl: ctx.mcpEndpointUrl,
+        mcpBearerToken: ctx.mcpBearerToken,
+        cwd: ctx.cwd,
+      }),
+      signal,
     });
-
-    if (systemContext.resourceLimitHandle && proc.pid) {
-      await applyResourceLimits(proc.pid, systemContext.resourceLimitHandle);
+    if (!res.ok) {
+      throw new AdapterError(
+        `Webhook dispatch failed: ${res.status}`,
+        res.status === 401 ? "AUTH_FAILED" : "INTERNAL",
+        res.status >= 500
+      );
     }
+    const body = await res.json();
+    return { taskId, adapterRef: body.externalId ?? taskId };
+  }
 
-    this.activeProcesses.set(taskId, proc);
-    return { taskId, adapterRef: taskId };
+  async *subscribe(handle: TaskHandle, signal: AbortSignal): AsyncIterable<TaskStatus> {
+    // Implemented against a PocketBase realtime subscription on the
+    // tasks collection; the webhook callback handler writes rows that this
+    // subscription sees.
+    yield* subscribeToPocketBaseTaskStatus(handle.taskId, signal);
+  }
+
+  async answerQuestion(): Promise<void> {
+    // Answer is written by the REST handler; the remote agent reads it via
+    // anyclaw_ask_user or its own polling of the callback contract.
   }
 
   async cancel(handle: TaskHandle): Promise<void> {
-    const proc = this.activeProcesses.get(handle.taskId);
-    if (proc && !proc.killed) {
-      proc.kill("SIGTERM");
-      setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
-    }
+    await fetch(this.config.dispatchUrl, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.config.authHeader ? { Authorization: this.config.authHeader } : {}),
+      },
+      body: JSON.stringify({ taskId: handle.taskId }),
+    }).catch(() => {});
   }
 
-  async dispose(): Promise<void> {
-    for (const [, proc] of this.activeProcesses) {
-      if (!proc.killed) proc.kill("SIGTERM");
-    }
-    this.activeProcesses.clear();
-  }
+  async dispose(): Promise<void> {}
+  async healthCheck(): Promise<{ ok: boolean }> { return { ok: true }; }
 }
 ```
 
+The webhook callback endpoint (`POST /api/webhook/callback`) is a REST handler in the dispatch server that validates the `taskId`, maps the event to a `TaskStatus`, and writes to the `tasks` collection. PocketBase realtime fans out to the mobile app.
+
 ---
 
-## 6. Clarification Relay
+## 10. Clarification Relay
 
-The clarification relay is the hardest part of the dispatch layer. The agent is running as a child process on the host, the user is on a phone, and there may be seconds of network latency between them.
+### 10.1 The universal mechanism: `anyclaw_ask_user`
 
-### 6.1 The Universal Mechanism: `anyclaw_ask_user` MCP Tool
-
-Regardless of which adapter is active, the agent asks clarifying questions by calling the `anyclaw_ask_user` MCP tool. This tool is registered inside the dispatch/MCP server process (same process that owns the AdapterManager).
-
-The MCP tool does NOT communicate directly with the mobile app. Instead, it writes to PocketBase and waits for an answer:
+Regardless of adapter, clarification flows through the `anyclaw_ask_user` MCP tool. The tool is registered on the dispatch/MCP server's MCP endpoint -- the same process as the adapter.
 
 ```typescript
-// Registered on the dispatch/MCP server's MCP HTTP/SSE endpoint
 const askUserTool = tool(
   "anyclaw_ask_user",
   "Ask the user a clarifying question and wait for their answer",
   {
     question: z.string().describe("The question to ask the user"),
-    taskId: z.string().optional().describe("Task ID (injected from env/header if omitted)")
+    taskId: z.string().optional(),
   },
-  async ({ question, taskId: explicitTaskId }, ctx) => {
-    const taskId = explicitTaskId
+  async ({ question, taskId: explicit }, ctx) => {
+    const taskId = explicit
       ?? ctx.request.headers["x-anyclaw-task-id"]
       ?? process.env.ANYCLAW_TASK_ID;
     if (!taskId) throw new Error("No task ID available");
 
     const pb = getPocketBase();
-
     const record = await pb.collection("task_clarifications").create({
-      taskId,
-      question,
-      status: "pending",
-      answer: null
+      taskId, question, status: "pending", answer: null,
     });
 
     const settings = await pb.collection("settings").getFirstListItem("");
-    const timeoutMode = settings.dispatch?.clarificationTimeoutMode ?? "best_judgment";
-    const timeoutMs = settings.dispatch?.clarificationTimeoutMs ?? 300_000;
+    const mode: "best_judgment" | "pause_indefinitely"
+      = settings.dispatch?.clarificationTimeoutMode ?? "best_judgment";
+    const timeoutMs: number = settings.dispatch?.clarificationTimeoutMs ?? 300_000;
 
-    const answer = await waitForAnswer(pb, record.id, taskId, timeoutMs, timeoutMode);
-
+    const answer = await waitForAnswer(pb, record.id, timeoutMs, mode);
     return { content: [{ type: "text", text: answer }] };
   }
 );
@@ -1028,12 +963,11 @@ const askUserTool = tool(
 async function waitForAnswer(
   pb: PocketBase,
   clarificationId: string,
-  taskId: string,
   timeoutMs: number,
-  timeoutMode: "best_judgment" | "pause_indefinitely"
+  mode: "best_judgment" | "pause_indefinitely"
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timer = timeoutMode === "pause_indefinitely"
+    const timer = mode === "pause_indefinitely"
       ? null
       : setTimeout(() => {
           unsubscribe();
@@ -1052,62 +986,92 @@ async function waitForAnswer(
 }
 ```
 
-### 6.2 Full Communication Path
+### 10.2 End-to-end path
 
 ```
-Agent (child process) calls anyclaw_ask_user("Daily or multiple times per day?")
-    |  HTTP/SSE over loopback
-    v
-Dispatch/MCP server writes question to PocketBase task_clarifications
-    |  (PocketBase SSE realtime, loopback)
-    v
-Adapter detects the tool call (via gateway events or subprocess stream)
-    |
-    v
-Adapter updates TaskStatus to { state: "clarifying", question: "..." }
-    |  PocketBase Realtime SSE -> Tunnel Manager -> WSS -> Mobile app
-    v
-Mobile app shows question card
-    |  user types answer, REST POST via WSS -> Tunnel Manager -> Dispatch server
-    v
-Dispatch REST handler writes answer to PocketBase task_clarifications (status: "answered")
-    |  (PocketBase realtime subscription inside anyclaw_ask_user)
-    v
-anyclaw_ask_user() resolves with the answer text, MCP tool returns to agent
-    |
-    v
-Agent continues its reasoning loop
+Agent child process
+    │ calls anyclaw_ask_user(...)
+    │ HTTP/SSE loopback
+    ▼
+Dispatch/MCP server (anyclaw_ask_user handler)
+    │ insert task_clarifications row {status: pending}
+    ▼
+PocketBase (loopback)
+    │ realtime event
+    ▼
+Adapter sees tool_call "anyclaw_ask_user", yields TaskStatus {state: clarifying, question}
+    │ PocketBase realtime on tasks collection
+    ▼
+Tunnel Manager ─── WSS ───> Mobile app shows question
+                                │
+                                │ user answers
+                                ▼
+Mobile app ─── WSS ───> POST /api/tasks/:id/answer
+    │
+    ▼
+Dispatch REST handler updates task_clarifications {status: answered, answer}
+    │ PocketBase realtime
+    ▼
+anyclaw_ask_user resolves with answer text, MCP tool returns to agent
+    │
+    ▼
+Agent continues
 ```
 
-All hops inside the host are loopback. Only the user-facing hop goes through the tunnel.
+All hops inside the host are loopback. Only the user-facing hop traverses the tunnel.
 
-### 6.3 PocketBase Collections for Task State
+### 10.3 Clarification timeout (Locked Decision #2)
+
+User-configurable in `settings.dispatch`:
+
+- `clarificationTimeoutMode: "best_judgment"` (default) -- after `clarificationTimeoutMs` (default 300_000 / 5 min), the tool resolves with a canned `"The user is unavailable. Use your best judgment and proceed."` string. The agent then continues.
+- `clarificationTimeoutMode: "pause_indefinitely"` -- no timer is set. The tool waits forever. This is the "I want to review every question" mode.
+
+The mode is honored on resume as well: if the dispatch server restarts while an `anyclaw_ask_user` call is blocked, the fresh handler re-subscribes with the same mode.
+
+### 10.4 Push notifications
+
+When a task enters `clarifying`, the dispatch server sends a push notification:
 
 ```typescript
-// Collection: tasks
+if (newStatus.state === "clarifying" && newStatus.question) {
+  await pushNotifier.send("Agent has a question", newStatus.question);
+}
+```
+
+---
+
+## 11. Task Persistence & Resume
+
+### 11.1 PocketBase collections
+
+```typescript
+// tasks
 {
-  id: string;              // PocketBase auto-ID
-  taskId: string;          // AnyClaw UUID (indexed, unique)
+  id: string;                 // PB auto id
+  taskId: string;             // client UUID, unique index
   request: string;
   state: TaskState;
-  adapterType: string;     // "openclaw" | "claude-code" | "webhook"
+  adapterType: "openclaw" | "claude-code" | "webhook";
   adapterRef: string;
   progressSummary?: string;
   versionDescription?: string;
   error?: string;
   seq: number;
 
-  // --- Resume state ---
-  sessionId?: string;      // Agent session ID for resume
-  systemContext: string;   // JSON-serialized SystemContext used at dispatch time
-  conversationHistory?: string;  // JSON array of completed Q&A pairs
-  lastCheckpoint?: string;
+  // resume state
+  sessionId?: string;         // agent session ID (Claude Code, OpenClaw run, etc.)
+  systemContext: string;      // JSON-serialized SystemContext at dispatch time
+  worktreePath: string;       // absolute path to dev/.worktrees/task-<id>
+  lastCompletedStep?: string; // decision #38: agent-agnostic step tracker
+  filesModified?: string;     // JSON array
+  agentCheckpoint?: string;   // optional adapter-specific blob
 
   createdAt: string;
   updatedAt: string;
 }
 
-// Collection: task_clarifications
+// task_clarifications
 {
   id: string;
   taskId: string;
@@ -1118,7 +1082,7 @@ All hops inside the host are loopback. Only the user-facing hop goes through the
   updatedAt: string;
 }
 
-// Collection: task_activity_log
+// task_activity_log
 {
   id: string;
   taskId: string;
@@ -1128,231 +1092,227 @@ All hops inside the host are loopback. Only the user-facing hop goes through the
   createdAt: string;
 }
 
-// Collection: task_queue
-// Single active task + queue (locked decision).
+// task_queue -- single active task + queue
 {
   id: string;
   taskId: string;
-  priority: number;        // lower = higher priority
-  position: number;        // queue order
+  priority: number;
+  position: number;
   createdAt: string;
 }
 ```
 
-The mobile app subscribes to PocketBase realtime on the `tasks` collection (filtered by `taskId`) through the tunnel. PocketBase Realtime SSE + REST is the sole mobile<->server mechanism (locked decision). Task state survives app close/reopen.
+### 11.2 What gets persisted
 
-### 6.4 Push Notifications for Clarification
+1. **Task request** -- the original natural-language instruction.
+2. **System context** -- cwd (worktree path), MCP endpoint URL, allowed tools. Serialized as JSON.
+3. **Session ID** -- agent-specific resume identifier, written as soon as the adapter learns it.
+4. **Conversation history** -- completed Q&A pairs are in `task_clarifications`.
+5. **Worktree path** -- so `WorktreeManager` can clean up on failure during startup sweep.
 
-When a task enters `clarifying` state, the dispatch server sends a push notification to the mobile app:
-
-```typescript
-if (newStatus.state === "clarifying" && newStatus.question) {
-  await sendNotification("Agent has a question", newStatus.question);
-}
-```
-
-### 6.5 Task Persistence and Resume After Restart
-
-**Locked decision:** Task state is persisted to PocketBase with enough context to resume after the dispatch/MCP server restarts. Since the dispatch server is supervised (`restart=always`) it may restart independently from PocketBase or the tunnel manager.
-
-#### What Gets Persisted
-
-1. **Task request** -- original user request.
-2. **System context** -- cwd, MCP endpoint URL, allowed tools. JSON.
-3. **Session ID** -- agent session identifier (Claude Code session, OpenClaw run ID, webhook task ID).
-4. **Conversation history** -- completed clarification Q&A pairs.
-5. **Last checkpoint** -- adapter-specific.
-
-#### Resume Protocol on Startup
-
-When the dispatch server starts, the AdapterManager runs:
+### 11.3 Resume protocol on startup
 
 ```typescript
 class AdapterManager {
   async onStartup(): Promise<void> {
     const pb = getPocketBase();
 
-    // Any tasks that were in progress when the dispatch server was killed
-    // still have their agent child processes gone -- they died with us.
-    const activeTasks = await pb.collection("tasks").getFullList({
-      filter: 'state != "done" && state != "failed" && state != "cancelled"'
+    // First: exactly-once sweep. working/deploying tasks had subprocesses that
+    // died with us. Move them to failed; user can retry with a new UUID.
+    await pb.collection("tasks").update(
+      'state = "working" || state = "deploying"',
+      { state: "failed", error: "server_restart" }
+    );
+
+    // Clean up any orphaned worktrees for sweeped tasks.
+    const sweeped = await pb.collection("tasks").getFullList({
+      filter: 'state = "failed" && error = "server_restart"',
     });
+    for (const t of sweeped) await this.worktrees.discard(t.taskId);
 
-    for (const task of activeTasks) {
-      if (task.state === "queued") continue;  // just re-enter the queue
-
-      if (task.state === "clarifying") {
-        const pending = await pb.collection("task_clarifications").getFullList({
-          filter: `taskId = "${task.taskId}" && status = "pending"`
-        });
-        if (pending.length === 0) {
-          // Answer arrived while we were down. Resume.
-          await this.resumeTask(task);
-        }
-        // else: still waiting on the user. Mobile app will see it on reconnect.
-        continue;
+    // Resume clarifying tasks: the agent subprocess is gone, but the question
+    // is still valid. On answer, the agent is re-dispatched with Q&A history
+    // prepended (or --resume for Claude Code).
+    const clarifying = await pb.collection("tasks").getFullList({ filter: 'state = "clarifying"' });
+    for (const task of clarifying) {
+      const pending = await pb.collection("task_clarifications").getFullList({
+        filter: `taskId = "${task.taskId}" && status = "pending"`,
+      });
+      if (pending.length === 0) {
+        // Answer landed during downtime. Resume immediately.
+        await this.resumeTask(task);
       }
-
-      // state === "working" or "deploying"
-      if (task.sessionId) {
-        try {
-          await this.resumeTask(task);
-        } catch (err) {
-          await pb.collection("tasks").update(task.id, {
-            state: "failed",
-            error: `Failed to resume after restart: ${err}`
-          });
-        }
-      } else {
-        await pb.collection("tasks").update(task.id, {
-          state: "failed",
-          error: "Dispatch server restarted and task could not be resumed (no session ID)."
-        });
-      }
+      // else: still waiting on the user. Mobile will see it on reconnect.
     }
 
     this.processQueue();
   }
 
   private async resumeTask(task: TaskRecord): Promise<void> {
-    const systemContext: SystemContext = JSON.parse(task.systemContext);
-    switch (task.adapterType) {
-      case "claude-code": {
-        const adapter = this.adapter as ClaudeCodeAdapter;
-        await adapter.resumeTask(task.taskId, task.sessionId!, systemContext, this.createSignal(task.taskId));
-        break;
-      }
-      case "openclaw": {
-        const adapter = this.adapter as OpenClawAdapter;
-        await adapter.reconnectToRun(task.taskId, task.sessionId!);
-        break;
-      }
-      case "webhook": {
-        const adapter = this.adapter as WebhookAdapter;
-        await adapter.notifyResume(task.taskId);
-        break;
-      }
+    const ctx: SystemContext = JSON.parse(task.systemContext);
+    if (!this.adapter.resumeTask) {
+      await this.markFailed(task, "Adapter does not support resume");
+      return;
+    }
+    try {
+      await this.adapter.resumeTask(task.taskId, task.sessionId!, ctx, this.createSignal(task.taskId));
+    } catch (err) {
+      await this.markFailed(task, `Failed to resume after restart: ${err}`);
     }
   }
 }
 ```
 
-#### Resume Behavior Per Adapter
+### 11.4 Resume per adapter
 
-| Adapter | Resume mechanism | What the agent sees |
-|---------|-----------------|---------------------|
-| **Claude Code** | Spawn a fresh child with `claude -p --resume <sessionId>`. Claude Code's session directory `~/.claude/` lives on the host and is untouched by the dispatch-server restart. | Agent continues from where it left off. If it was mid-tool-call, the tool result may be lost and the agent retries the call. |
-| **OpenClaw** | Reconnect WebSocket to the OpenClaw process (still running on localhost if it's its own supervised process), re-subscribe to the existing `runId`. | If OpenClaw also restarted and lost the session, re-dispatch with conversation history prepended. |
-| **Webhook** | POST `{ taskId, action: "resume" }` to the configured dispatch URL. | External agent handles its own resume logic. |
+| Adapter | Resume mechanism | Agent experience |
+|---------|------------------|------------------|
+| **Claude Code** | Spawn `claude -p --resume <sessionId>` in the same worktree. `~/.claude/` persists across dispatch restarts. | Continues from last turn. If mid-tool-call, the result is lost; the agent re-tries. |
+| **OpenClaw** | Re-open the gateway WebSocket; re-subscribe to the existing `runId`. (OpenClaw gateway session persistence is deferred to post-MVP per decision #41; for now, best-effort reconnect.) | Reconnect if the gateway still has the run; otherwise marked failed. |
+| **Webhook** | `POST {dispatchUrl} { taskId, action: "resume" }`. External agent handles its own state. | Contract-defined. |
 
-#### Edge Cases
+### 11.5 "Pause indefinitely" across restart
 
-- **Resume fails:** Mark the task as `failed` with an explanatory error. User can retry from the mobile app.
-- **Agent was mid-deployment:** `anyclaw_deploy` is idempotent. Safe to retry.
-- **Answer arrived during downtime:** The answer record is in PocketBase. On resume, the freshly-spawned `anyclaw_ask_user` handler finds the answered record immediately.
+The scenario: user set `clarificationTimeoutMode = "pause_indefinitely"`, the agent asks a question, the user is AFK, the dispatch server is restarted by supervisord.
+
+- The `tasks` row is `clarifying`.
+- The `task_clarifications` row is `pending`.
+- The startup sweep does **not** touch `clarifying` tasks.
+- When the user eventually answers via `POST /api/tasks/:id/answer`, the handler writes the answer to `task_clarifications`.
+- An immediate follow-up step in the handler checks if the task's agent subprocess is alive. If not, it calls `resumeTask(task)` which re-spawns the agent with `--resume`. The freshly-spawned `anyclaw_ask_user` handler on that task sees the `answered` row immediately and resolves with the answer.
+
+No question is ever duplicated. No instruction is lost.
 
 ---
 
-## 7. REST API for Task Dispatch
+## 12. REST API
 
-The dispatch/MCP server exposes these endpoints for the mobile app (reachable via the WSS tunnel):
+All endpoints are served by the dispatch/MCP server over loopback, forwarded by the Tunnel Manager to the mobile app over WSS. Authentication: PocketBase auth token in `Authorization: Bearer <token>`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/tasks` | Submit a new task. Body: `{ taskId, request }`. Idempotent upsert on `taskId`. Returns current `TaskStatus`. |
+| `GET` | `/api/tasks/:taskId` | Get current status. |
+| `POST` | `/api/tasks/:taskId/answer` | Answer a pending clarification. Body: `{ answer }`. |
+| `POST` | `/api/tasks/:taskId/cancel` | Request cancellation. Idempotent. |
+| `GET` | `/api/tasks/:taskId/activity` | Activity log. Query: `?sinceSeq=N`. |
+| `GET` | `/api/tasks` | List recent tasks (paginated). |
+| `GET` | `/api/adapter/health` | Adapter reachability probe. |
+| `GET` | `/api/adapter/config` | Current adapter type + non-secret config. |
+| `PUT` | `/api/adapter/config` | Switch adapter or update config. Body: `{ activeAdapter, ... }`. |
+| `POST` | `/api/rollback` | Emergency rollback. Always works. |
+| `POST` | `/api/restart-app` | Restart logic service via `systemctl --user restart anyclaw-logic`. |
+| `POST` | `/api/webhook/callback` | Webhook adapter callback sink. |
+
+The mobile app does not poll `GET /api/tasks/:id` for status; it subscribes to PocketBase realtime on the `tasks` collection (filtered by `taskId`) through the tunnel. The REST endpoints exist for the commands (submit, answer, cancel) and for initial snapshots.
+
+### 12.1 Submission handler (exactly-once)
 
 ```typescript
-// POST /api/tasks                         submit new task
-// GET  /api/tasks/:taskId                 get current status
-// POST /api/tasks/:taskId/answer          answer a clarifying question
-// POST /api/tasks/:taskId/cancel          cancel a running task
-// GET  /api/tasks/:taskId/activity        activity log (?sinceSeq=N)
-// GET  /api/tasks                         list recent tasks
-// GET  /api/adapter/health                adapter health probe
-// GET  /api/adapter/config                current adapter config
-// PUT  /api/adapter/config                switch adapter / update config
+app.post("/api/tasks", authRequired, async (req, res) => {
+  const { taskId, request } = req.body;
+  if (!taskId || !UUID_REGEX.test(taskId)) return res.status(400).json({ error: "invalid taskId" });
 
-// Emergency endpoints (always available, even if the logic service is broken)
-// POST /api/rollback                      emergency rollback
-// POST /api/restart-app                   restart the logic service process
+  const pb = getPocketBase();
+  try {
+    const existing = await pb.collection("tasks").getFirstListItem(`taskId = "${taskId}"`);
+    return res.json(statusFromRow(existing));  // idempotent: return existing
+  } catch (err) {
+    if (!(err instanceof ClientResponseError && err.status === 404)) throw err;
+  }
+
+  const ctx = await adapterManager.buildSystemContext(taskId);
+  const worktree = await worktrees.create(taskId);
+  ctx.cwd = worktree;
+
+  const row = await pb.collection("tasks").create({
+    taskId,
+    request,
+    state: "queued",
+    adapterType: currentAdapterType,
+    adapterRef: "",
+    seq: 0,
+    systemContext: JSON.stringify(ctx),
+    worktreePath: worktree,
+  });
+  await pb.collection("task_queue").create({ taskId, priority: 0, position: Date.now() });
+
+  adapterManager.processQueue();  // fire-and-forget
+  res.json(statusFromRow(row));
+});
 ```
 
-All endpoints require a PocketBase auth token in the `Authorization` header.
-
 ---
 
-## 8. Adapter Selection and Configuration
-
-Configuration is stored in PocketBase:
+## 13. Adapter Selection & Configuration
 
 ```typescript
-// Collection: settings (singleton)
+// settings (singleton PocketBase collection)
 {
   activeAdapter: "openclaw" | "claude-code" | "webhook";
+
   openclawConfig?: {
-    gatewayUrl: string;            // default "ws://127.0.0.1:18789"
-    gatewayToken: string;          // encrypted at rest
+    gatewayUrl: string;                 // "ws://127.0.0.1:18789"
+    gatewayToken: string;               // AES-256-GCM encrypted
     workspace: string;
   };
   claudeCodeConfig?: {
-    executablePath?: string;       // default "claude"
+    executablePath?: string;            // default "claude"
     model?: string;
-    maxBudgetUsd: number;          // default 5.00
-    apiKey: string;                // encrypted at rest
+    maxBudgetUsd: number;               // default 5.00
+    apiKey: string;                     // AES-256-GCM encrypted
   };
   webhookConfig?: {
     dispatchUrl: string;
     callbackBaseUrl: string;
-    authHeader?: string;           // encrypted at rest
+    authHeader?: string;                // AES-256-GCM encrypted
   };
+
   dispatch: {
-    maxTaskDurationMs: number;            // default 900000
-    stallTimeoutMs: number;               // default 120000
+    maxTaskDurationMs: number;            // default 900_000
     clarificationTimeoutMode: "best_judgment" | "pause_indefinitely";
-    clarificationTimeoutMs: number;       // default 300000
-    cpuLimitPercent: number;              // default 200 (2 cores worth)
+    clarificationTimeoutMs: number;       // default 300_000
+    // Reserved; no-op until ResourceLimits ships post-MVP.
+    cpuLimitPercent: number;              // default 200
     memoryLimitMb: number;                // default 2048
   };
 }
-
-// Locked decision: all secrets are encrypted with AES-256-GCM at rest.
-// Encryption key management is covered in Plan 1.
 ```
 
-The AdapterManager instantiates the appropriate adapter on startup:
+The `AdapterManager` instantiates the active adapter at startup and re-instantiates it on `PUT /api/adapter/config`:
 
 ```typescript
 class AdapterManager {
-  private adapter: AgentAdapter;
-
-  constructor(private pb: PocketBase) {}
+  private adapter!: AgentAdapter;
 
   async initialize(): Promise<void> {
-    const settings = await this.pb.collection("settings").getFirstListItem("");
-    this.adapter = this.createAdapter(settings);
-    await this.onStartup();  // resume any in-flight tasks
+    const s = await this.pb.collection("settings").getFirstListItem("");
+    this.adapter = this.createAdapter(s);
+    await this.onStartup();
   }
 
-  private createAdapter(settings: Settings): AgentAdapter {
-    switch (settings.activeAdapter) {
+  private createAdapter(s: Settings): AgentAdapter {
+    switch (s.activeAdapter) {
       case "openclaw":
         return new OpenClawAdapter({
-          gatewayUrl: settings.openclawConfig!.gatewayUrl,
-          token: decrypt(settings.openclawConfig!.gatewayToken),
-          workspace: settings.openclawConfig!.workspace,
+          gatewayUrl: s.openclawConfig!.gatewayUrl,
+          token: decrypt(s.openclawConfig!.gatewayToken),
+          workspace: s.openclawConfig!.workspace,
         });
       case "claude-code":
         return new ClaudeCodeAdapter({
-          executablePath: settings.claudeCodeConfig?.executablePath ?? "claude",
-          model: settings.claudeCodeConfig?.model,
-          maxBudgetUsd: settings.claudeCodeConfig?.maxBudgetUsd ?? 5.0,
-          applyResourceLimits: this.resourceLimiter.apply.bind(this.resourceLimiter),
+          executablePath: s.claudeCodeConfig?.executablePath ?? "claude",
+          model: s.claudeCodeConfig?.model,
+          maxBudgetUsd: s.claudeCodeConfig?.maxBudgetUsd ?? 5.0,
+          applyResourceLimits: this.resourceLimits.apply.bind(this.resourceLimits),
+          getApiKey: async () => decrypt((await this.pb.collection("settings").getFirstListItem("")).claudeCodeConfig.apiKey),
         });
       case "webhook":
         return new WebhookAdapter({
-          ...settings.webhookConfig!,
-          authHeader: settings.webhookConfig?.authHeader
-            ? decrypt(settings.webhookConfig.authHeader)
-            : undefined,
+          dispatchUrl: s.webhookConfig!.dispatchUrl,
+          callbackBaseUrl: s.webhookConfig!.callbackBaseUrl,
+          authHeader: s.webhookConfig?.authHeader ? decrypt(s.webhookConfig.authHeader) : undefined,
         });
-      default:
-        throw new Error(`Unknown adapter: ${settings.activeAdapter}`);
     }
   }
 }
@@ -1360,164 +1320,135 @@ class AdapterManager {
 
 ---
 
-## 9. Generic Webhook Adapter
+## 14. File Structure
 
-For agents without a subprocess interface or native SDK:
-
-```typescript
-class WebhookAdapter implements AgentAdapter {
-  readonly name = "Webhook";
-
-  constructor(private config: {
-    dispatchUrl: string;
-    callbackBaseUrl: string;
-    authHeader?: string;
-  }) {}
-
-  async dispatch(
-    taskId: string,
-    request: string,
-    systemContext: SystemContext,
-    signal: AbortSignal
-  ): Promise<TaskHandle> {
-    const res = await fetch(this.config.dispatchUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(this.config.authHeader ? { Authorization: this.config.authHeader } : {})
-      },
-      body: JSON.stringify({
-        taskId,
-        request,
-        callbackUrl: `${this.config.callbackBaseUrl}/api/webhook/callback`,
-        mcpEndpointUrl: systemContext.mcpEndpointUrl,
-        cwd: systemContext.cwd
-      }),
-      signal
-    });
-
-    if (!res.ok) {
-      throw new AdapterError(
-        `Webhook dispatch failed: ${res.status}`,
-        res.status === 401 ? "AUTH_FAILED" : "INTERNAL",
-        res.status >= 500
-      );
-    }
-
-    const body = await res.json();
-    return { taskId, adapterRef: body.externalId ?? taskId };
-  }
-
-  async answerQuestion(handle: TaskHandle, answer: string): Promise<void> {
-    // Answers are written to PocketBase by the REST API.
-    // The external agent picks them up via the anyclaw_ask_user MCP tool.
-  }
-
-  async cancel(handle: TaskHandle): Promise<void> {
-    await fetch(this.config.dispatchUrl, {
-      method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-        ...(this.config.authHeader ? { Authorization: this.config.authHeader } : {})
-      },
-      body: JSON.stringify({ taskId: handle.taskId })
-    }).catch(() => {});
-  }
-
-  // healthCheck, dispose, subscribe use PocketBase-based patterns
-}
+```
+.anyclaw/dispatch-server/
+├── src/
+│   ├── index.ts                   # process entry; supervisord target
+│   ├── rest/
+│   │   ├── router.ts              # express/fastify routes
+│   │   ├── tasks.ts               # POST /api/tasks, answer, cancel
+│   │   ├── adapter.ts             # adapter config endpoints
+│   │   ├── emergency.ts           # rollback, restart-app
+│   │   └── webhook-callback.ts    # POST /api/webhook/callback
+│   ├── mcp/
+│   │   ├── server.ts              # HTTP/SSE MCP endpoint
+│   │   ├── auth.ts                # per-task bearer token validation
+│   │   └── tools/
+│   │       ├── ask-user.ts        # anyclaw_ask_user
+│   │       ├── update-progress.ts # anyclaw_update_progress
+│   │       ├── deploy.ts          # anyclaw_deploy (Plan 2)
+│   │       └── ...                # rollback, snapshot, etc.
+│   ├── adapters/
+│   │   ├── types.ts               # AgentAdapter, TaskStatus, etc.
+│   │   ├── manager.ts             # AdapterManager, queue, resume
+│   │   ├── openclaw.ts
+│   │   ├── claude-code.ts
+│   │   ├── webhook.ts
+│   │   └── subprocess-base.ts     # SubprocessAdapter skeleton
+│   ├── worktrees/
+│   │   └── manager.ts             # WorktreeManager
+│   ├── resource-limits/
+│   │   ├── types.ts               # ResourceLimits interface
+│   │   └── noop.ts                # MVP implementation
+│   ├── persistence/
+│   │   ├── pocketbase-client.ts
+│   │   ├── crypto.ts              # AES-256-GCM for secrets
+│   │   └── schema.ts              # PocketBase collection definitions
+│   └── util/
+│       ├── async-queue.ts
+│       └── terminal-states.ts
+├── test/
+│   ├── unit/
+│   │   ├── adapter-manager.test.ts
+│   │   ├── worktree-manager.test.ts
+│   │   ├── openclaw-adapter.test.ts
+│   │   └── claude-code-adapter.test.ts
+│   └── integration/
+│       ├── task-lifecycle.test.ts
+│       ├── clarification.test.ts
+│       ├── resume-after-restart.test.ts
+│       └── exactly-once-delivery.test.ts
+├── package.json
+└── tsconfig.json
 ```
 
-**Webhook callback contract:**
-
-```typescript
-// POST /api/webhook/callback
-{
-  taskId: string;
-  event: "progress" | "clarifying" | "deploying" | "done" | "failed";
-  progressSummary?: string;
-  question?: string;
-  versionDescription?: string;
-  error?: string;
-}
-```
+The entire tree lives under `.anyclaw/` and is NOT inside the agent's writable path (`dev/`). The `anyclaw_write_file` MCP tool rejects any path outside `dev/`.
 
 ---
 
-## 10. Technical Decisions (Resolved)
+## 15. Error Handling & Testing
 
-All open decisions from the original draft have been resolved per the locked decisions in the main spec.
+### 15.1 Error classification
 
-| # | Decision | Resolution | Notes |
-|---|----------|-----------|-------|
-| 1 | Concurrent task limit | **Single active task + queue.** Designed with task isolation for future parallelization. | `task_queue` collection in Section 6.3. |
-| 2 | Clarification timeout | **User-configurable:** `best_judgment` (default 5 min) or `pause_indefinitely`. | Section 6.1. |
-| 3 | API key storage | **Encrypted in PocketBase** (AES-256-GCM) for both self-hosted and cloud. | Section 8. |
-| 4 | Claude Code adapter approach | **CLI `-p` mode for MVP.** | Section 4. |
-| 5 | Task persistence across restart | **Persist + resume.** Claude Code `--resume`, OpenClaw re-subscribe, webhook notify. | Section 6.5. |
-| 6 | Process model | **Supervised processes, no containers.** Dispatch/MCP server is a supervised process; agent is a transient child with cgroup/JobObject limits; workspace is `dev/` on the host filesystem. | Section 1, Section 4. |
-| 7 | Agent execution location | **Agent runs as a transient child process of the dispatch/MCP server**, with `cwd=dev/`, loopback MCP, and per-task resource limits. Its own file tools operate natively on `dev/`. | Sections 1 and 4. |
+`AdapterError.code` drives the response:
+
+| Code | HTTP mapping | User-facing action |
+|------|-------------|-------------------|
+| `AGENT_UNREACHABLE` | 503 | "Your agent is not reachable. Check OpenClaw/Claude Code is running." |
+| `AUTH_FAILED` | 401 | "Agent authentication failed. Update your API key in settings." |
+| `AGENT_BUSY` | 409 | "Agent is busy. Please wait or cancel the current task." |
+| `TASK_NOT_FOUND` | 404 | "Task not found. It may have been cleaned up." |
+| `TIMEOUT` | 504 | "Task exceeded the time budget and was cancelled." |
+| `CANCELLED` | 200 | Normal cancellation. |
+| `INTERNAL` | 500 | "Something went wrong. Please retry." |
+
+`retryable: true` errors allow the client to retry with the same taskId (idempotent upsert).
+
+### 15.2 Key error scenarios
+
+1. **Adapter dispatch fails before any state change.** No row in `tasks`. Return `AdapterError` synchronously from `POST /api/tasks`.
+2. **Adapter dispatch succeeds but subscribe() fails.** Task is already `queued` or `working`; the supervisor loop will retry subscribe once, then mark `failed`.
+3. **Agent subprocess crashes mid-task.** The `consumeOutput` loop ends with a non-zero exit code; status transitions to `failed`. Worktree is discarded.
+4. **PocketBase unreachable.** Retry with exponential backoff (up to 30s). If still failing, surface `INTERNAL` to the caller.
+5. **`anyclaw_deploy` fails in the deploying state.** Worktree stays on disk in `task/<id>` branch for post-mortem; status is `failed`; user can retry with a new UUID.
+6. **Merge fails on success** (should never happen in MVP due to sequential ff-only). Log, mark `failed`, leave worktree for inspection.
+
+### 15.3 Testing strategy
+
+**Unit tests:**
+
+- `AdapterManager` queue, priority, resume sweep.
+- `WorktreeManager` create/merge/discard with a temp git repo.
+- State-machine transitions for each `TaskState`.
+- Exactly-once idempotent submission.
+- Clarification timeout (both modes).
+- Per-adapter event → status mapping.
+
+**Integration tests (with a real PocketBase instance):**
+
+- End-to-end task lifecycle with a **mock adapter** that scripts a sequence of status updates.
+- Resume after simulated restart (kill process, restart, verify state).
+- Clarification round-trip with PocketBase realtime.
+- "Pause indefinitely" across restart: answer written while the dispatch server was down, task resumes correctly on next boot.
+- `SIGTERM` during `working` → `cancelled` within 10 seconds.
+- Mock OpenClaw WebSocket server verifying the OpenClaw adapter handshake and RPC flow.
+- Mock `claude` binary (a small Node script emitting stream-json) verifying the Claude Code adapter stream parser and `--resume` behavior.
+
+**Chaos tests (optional, post-MVP):**
+
+- Random kill of the dispatch server during each lifecycle state; verify no lost or duplicated tasks.
+- Slow PocketBase responses to exercise timeouts.
 
 ---
 
-## New Gaps
+## 16. Locked Decisions
 
-These are the open questions that remain after folding in the supervised-process architecture. The pre-existing container-era gaps (cross-container process spawning, Docker socket access, sandbox volume sharing, Claude Code session volume layout) are resolved by the new model and have been removed.
+All open questions from earlier drafts have been resolved per the main spec. Pulled here for reference:
 
-### Gap 1: cgroup / JobObject provisioning across platforms
-
-The adapter relies on a per-task resource-limit handle passed via `SystemContext.resourceLimitHandle`. The dispatch server must create these limits portably.
-
-**Question:** What is the concrete `applyResourceLimits(pid, handle)` implementation on each host platform?
-
-**Options:**
-- (A) **Linux cgroup v2:** dispatch server creates `/sys/fs/cgroup/anyclaw/task-<taskId>` at startup, writes `cpu.max` and `memory.max`, and writes the child PID to `cgroup.procs` immediately after spawn. Requires cgroup v2 delegation (e.g., running under a systemd user slice).
-- (B) **Linux cgroup via systemd-run:** instead of spawning `claude` directly, spawn `systemd-run --user --scope -p CPUQuota=200% -p MemoryMax=2G claude ...`. No manual cgroup plumbing, but adds a dependency on systemd and a shell wrapper.
-- (C) **Windows Job Objects:** create a Job Object with `JOB_OBJECT_LIMIT_JOB_MEMORY` and `JOB_OBJECT_LIMIT_PROCESS_TIME`, assign the child PID with `AssignProcessToJobObject`. Requires a small native addon or `ffi-napi` binding because Node doesn't expose this.
-- (D) **macOS:** no real cgroup equivalent. Fall back to `ulimit`/`setrlimit` via a shell preload (`sh -c 'ulimit -v 2097152; exec claude ...'`) plus wall-clock timeouts. Accept weaker enforcement on macOS.
-
-### Gap 2: MCP endpoint authentication on loopback
-
-The dispatch/MCP server hosts the MCP HTTP/SSE endpoint on `127.0.0.1`. The agent child process connects back to it. Anything else on the host that can open a loopback socket could also connect.
-
-**Question:** How does the MCP endpoint authenticate the agent child process?
-
-**Options:**
-- (A) **Per-task bearer token.** Adapter generates a random token per task, injects it into the per-task MCP config file and the child env, and the MCP server validates it on every request. Token is revoked when the task completes.
-- (B) **PID-gated unix socket.** On Linux/macOS, host the MCP endpoint on a unix socket in `.anyclaw/mcp.sock` and check `SO_PEERCRED` / `LOCAL_PEERPID` against the known child PID. More secure, no token handling, but Windows needs a named pipe fallback.
-- (C) **Both.** Unix socket + token for defence in depth.
-
-### Gap 3: Task workspace isolation for future parallelism
-
-Locked decision: single task + queue today, but "design with task isolation for future parallelization." Today all tasks share `dev/` sequentially.
-
-**Question:** What is the isolation boundary when we later allow concurrent tasks?
-
-**Options:**
-- (A) **Git worktree per task.** Each concurrent task gets its own worktree (`dev-task-<id>/`) pointing at the same repo. On success, merge back into the canonical `dev/`. Pro: natural git semantics, independent working trees. Con: merge conflicts possible.
-- (B) **Copy-on-write snapshots.** Use `cp --reflink` (Linux btrfs/xfs) or APFS clones (macOS) to snapshot `dev/` per task. Fast, space-efficient. Con: not portable to all filesystems.
-- (C) **Locked sequential.** Keep single-task forever; never parallelize. Simplest but limits future scale.
-
-MVP ships with (C). (A) is the intended future path.
-
-### Gap 4: OpenClaw gateway restart while a task is mid-flight
-
-The OpenClaw process is a separate supervised process. It can crash and restart independently of the dispatch server.
-
-**Question:** How does the OpenClaw adapter handle OpenClaw itself restarting during a task?
-
-**Options:**
-- (A) **Replay conversation.** Persist the full conversation (request + Q&A history) in PocketBase. On detecting a dropped WebSocket, re-dispatch the original request with the Q&A prepended as context. Reliable but burns tokens re-doing partial work.
-- (B) **Gateway-side persistence.** Rely on OpenClaw's own session store. On reconnect, re-subscribe to the existing `runId`. Depends on OpenClaw gateway capabilities.
-- (C) **Mark failed, user retries.** Simplest, honest, frustrating for long nearly-done tasks.
-
-### Gap 5: Queue starvation and stall detection
-
-With a single active task, a stuck agent blocks all other queued tasks until the `maxTaskDurationMs` hard timeout fires (default 15 min).
-
-**Question:** Should the dispatch server detect stalls earlier using `stallTimeoutMs` (default 2 min of no status updates) and force-cancel?
-
-**Options:**
-- (A) **Yes, aggressive.** If no `TaskStatus` update arrives for `stallTimeoutMs`, force-cancel and mark failed with "agent stalled." Pro: protects the queue. Con: may kill legitimately long-running work that just happens to be quiet (e.g., a long `vite build`).
-- (B) **Yes, with MCP heartbeat.** Require the agent skill to periodically call `anyclaw_update_progress`. If no heartbeat arrives for `stallTimeoutMs`, force-cancel. Pro: distinguishes "agent is working" from "agent is hung." Con: depends on skill cooperation.
-- (C) **No, rely on hard timeout only.** Simplest. Accept worst-case 15-minute delays on stuck tasks.
+| # | Decision | Value |
+|---|----------|-------|
+| 1 | Concurrency | Single active task + queue. Designed with task isolation for future parallelization. |
+| 2 | Clarification timeout | User-configurable: `best_judgment` (default 5 min) or `pause_indefinitely`. |
+| 3 | Claude Code adapter | CLI `-p` mode for MVP. |
+| 4 | MCP transport | HTTP/SSE. |
+| 7 | Task persistence | Persist + resume after dispatch-server restart. |
+| 26 | Resource limits | Deferred (`ResourceLimits` interface, no-op MVP implementation). |
+| 35 | MCP loopback auth | Per-task bearer token, written to env + mcp-config. |
+| 36 | Workspace isolation | Worktree-per-task from day one under `dev/.worktrees/`. |
+| 38 | Checkpoint schema | Agent-agnostic step tracker + optional agent blob. |
+| 39 | ask_user resume | On restart, re-check `task_clarifications` for pending/answered before re-dispatching. |
+| 40 | Task delivery guarantee | Exactly-once via client UUID + idempotent upsert + startup sweep. |
+| 41 | OpenClaw gateway failures | Deferred to post-MVP; best-effort reconnect for now. |
+| 42 | Queue stall detection | Hard timeout only (`maxTaskDurationMs`). No heartbeat requirement. |

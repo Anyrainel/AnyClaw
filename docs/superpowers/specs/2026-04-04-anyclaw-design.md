@@ -7,412 +7,185 @@ AnyClaw is a self-evolving mobile UI layer powered by a personal AI coding agent
 **AnyClaw is agent-agnostic.** It does not own or bundle a coding agent. Instead, it provides infrastructure (server runtime, MCP tools, deployment pipeline) and a mobile viewer that works with any compatible coding agent. Initial adapters support **OpenClaw** and **Claude Code**, with the architecture extensible to Codex, Aider, or any agent that can use MCP tools.
 
 **AnyClaw consists of:**
+
 1. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend + dev/prod deployment pipeline. This is the foundation the agent builds on.
-2. **An MCP server + skill suite** — gives any compatible coding agent the ability to create UI, API routes, DB collections, deploy, and rollback.
-3. **An agent dispatch layer** — a pluggable adapter interface that lets the mobile app submit work requests to the user's chosen coding agent (OpenClaw, Claude Code, etc.), including support for agent-initiated clarifying questions.
+2. **An MCP server + skill suite** — gives any compatible coding agent the ability to deploy, rollback, snapshot data, and ask the user questions.
+3. **An agent dispatch layer** — a pluggable adapter interface that lets the mobile app submit work requests to the user's chosen coding agent, including support for agent-initiated clarifying questions.
 4. **A companion mobile app** — a thin native shell (WebView for agent-built UI, task submission with Q&A, version history/rollback, settings).
 
-**Deployment modes:**
+## Deployment Modes
 
-1. **Plugin mode (for existing agent users):** User already has OpenClaw, Claude Code, or another agent. AnyClaw installs the MCP server + skills into the existing agent, spins up the server infrastructure alongside it, and the mobile app connects via the appropriate adapter.
-2. **Standalone mode (for new users):** A single installation script sets up everything — the AnyClaw infrastructure + a default agent (likely OpenClaw). One command, fully self-contained.
+**Hybrid: self-hosted or cloud-hosted. Both modes produce the same server layout.**
 
-Both modes produce the same server infrastructure. The difference is whether the coding agent already exists or is bundled.
-
-## Deployment Model
-
-**Hybrid: self-hosted or cloud-hosted.**
-
-- **Self-hosted (plugin):** User has an existing coding agent (OpenClaw, Claude Code, etc.). Installs AnyClaw MCP server + skills + infrastructure alongside it. Free tier. User provides their own LLM API keys.
-- **Self-hosted (standalone):** User runs a single install script that sets up everything from scratch — a default agent (OpenClaw) + AnyClaw infrastructure. Free tier. User provides their own LLM API keys.
-- **Cloud-hosted:** Monthly subscription. AnyClaw hosts the full stack (one container per subscriber). LLM tokens bundled or BYOK.
-- **Connection broker:** A lightweight cloud service (run by AnyClaw) that authenticates users and brokers connections between the mobile app and the server. Handles NAT traversal for self-hosters. Content flows directly between client and server — the broker only handles signaling.
+- **Self-hosted (plugin):** User already has a coding agent (OpenClaw, Claude Code, etc.). Installs AnyClaw MCP server + skills + infrastructure alongside it. Free. User provides their own LLM API keys.
+- **Self-hosted (standalone):** A single install script sets up everything from scratch — a default agent (OpenClaw) + AnyClaw infrastructure. Free. User provides their own LLM API keys.
+- **Cloud-hosted:** Monthly subscription. AnyClaw hosts the full stack (one container per subscriber) on Hetzner. LLM tokens bundled or BYOK.
+- **Connection broker:** A lightweight cloud service run by AnyClaw that authenticates users and brokers connections between the mobile app and the server. Handles NAT traversal. Content flows end-to-end encrypted — the broker only relays opaque bytes.
 
 ## Architecture
 
 ### System Diagram
 
 ```
-+---------------------+         +-------------------+         +----------------------+
-|   Mobile App        |         |  Connection       |         |  User's Host         |
-|   (Expo/RN)         | <-----> |  Broker           | <-----> |  (one Docker container
-|                     |  auth   |  (Cloud)          |  signal |   or native install) |
-|  +---------------+  |         +-------------------+         |                      |
-|  | Native Shell  |  |                                       |  ┌── supervisord ──┐ |
-|  | - Task Card   |  |       NaCl-encrypted relay (E2E)      |  │                 │ |
-|  | - Versions    |  | <----------------------------------> |  │  Tunnel Manager │ |
-|  | - Settings    |  |                                       |  │  PocketBase     │ |
-|  +---------------+  |                                       |  │  Dispatch/MCP   │ |
-|  +---------------+  |                                       |  │  Logic Service  │ |
-|  | WebView       |  |                                       |  │  Prod Static    │ |
-|  | (agent-built  |  |                                       |  └─────────────────┘ |
-|  |  React app)   |  |                                       |                      |
-|  +---------------+  |                                       |  Transient (per task)|
-+---------------------+                                       |  ┌─ cgroup limits ─┐ |
-                                                              |  │                 │ |
-                                                              |  │  Coding Agent   │ |
-                                                              |  │  (Claude Code   │ |
-                                                              |  │   or OpenClaw)  │ |
-                                                              |  │       │         │ |
-                                                              |  │       │ uses    │ |
-                                                              |  │       ▼         │ |
-                                                              |  │  AnyClaw MCP    │ |
-                                                              |  │  (HTTP/SSE)     │ |
-                                                              |  │       │         │ |
-                                                              |  │       ▼         │ |
-                                                              |  │  Vite Dev       │ |
-                                                              |  │  (for testing)  │ |
-                                                              |  └─────────────────┘ |
-                                                              |                      |
-                                                              |  Filesystem:         |
-                                                              |  - dev/ (agent rw)   |
-                                                              |  - prod/ (deployed)  |
-                                                              |  - .anyclaw/ (infra, |
-                                                              |    agent read-only)  |
-                                                              +----------------------+
++---------------------+         +-------------------+         +-----------------------+
+|   Mobile App        |         |  Connection       |         |  User's Host          |
+|   (Expo/RN)         | <-----> |  Broker           | <-----> |  (one Docker          |
+|                     |  auth   |  (Cloud)          |  signal |   container or        |
+|  +---------------+  |         +-------------------+         |   native install)     |
+|  | Native Shell  |  |                                       |                       |
+|  | - Task Card   |  |       NaCl-encrypted relay (E2E)      |  ┌── supervisord ───┐ |
+|  | - Versions    |  | <-----------------------------------> |  │                  │ |
+|  | - Settings    |  |                                       |  │  Tunnel Manager  │ |
+|  +---------------+  |                                       |  │  PocketBase      │ |
+|  +---------------+  |                                       |  │  Dispatch/MCP    │ |
+|  | WebView       |  |                                       |  │  Logic Service   │ |
+|  | (agent-built  |  |                                       |  │  Prod Static     │ |
+|  |  React app)   |  |                                       |  └──────────────────┘ |
+|  +---------------+  |                                       |                       |
++---------------------+                                       |  Transient (per task) |
+                                                              |  ┌─ cgroup limits ──┐ |
+                                                              |  │                  │ |
+                                                              |  │  Coding Agent    │ |
+                                                              |  │  (Claude Code    │ |
+                                                              |  │   or OpenClaw)   │ |
+                                                              |  │        │         │ |
+                                                              |  │        ▼  uses   │ |
+                                                              |  │  AnyClaw MCP     │ |
+                                                              |  │  (HTTP/SSE)      │ |
+                                                              |  │        │         │ |
+                                                              |  │        ▼         │ |
+                                                              |  │  Vite Dev        │ |
+                                                              |  │  (for testing)   │ |
+                                                              |  └──────────────────┘ |
+                                                              |                       |
+                                                              |  Filesystem:          |
+                                                              |  - dev/ (agent rw,    |
+                                                              |    worktree per task) |
+                                                              |  - prod/ (deployed)   |
+                                                              |  - .anyclaw/ (infra,  |
+                                                              |    agent read-only)   |
+                                                              +-----------------------+
 ```
 
 ### Layer 1: Mobile App (Client)
 
-**Stack: Expo (managed React Native) + react-native-webview**
+**Stack: Expo (managed React Native) + react-native-webview.**
 
 A thin native shell with four responsibilities:
 
-1. **Connection management** — Login screen, server selection, reconnect/restart controls. Communicates with the broker to establish a tunnel to the server.
-2. **Task dispatch interface** — A "Request" button that opens a task submission flow. Not a full chat — a focused task card that transitions through states (see Task Dispatch Protocol below).
-3. **Version history & rollback** — Native screen listing agent-deployed versions with descriptions and optional screenshots. User taps to rollback. Rollback is always user-initiated.
-4. **Settings & monitoring** — Server status, agent adapter configuration, agent activity log, subscription management.
+1. **Connection management** — Login, server selection, reconnect/restart controls. Talks to the broker to establish a tunnel to the server.
+2. **Task dispatch interface** — A "Request" tab that opens a focused task card (not a chat). The card transitions through input → clarifying → working → deploying → done/failed states.
+3. **Version history & rollback** — Native screen listing agent-deployed versions with descriptions. User taps to rollback (code + DB restored atomically). Rollback is always user-initiated.
+4. **Settings & monitoring** — Server status, agent adapter configuration, activity log, API key management, subscription.
 
-The main content area is a single WebView pointing at the user's server. The WebView and native shell communicate via a JS bridge (postMessage/onMessage) for events like "agent deployed a new version, please reload."
+The main content area is a single WebView pointing at the user's server. The WebView and native shell communicate via a JS bridge for events like "agent deployed a new version, please reload."
 
-**Why Expo:** Handles builds, signing, OTA updates, and push notifications without touching Xcode or Android Studio. The native shell is simple enough that Expo's managed workflow covers it. Ejecting to bare workflow is available if needed later.
+**Why Expo:** Handles builds, signing, OTA updates, and push notifications without touching Xcode or Android Studio. Ejecting to bare workflow is available if needed later.
 
 ### Layer 2: Server Runtime
 
-The server runs on the user's machine (Docker) or in a cloud container. It consists of four components:
+The server runs on the user's host (Docker or native install) or in a cloud container. It consists of:
 
 #### 2a. PocketBase (Data & API Layer)
 
 **Single Go binary. Zero config.**
 
-Provides:
 - SQLite database with auto-generated REST API
 - Realtime subscriptions via SSE
 - File storage (images, attachments)
-- Auth tokens (for the WebView <-> server communication)
+- Auth tokens for WebView ↔ server communication
 
-The agent interacts with PocketBase through its admin API to create/modify collections (tables). The agent does NOT edit PocketBase source code. PocketBase is a stable, running service — a guardrail the agent cannot break.
+The agent interacts with PocketBase only through its admin API (collections, records). It never edits PocketBase source. PocketBase is a stable guardrail the agent cannot break.
 
 #### 2b. Node.js Logic Service
 
 **TypeScript. Handles everything PocketBase cannot.**
 
-- Background jobs via node-cron (news scouting, scheduled reports)
+- Background jobs via node-cron
 - Custom API endpoints (complex queries, LLM-powered features)
 - HTTP client for web access
-- LLM interface (calls to OpenAI, Anthropic, etc. via user's API keys)
+- LLM calls via the user's API keys
 - Push notification dispatch to the mobile app
 
-The agent writes and modifies code in this layer. It has a well-defined project structure and a set of primitives:
+The agent writes and modifies code in this layer, using a well-defined project structure and a set of built-in primitives:
 
 ```typescript
-// Built-in primitives the agent can use
 scheduleJob(name: string, cron: string, handler: () => Promise<void>): void
 fetchUrl(url: string, options?: FetchOptions): Promise<Response>
 callLLM(prompt: string, options?: LLMOptions): Promise<string>
 sendNotification(title: string, body: string): Promise<void>
-getPocketBase(): PocketBase  // typed client for PocketBase API
+getPocketBase(): PocketBase
 ```
 
-#### 2c. Vite + React (Frontend)
+#### 2c. Vite + React Frontend
 
 **The agent-built UI that loads in the WebView.**
 
-- React + TypeScript + Vite for fast builds
-- Talks to PocketBase directly for data (using the PocketBase JS SDK)
-- Talks to the Node logic service for custom endpoints
-- Responsive design (phone + tablet)
-- The agent creates pages, components, and routes here
+- React + TypeScript + Vite
+- Talks to PocketBase directly for data (PocketBase JS SDK)
+- Talks to the logic service for custom endpoints
+- Tailwind v4 with a locked `@theme` token set (see Style Guide)
+- Responsive (phone + tablet)
 
 #### 2d. Dev/Prod Split
 
-**Two environments run on the server:**
+Two environments live on the server:
 
-- **Dev:** The agent's workspace. Code changes happen here first. The agent runs validation (lint, type check, build, smoke tests) in dev before promoting.
+- **Dev:** The agent's workspace. All code changes happen here first. Each task runs in its own git worktree.
 - **Prod:** What the user's WebView loads. Updated only when dev passes validation.
 
 **Promotion flow:**
-1. Agent writes code in dev
-2. Agent runs validation suite: `eslint` + `tsc --noEmit` + `vite build` + smoke tests
-3. If all pass: agent commits to git with a version description, copies build artifacts to prod, triggers a WebSocket event to reload the WebView
-4. If validation fails: agent can iterate in dev. The user never sees broken state.
-5. User can cancel a long-running agent task from chat if it's burning too many tokens.
+
+1. Agent writes code in a per-task worktree under `dev/.worktrees/task-<id>/`.
+2. Agent runs the validation suite: `eslint` + `tsc --noEmit` + `vite build` + smoke tests.
+3. On success: agent commits to the task branch, merges into `main`, snapshots the DB (if schema changed), copies build artifacts to `prod/`, restarts the logic service via the supervisor, and fires a WebSocket event to reload the WebView.
+4. On failure: worktree is deleted without merging. The user never sees broken state.
+5. User can cancel a long-running task from the mobile app.
 
 ### Layer 3: Connection Broker
 
-**Lightweight cloud service run by AnyClaw.**
+**Lightweight cloud service run by AnyClaw. Hosted in US East (Hetzner, iad).**
 
-Responsibilities:
-- User authentication (email/password, OAuth)
-- Server instance registry (self-hosted servers send heartbeats)
-- NAT traversal / tunnel establishment
+- **Auth:** Google + Apple + GitHub OAuth. Broker issues short-lived JWTs (15 min) after OAuth validation and stores provider refresh tokens server-side. A `/auth/refresh` endpoint mints new access tokens. (Apple Sign In: the broker persists name/email from the first OAuth callback, since subsequent logins only provide the user ID.)
+- **Registry:** Self-hosted servers send heartbeats; broker tracks which servers are online.
+- **Signaling / relay:** Establishes tunnels between clients and servers.
 
 **Tunnel strategy (phased):**
 
-Research confirmed that embedded WireGuard and Tailscale tsnet are not viable in React Native/Expo — the libraries are immature and require full native ejection. The realistic options are:
+Embedded WireGuard and Tailscale tsnet are not viable in React Native/Expo managed workflow. The realistic options are:
 
-**Phase 1 (MVP): HTTPS/WSS relay through the broker**
-- The broker acts as a thin encrypted relay — mobile app connects to broker via WSS, broker forwards to server via WSS. All traffic TLS-encrypted.
-- Works in Expo managed workflow with zero native code.
-- Tradeoff: traffic passes through the broker (not true P2P). Mitigated by TLS encryption — the broker relays encrypted bytes without inspecting content.
-- Simplest to build, fastest to ship.
+- **Phase 1 (launch): HTTPS/WSS relay through the broker.** Mobile app ↔ broker ↔ server, all TLS-encrypted. Works in Expo managed workflow with zero native code. NaCl box encryption is layered on top of TLS so the broker cannot read traffic even if compromised. Simplest, ships first.
+- **Phase 2 (post-launch): WebRTC data channels for true P2P.** `@config-plugins/react-native-webrtc` requires an Expo dev build but not full ejection. Broker becomes a signaling-only server; content flows directly between devices.
+- **Phase 3 (optional): Cloudflare Tunnel fallback.** For networks where WebRTC hole-punching fails, server runs `cloudflared` as a last-resort path.
 
-**Phase 2 (upgrade): WebRTC data channels for true P2P**
-- `react-native-webrtc` has an official Expo config plugin (`@config-plugins/react-native-webrtc`). Requires `expo prebuild` (development build, not Expo Go) but does not require full ejection.
-- WebRTC provides NAT traversal (ICE/STUN/TURN) built in, encrypted P2P data channels.
-- The broker becomes a signaling server only (exchanges SDP offers/answers). Content flows directly between devices.
-- This is the Parsec-like model: broker helps devices find each other, then gets out of the way.
-
-**Phase 3 (optional): Cloudflare Tunnel as fallback**
-- For networks where WebRTC hole-punching fails (strict symmetric NAT), server runs `cloudflared` as a fallback path.
-- Client connects via standard HTTPS through Cloudflare's network.
-- Privacy tradeoff: traffic routes through Cloudflare. Acceptable as a last-resort fallback.
+**Tunnel multiplexing:** Envelopes carry an in-band service tag: `{ type, client_id, service: "pb"|"api"|"app", payload }`. The tunnel manager routes to PocketBase (`pb`), dispatch/MCP server (`api`), or prod static server (`app`) — no subdomain gymnastics.
 
 **Security requirements (all phases):**
-- The server exposes zero open ports to the internet
-- All traffic is encrypted in transit (TLS for Phase 1, DTLS/SRTP for Phase 2)
-- The connection setup is fully automated (no manual port forwarding, no DNS config)
-- User experience: install app, log in, server appears, one tap to connect
 
-### Task Dispatch Protocol (Mobile App ↔ Agent)
+- Server exposes zero open ports to the internet
+- All traffic encrypted in transit (TLS + NaCl for Phase 1; DTLS/SRTP + NaCl for Phase 2)
+- Fully automated connection setup (no manual port forwarding)
+- UX: install app, log in, server appears, one tap to connect
 
-AnyClaw does not own the coding agent. Instead, the mobile app communicates with agents through a pluggable **Agent Adapter** interface. The interaction model is **task dispatch with clarification**, not real-time chat.
+**NaCl E2E encryption:**
 
-#### Task Lifecycle
-
-A task moves through these states:
-
-```
-[input] → [clarifying] → [working] → [deploying] → [done]
-                ↑    ↓
-              (Q&A rounds — agent asks, user answers)
-```
-
-1. **Input** — User types a request: "add a mood tracker for stress, sleep, and energy"
-2. **Clarifying** — Agent may ask questions: "Daily check-in or multiple times per day? Do you want trend charts?" User answers in the mobile app. Multiple Q&A rounds are possible. Agent may also skip this step if the request is clear enough.
-3. **Working** — Agent designs, implements, and tests the feature in the dev environment. Mobile app shows progress updates and an activity log (if the adapter supports it). User can cancel.
-4. **Deploying** — Agent runs validation suite, commits, snapshots DB, promotes to prod.
-5. **Done** — WebView reloads. User sees the new feature. Task card shows the version description.
-
-If the task fails at any step, the card shows an error state with the failure reason. No changes reach prod.
-
-#### Agent Adapter Interface
-
-```typescript
-interface AgentAdapter {
-  /** Submit a new task request. Returns a handle to track progress. */
-  dispatch(request: string): Promise<TaskHandle>;
-
-  /** Get current task status and any pending clarification questions. */
-  getStatus(handle: TaskHandle): Promise<TaskStatus>;
-
-  /** Respond to a clarifying question from the agent. */
-  answerQuestion(handle: TaskHandle, answer: string): Promise<void>;
-
-  /** Cancel a running task. */
-  cancel(handle: TaskHandle): Promise<void>;
-
-  /** Get the activity log (what the agent is doing). Optional — not all adapters support this. */
-  getActivityLog?(handle: TaskHandle): Promise<ActivityEntry[]>;
-}
-
-interface TaskStatus {
-  state: "clarifying" | "working" | "deploying" | "done" | "failed" | "cancelled";
-  /** If state is "clarifying", this is the agent's question to the user. */
-  question?: string;
-  /** If state is "done", this is the version description. */
-  versionDescription?: string;
-  /** If state is "failed", this is the error message. */
-  error?: string;
-  /** Progress summary (e.g., "Creating React components...") */
-  progressSummary?: string;
-}
-
-interface ActivityEntry {
-  timestamp: string;
-  message: string;
-  type: "info" | "warning" | "error";
-}
-```
-
-#### Adapter: OpenClaw
-
-- **Dispatch:** POST to OpenClaw gateway's WebSocket or OpenAI-compatible REST endpoint. The request is sent as a user message. The system prompt instructs the agent to use AnyClaw MCP tools and follow the build-feature skill.
-- **Clarification:** OpenClaw's gateway supports multi-turn conversation. When the agent responds with a question (detected by message format or a structured tag), the adapter surfaces it to the user. When the user answers, the adapter sends the follow-up message.
-- **Progress:** Subscribe to gateway WebSocket events for real-time status updates. The MCP tools emit progress events during validation and deployment.
-- **Cancel:** Send a cancel signal via the gateway API.
-- **Activity log:** Available via gateway event stream.
-
-**For OpenClaw users who prefer WhatsApp/Discord:** They can continue to dispatch work through those channels. The mobile app will still show the results (WebView refreshes on deploy, version history updates). The task dispatch in the mobile app is an additional channel, not a replacement.
-
-#### Adapter: Claude Code
-
-- **Dispatch:** Spawn `claude -p` as a subprocess with the user's request as the prompt. MCP server is pre-configured so the agent has access to all AnyClaw tools. Permission mode `--allowedTools` scoped to AnyClaw MCP tools.
-- **Clarification:** Via the `anyclaw_ask_user` MCP tool. The agent calls the tool, which writes the question to PocketBase and polls for the user's answer. The adapter monitors the PocketBase collection for questions to surface to the mobile app.
-- **Progress:** Via `anyclaw_update_progress` MCP tool + monitoring the agent's stdout stream for activity.
-- **Cancel:** Kill the subprocess.
-- **Activity log:** Parse the agent's `--output-format stream-json` stdout.
-- **Future upgrade:** Migrate to `@anthropic-ai/claude-agent-sdk` TypeScript SDK for richer lifecycle control when needed.
-
-#### Adapter: Generic Webhook (extensibility)
-
-For future agents (Codex, Aider, custom harnesses):
-- **Dispatch:** POST to a user-configured webhook URL with a standard payload `{ request, taskId, callbackUrl }`.
-- **Clarification:** The agent POSTs questions back to the callback URL. The adapter surfaces them to the user.
-- **Progress:** Agent POSTs status updates to the callback URL.
-- **Cancel:** POST to a cancel endpoint.
-
-This generic adapter makes AnyClaw compatible with any agent that can implement the webhook contract.
-
-#### Mobile UI for Task Dispatch
-
-The mobile app's task interface is a **single card** that transitions through states:
-
-- **Input state:** Text input + "Submit" button. Simple, not a chat interface.
-- **Clarifying state:** Shows the agent's question as a card. Text input for the answer + "Reply" button. Multiple rounds stack as a short Q&A thread.
-- **Working state:** Progress spinner + activity log (scrolling list of what the agent is doing). "Cancel" button.
-- **Done state:** Success card with version description. "View" button refreshes the WebView. Auto-dismisses after a few seconds.
-- **Failed state:** Error card with the failure reason. "Retry" or "Dismiss" buttons.
-
-### Layer 4: Agent Integration (Agent-Agnostic)
-
-AnyClaw does not own or bundle a coding agent. It provides two integration points that any compatible agent can use:
-
-#### 4a. MCP Server (Infrastructure Tools)
-
-An MCP server that exposes the AnyClaw infrastructure as tools. Any agent that supports MCP (OpenClaw, Claude Code, Codex, Aider, etc.) can use these tools directly.
-
-- **anyclaw_create_page** — Scaffold a new React page with routing
-- **anyclaw_create_api_route** — Add a new endpoint to the Node logic service
-- **anyclaw_create_collection** — Define a new PocketBase collection (DB table) via PocketBase admin API
-- **anyclaw_create_job** — Register a background scheduled task
-- **anyclaw_deploy** — Run validation suite (lint, typecheck, build, smoke tests), commit to git with version description, promote to prod
-- **anyclaw_rollback** — Revert to a specific version (code + DB snapshot atomically)
-- **anyclaw_snapshot_db** — Create a DB backup (called automatically before migrations, available manually for risky operations)
-- **anyclaw_list_versions** — Show deployment history with descriptions
-- **anyclaw_read_file / anyclaw_write_file** — Read/write source files in the dev environment
-- **anyclaw_run_dev** — Execute commands in the dev environment (for testing, debugging)
-- **anyclaw_ask_user** — Post a clarifying question to the mobile app and wait for the user's answer. This enables the agent to clarify requirements before building.
-- **anyclaw_update_progress** — Post a progress update to the mobile app's task card (e.g., "Creating database collections...", "Running tests...")
-
-The MCP server enforces constraints:
-- All code changes happen in the dev environment only
-- PocketBase is accessed only through its admin API (never direct file edits)
-- Validation must pass before promotion to prod
-- DB snapshot is mandatory before any schema migration
-- A user-facing version description is required for every deployment
-
-#### 4b. Skill Suite (Agent-Specific Instructions)
-
-Skills/prompts that teach the agent *how* to use the MCP tools effectively. These are formatted for the target agent's skill/prompt system:
-
-**For OpenClaw:** Installed as OpenClaw skills in the standard skill directory.
-**For Claude Code:** Installed as CLAUDE.md instructions or custom slash commands.
-**For other agents:** Provided as system prompt templates or documentation.
-
-The content is the same regardless of format:
-
-- **anyclaw-build-feature** — High-level workflow: given a user request, (1) ask clarifying questions via `anyclaw_ask_user` if needed, (2) plan the feature (pages, API routes, collections), (3) implement it, (4) test it in dev, (5) deploy via `anyclaw_deploy`. Post progress updates throughout.
-- **anyclaw-style-guide** — Conventions for the React frontend: component patterns, CSS approach, responsive layout rules. Keeps the UI consistent across agent-generated features.
-- **anyclaw-refactor** — Periodic skill: review the codebase for growing complexity, extract shared components, clean up dead code.
-- **anyclaw-describe-version** — Write a clear, non-technical version description that a non-developer can understand.
-
-#### Agent Compatibility
-
-| Agent | MCP Tools | Skills Format | Dispatch Adapter | Clarification Support |
-|-------|-----------|---------------|------------------|----------------------|
-| **OpenClaw** | Native MCP support | OpenClaw skills directory | Gateway WebSocket/REST | Full (multi-turn via gateway) |
-| **Claude Code** | Native MCP support | CLAUDE.md + slash commands | Remote triggers or headless SDK | Via `anyclaw_ask_user` MCP tool (polls for answer) |
-| **Codex / future** | Via MCP or tool-use API | System prompt template | Generic webhook adapter | Via `anyclaw_ask_user` MCP tool |
-
-#### Why Agent-Agnostic
-
-- Users keep their preferred agent (OpenClaw, Claude Code, etc.) with its memory, personality, and capabilities
-- No vendor lock-in — switch agents without rebuilding the app
-- The same MCP tools work regardless of which agent uses them
-- Agent ecosystems evolve fast — AnyClaw doesn't need to keep up with every agent's internals, just the MCP interface
-- OpenClaw users can also dispatch work via WhatsApp/Discord — the mobile app is an additional channel, not a replacement
-
-## Versioning & Rollback
-
-**Every deployment is a versioned snapshot:**
-
-- **Code:** Git commit with a tag and a human-readable description written by the agent
-- **Database:** SQLite snapshot (compressed copy of the DB file) taken before each deployment that includes a schema migration
-
-**Rollback is user-initiated** from the native version history screen. A rollback restores both the code (git checkout) and the database snapshot (file swap) atomically. This avoids schema/data mismatches.
-
-**Snapshot storage management:**
-- SQLite snapshots are compressed (gzip or zstd)
-- Retention policy: keep last N snapshots (configurable, default 20), plus any snapshot the user has bookmarked
-- Incremental approach if storage becomes an issue: SQLite's `.backup` API + binary diff (fossil delta or similar). This is an optimization to add later if needed — full compressed copies are fine for early versions given SQLite DBs for a single user will be small.
-
-## Failure Modes & Recovery
-
-| # | Failure | Detection | Recovery |
-|---|---------|-----------|----------|
-| 1 | Agent writes code that doesn't compile/run | Validation gate in dev (lint, typecheck, build, smoke tests) | Code never reaches prod. Agent iterates in dev. User can cancel from chat. |
-| 2 | Agent creates ugly or broken-looking UI | Hard to auto-detect. Taste is subjective. | User rolls back from version history. Style guidelines and component library reduce likelihood. |
-| 3 | Agent corrupts database (bad migration, data loss) | Smoke tests catch some cases. Schema validation in PocketBase catches others. | Automatic DB snapshot before every migration. User restores from version history (code + DB together). |
-| 4 | Agent enters fix loop (repeated failed attempts) | Token/time budget. User monitors agent activity from chat or settings. | Agent works only in dev — user never sees thrashing. User cancels the task from chat if it runs too long. Work never promotes to prod. |
-| 5 | New feature breaks existing feature (regression) | Smoke tests: each feature registers a health check endpoint. All run after every deployment. | If smoke tests fail, promotion is blocked. If user discovers regression manually, rollback from version history. Feature isolation (separate routes, collections, endpoints) limits blast radius. |
-
-## App Store Strategy
-
-**Apple App Store:**
-- The app has genuine native functionality (settings, chat/voice, version management, connection controls) — it is not a WebView wrapper
-- JavaScript in WKWebView is explicitly allowed (exempted from code execution restrictions)
-- Frame as "personal AI dashboard" or "AI assistant companion" in store listing
-- Precedent: Notion, Salesforce, ServiceNow all use heavy WebView patterns
-- Risk: moderate. If Apple rejects, can distribute via TestFlight / enterprise cert while appealing.
-
-**Google Play:**
-- WebView-based apps are first-class (TWA pattern). Low risk.
-
-## Tech Stack Summary
-
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Mobile app shell | Expo (React Native) + Expo Router | Managed builds, OTA updates, push notifications, no native build pain |
-| WebView | react-native-webview | Mature, bidirectional JS bridge |
-| Data & API | PocketBase | Single binary, zero config, auto-generated REST, realtime, auth, file storage. Agent-proof. |
-| Server logic | Node.js + TypeScript | Agents are fluent in it, rich ecosystem, good for background jobs |
-| Frontend UI | Vite + React + TypeScript | Fast builds, agents know it cold, hot reload in dev |
-| Database | SQLite (via PocketBase) | Single file, easy to snapshot, zero config, sufficient for single-user |
-| Background jobs | node-cron (in-process) | Simple, no Redis dependency, sufficient for single-user |
-| Versioning | Git | Natural fit — agent commits, tags, describes. Rollback = checkout. |
-| Agent integration | MCP server + agent-specific skills | Agent-agnostic — same MCP tools for OpenClaw, Claude Code, or any compatible agent |
-| Agent dispatch | Pluggable adapter interface | OpenClaw adapter (gateway WS/REST), Claude Code adapter (remote triggers/SDK), generic webhook |
-| Containerization | Docker / docker-compose | PocketBase + Node + Vite + MCP server + watchdog in one compose file |
-| Tunnel (phased) | WSS relay → WebRTC P2P → Cloudflare fallback | Phase 1 MVP relay, Phase 2 true P2P via @config-plugins/react-native-webrtc |
-| Broker | Node.js or Go API server | Lightweight signaling service |
-
-## Monetization
-
-| Tier | What's included | Cost |
-|------|----------------|------|
-| Free (self-hosted) | Mobile app + connection broker + AnyClaw server (Docker image). User provides hardware + LLM API keys. | Free |
-| Cloud-hosted | Everything above, hosted by AnyClaw. One container per user. LLM tokens bundled or BYOK. | Monthly subscription |
+- Library: `libsodium-wrappers` (WASM) on both mobile and server
+- One long-lived keypair per (device, server) pair, generated at pairing
+- Keys stored in platform secure storage (iOS Keychain / Android Keystore / libsecret / Windows Credential Manager)
+- Pairing MITM protection: display a 4-word BIP39 verification code on both sides; user visually confirms
+- No rotation for MVP — re-pair flow on device loss
+- Encryption boundary: TLS-only for static assets (HTML/CSS/JS from prod static server); NaCl additionally for sensitive API payloads (PocketBase and dispatch API calls carrying user data)
+- Debug mode: opt-in flag in mobile app settings logs decrypted traffic locally only (never on the broker)
 
 ## Process Architecture
 
-AnyClaw uses **process supervision** for crash isolation, not container splits. All services run as supervised processes on a single host (or inside a single cloud container). Each process has its own restart policy and crash domain.
+AnyClaw uses **process supervision** for crash isolation. All services run as supervised processes on a single host (or inside a single cloud container). Each process has its own restart policy and crash domain.
 
 ```
 Host (or single cloud container)
 │
 ├── [supervised, restart=always] PocketBase
-│       Data layer. Rock-solid Go binary. Almost never crashes.
+│       Data layer. Rock-solid Go binary.
 │
 ├── [supervised, restart=always] Tunnel Manager
 │       Persistent WSS connection to broker. Survives all other crashes
@@ -421,55 +194,37 @@ Host (or single cloud container)
 ├── [supervised, restart=always] Dispatch / MCP Server
 │       Task dispatch API + MCP HTTP/SSE endpoint + emergency rollback +
 │       app restart endpoint. Source NOT in agent's writable path.
-│       Always available even when logic service is broken.
+│       Always available even when the logic service is broken.
 │
 ├── [supervised, restart=on-failure] Logic Service
 │       Agent-modifiable Node.js service. Custom API routes, background
-│       jobs. Restart-on-crash. If broken by bad agent code, the user
-│       can still rollback via the dispatch API.
+│       jobs. If broken by bad agent code, the user can still rollback
+│       via the dispatch API.
 │
 ├── [supervised, restart=always] Prod Static Server
-│       Serves the agent-built React app to the WebView. Could be a
-│       small Express process or PocketBase serving static files.
+│       Serves the agent-built React app to the WebView.
 │
 ├── [transient, no auto-restart] Agent Subprocess
 │       Spawned per task by the dispatch server. Runs claude/openclaw
-│       with cgroup limits (CPU, memory). Crashes = task marked failed.
-│       Reads/writes files in dev directory using its own tools.
+│       under cgroup scope. Crashes = task marked failed.
 │
 └── [transient, no auto-restart] Vite Dev Server
-        Spawned by the agent for testing during a build. Lives only
-        as long as the build/test cycle. Isolated to dev/ directory.
+        Spawned by the agent for testing during a build. Lives only as
+        long as the build/test cycle. Isolated to the task worktree.
 ```
 
-### Crash Isolation Matrix
+**Supervisor:** `systemd --user` is the primary choice (works on any distro with cgroup v2 delegation — Ubuntu 22.04+, Debian 12+, Fedora). `supervisord` is the fallback inside minimal containers that lack systemd. Linux-first for MVP; Windows/macOS self-hosters use WSL2 or a Linux VM.
 
-| What crashes | What survives | User experience |
-|--------------|---------------|-----------------|
-| Agent subprocess | Everything else | Task marked failed; user retries from app |
-| Logic service (agent code) | PocketBase, tunnel, dispatch, prod static | WebView shows API errors; user rollbacks via version history |
-| Vite dev server | Everything else | Current build fails; deploy doesn't happen |
-| PocketBase | Tunnel, dispatch | ~2s restart; WebView and dispatch retry automatically |
-| Tunnel manager | Everything else | App shows reconnecting; comes back when tunnel restarts |
-| Dispatch/MCP server | PocketBase, tunnel, logic | Task submission temporarily unavailable; restarts in seconds |
-| Whole host | Nothing | App shows reconnecting until user fixes the host |
+**User accounts:** An install script run as root once during setup creates `anyclaw-infra` (runs supervised services) and `anyclaw-agent` (runs agent subprocesses) users and sets directory ownership. After install, no service runs as root.
 
-### Why Not Containers
+**Resource limits:** A `ResourceLimits` interface is defined but is a no-op for MVP. Real cgroup/JobObject limits will be applied once abuse patterns emerge from production data.
 
-The earlier three-container design (app server / control plane / sandbox) was overengineered. Key realizations:
+### The Dispatch Server is the Control Plane
 
-- **Coding agents already run commands natively** — Claude Code spawns subprocesses, OpenClaw spawns subprocesses. We don't need a sandbox container; we just need cgroup limits on the agent process.
-- **Process supervision gives the same crash isolation** as containers, with much less complexity. systemd/supervisord/pm2 are battle-tested for this.
-- **The "control plane" is just two persistent processes** (tunnel manager + dispatch server). They don't need their own container — just supervisor entries with `restart=always`.
-- **Agent can't break the dispatch server** because the dispatch server's source files are not in the agent's writable path. The MCP `write_file` tool enforces path checks.
-- **Same model as Replit, Codex, Devin** — multiple processes in one isolated environment, supervised independently.
-
-### The Dispatch Server is the "Control Plane"
-
-The dispatch server is the small, stable process that handles everything the user needs to be able to do **even when their app is broken**:
+The dispatch server is the small, stable process that handles everything the user must be able to do **even when their app is broken**:
 
 - `POST /tasks` — submit task
-- `POST /tasks/:id/answer` — answer clarification
+- `POST /tasks/:id/answer` — answer a clarification question
 - `POST /tasks/:id/cancel` — cancel a running task
 - `POST /rollback` — emergency rollback (always works)
 - `POST /restart-app` — restart logic service (always works)
@@ -478,141 +233,273 @@ The dispatch server is the small, stable process that handles everything the use
 - `POST /mcp` — MCP HTTP/SSE endpoint for the agent
 - PocketBase Realtime SSE proxy for clarification questions and progress updates
 
-This server is part of the AnyClaw infrastructure, not the dev workspace. The agent never modifies it.
+Its source files are not in the agent's writable path. The agent cannot modify it.
+
+### Crash Isolation Matrix
+
+| What crashes | What survives | User experience |
+|--------------|---------------|-----------------|
+| Agent subprocess | Everything else | Task marked failed; user retries from app |
+| Logic service (agent code) | PocketBase, tunnel, dispatch, prod static | WebView shows API errors; user rolls back via version history |
+| Vite dev server | Everything else | Current build fails; deploy doesn't happen |
+| PocketBase | Tunnel, dispatch | ~2s restart; WebView and dispatch retry automatically |
+| Tunnel manager | Everything else | App shows reconnecting; comes back when tunnel restarts |
+| Dispatch/MCP server | PocketBase, tunnel, logic | Task submission briefly unavailable; restarts in seconds |
+| Whole host | Nothing | App shows reconnecting until the host comes back |
+
+### Why Not Containers
+
+A container-per-role split (app server / control plane / sandbox) would give the same crash isolation with substantially more complexity. Coding agents already run commands natively — that's what they do. We only need cgroup limits on the agent process, not a separate container. Process supervisors (systemd/supervisord) are battle-tested for exactly this, and the container remains the multi-tenancy boundary. Replit, Codex sandboxes, and Devin use the same model.
+
+## Task Dispatch Protocol
+
+AnyClaw communicates with agents through a pluggable **Agent Adapter** interface. The interaction model is **task dispatch with clarification**, not real-time chat.
+
+### Task Lifecycle
+
+```
+[input] → [clarifying] → [working] → [deploying] → [done]
+                ↑    ↓
+              (Q&A rounds — agent asks, user answers)
+```
+
+1. **Input** — User types a request ("add a mood tracker for stress, sleep, and energy").
+2. **Clarifying** — Agent may ask questions via the `anyclaw_ask_user` tool. User answers in the app. Multiple rounds possible. Agent may skip if the request is clear.
+3. **Working** — Agent designs, implements, and tests the feature in the task's worktree. App shows progress updates. User can cancel.
+4. **Deploying** — Agent runs the validation suite, commits, snapshots the DB if needed, promotes to prod.
+5. **Done** — WebView reloads. Task card shows the version description.
+
+If a task fails, the card shows the failure reason. No changes reach prod.
+
+### Delivery Guarantees
+
+- **Exactly-once task delivery.** Client generates a task UUID. Dispatch server does an idempotent upsert into the PocketBase `_tasks` collection.
+- **Crash recovery.** On dispatch server restart, any task in `working` state without a running subprocess is atomically moved to `failed` with reason `"server_restart"`. The user can retry with a new UUID.
+- **Task checkpoints.** Hybrid schema: agent-agnostic step tracking (`lastCompletedStep`, `filesModified`) for the UI plus an optional agent-specific blob for internal resume state.
+- **Clarification resume.** On restart, a resumed agent first checks `_agent_messages` for pending questions. If one is unanswered, the adapter waits for the answer (respecting the user's timeout mode) before re-dispatching. No duplicate questions.
+- **Stall detection.** Hard timeout only (default 30 min). No heartbeats. Exceeding the timeout force-cancels and marks the task failed.
+- **Concurrency.** Single active task + queue for MVP. Each task runs in its own git worktree (`dev/.worktrees/task-<id>/`), so removing the serialization later is the only step needed to parallelize. A merge agent for worktree conflicts is deferred to when parallelism ships.
+- **Clarification timeout:** User-configurable. Default: "agent proceeds with best judgment" after 5 minutes. Alternative: "pause indefinitely."
+
+### Agent Adapter Interface
+
+```typescript
+interface AgentAdapter {
+  dispatch(request: string): Promise<TaskHandle>;
+  getStatus(handle: TaskHandle): Promise<TaskStatus>;
+  answerQuestion(handle: TaskHandle, answer: string): Promise<void>;
+  cancel(handle: TaskHandle): Promise<void>;
+  getActivityLog?(handle: TaskHandle): Promise<ActivityEntry[]>;
+}
+
+interface TaskStatus {
+  state: "clarifying" | "working" | "deploying" | "done" | "failed" | "cancelled";
+  question?: string;
+  versionDescription?: string;
+  error?: string;
+  progressSummary?: string;
+}
+```
+
+### Adapters
+
+**OpenClaw:** Dispatches via the gateway's WebSocket or OpenAI-compatible REST endpoint. Multi-turn clarification uses the gateway's conversation support. Progress and activity log come from gateway event streams. Cancel via gateway API. OpenClaw users can also continue dispatching work through WhatsApp/Discord — the mobile app's task dispatch is an additional channel, not a replacement.
+
+**Claude Code:** Dispatches by spawning `claude -p` as a subprocess with the user's request as the prompt and the AnyClaw MCP server pre-configured. Clarification uses the `anyclaw_ask_user` MCP tool, which writes the question to PocketBase and polls for the answer. Progress via `anyclaw_update_progress` plus `--output-format stream-json`. Cancel by killing the subprocess. A future upgrade to `@anthropic-ai/claude-agent-sdk` is possible for richer lifecycle control.
+
+**Generic webhook:** For future agents (Codex, Aider, custom harnesses). Dispatches a POST to a user-configured webhook with `{ request, taskId, callbackUrl }`. The agent POSTs questions, progress, and completion back to the callback URL.
+
+### MCP Loopback Auth
+
+The agent subprocess authenticates to the MCP server with a per-task bearer token written to a file only the agent's user can read, injected via `ANYCLAW_MCP_TOKEN` env var.
+
+### MCP Tools
+
+The MCP server is deliberately minimal. Agents use their own built-in tools (file I/O, shell, git) for everything they already do well. AnyClaw MCP tools only guard failure-prone operations:
+
+- `anyclaw_deploy` — Run validation suite, commit, merge worktree, snapshot DB if needed, promote to prod, restart logic service via supervisor
+- `anyclaw_rollback` — Revert to a specific version (code + DB atomically)
+- `anyclaw_snapshot_db` — Create a DB backup (called automatically before migrations)
+- `anyclaw_list_versions` — Show deployment history
+- `anyclaw_create_collection` — Define a PocketBase collection via admin API
+- `anyclaw_ask_user` — Post a clarifying question and wait for the answer
+- `anyclaw_update_progress` — Post a progress update to the task card
+
+Enforced constraints:
+
+- All code changes happen in the task's worktree only
+- PocketBase is accessed only through its admin API
+- Validation must pass before promotion
+- DB snapshot mandatory before schema migration
+- A user-facing version description is required for every deployment
+
+### Skill Suite
+
+Agent-specific prompts/skills that teach the agent *how* to use the MCP tools and conventions. Same content across agents, different format:
+
+- **OpenClaw:** OpenClaw skills directory
+- **Claude Code:** CLAUDE.md + custom slash commands
+- **Other agents:** System prompt templates
+
+Skills:
+
+- **anyclaw-build-feature** — Workflow: clarify → plan → implement → test → deploy. Post progress throughout.
+- **anyclaw-style-guide** — React + Tailwind v4 conventions; locked `@theme` tokens; responsive layout rules.
+- **anyclaw-refactor** — Periodic cleanup: extract shared components, remove dead code.
+- **anyclaw-describe-version** — Write a clear, non-technical version description.
+
+**Skill versioning:** Skills declare a minimum server version. Server rejects incompatible skills. Skills iterate independently of the server.
+
+### Agent Compatibility
+
+| Agent | MCP Tools | Skills Format | Dispatch Adapter | Clarification Support |
+|-------|-----------|---------------|------------------|----------------------|
+| OpenClaw | Native MCP | OpenClaw skills directory | Gateway WS/REST | Full (multi-turn via gateway) |
+| Claude Code | Native MCP | CLAUDE.md + slash commands | `claude -p` subprocess | Via `anyclaw_ask_user` |
+| Codex / future | Via MCP or tool-use API | System prompt template | Generic webhook | Via `anyclaw_ask_user` |
+
+## Versioning & Rollback
+
+- **Code:** Git commit with a tag and a human-readable description written by the agent.
+- **Database:** SQLite snapshot (compressed) taken before each deployment that includes a schema migration.
+- **Rollback** is user-initiated from the native version history screen. It restores code (git checkout) and DB snapshot (file swap) atomically, avoiding schema/data mismatches.
+
+**Snapshot storage:** gzip/zstd compressed. Retention: last N snapshots (configurable, default 20) plus any the user has bookmarked. Incremental snapshots (SQLite `.backup` + binary diff) are an optimization for later if storage becomes an issue.
+
+## Failure Modes & Recovery
+
+| # | Failure | Detection | Recovery |
+|---|---------|-----------|----------|
+| 1 | Agent writes code that doesn't compile/run | Validation gate in dev (lint, typecheck, build, smoke tests) | Worktree deleted, no merge, prod untouched |
+| 2 | Agent creates ugly or broken-looking UI | Hard to auto-detect | User rolls back from version history; style guide and `@theme` tokens reduce likelihood |
+| 3 | Agent corrupts database | Smoke tests + PocketBase schema validation | Automatic DB snapshot before every migration; rollback restores code + DB together |
+| 4 | Agent enters fix loop | Hard timeout (30 min default); user monitors via activity log | Force-cancel on timeout; user can cancel manually; work never promotes to prod |
+| 5 | Regression in existing feature | Smoke tests (each feature registers a health check endpoint) | Failed smoke tests block promotion; user rollback otherwise; separate routes/collections limit blast radius |
+
+## App Store Strategy
+
+**Apple App Store:** The app has genuine native functionality (task dispatch, version management, connection controls, settings) — it is not a WebView wrapper. JS in WKWebView is explicitly allowed. Frame as "personal AI dashboard." Precedent: Notion, Salesforce, ServiceNow. If rejected, TestFlight/enterprise cert while appealing.
+
+**Google Play:** WebView-based apps are first-class (TWA pattern). Low risk.
 
 ## Technical Decisions (Locked)
 
-All open decisions from the subsystem design docs have been resolved. These are binding for implementation.
+All decisions below are binding for implementation.
 
-### Architecture & Agent Integration
+### Architecture & Process Model
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 1 | Concurrent tasks | Single active task + queue. Design with task isolation for future parallelization. | Simplest for MVP, but don't paint ourselves into a corner. |
-| 2 | Clarification timeout | User-configurable: "agent proceeds with best judgment" (default 5 min) OR "pause indefinitely." | Different users have different risk tolerance. |
-| 3 | Claude Code adapter | CLI `-p` mode for MVP. Upgrade to TypeScript SDK later if richer lifecycle control is needed. | Less code, clarification via MCP tool works fine. |
-| 4 | MCP transport | HTTP/SSE from the start. | Cloud-ready from day one. Worth the upfront complexity for long-term flexibility. |
-| 5 | MCP tools philosophy | No scaffolding tools (create_page, etc). Agent runs in the coding folder using its built-in tools. MCP tools only for things agents tend to get wrong — deploy, rollback, DB snapshots, ask_user, update_progress. Robustness over convenience. | Agents can create files with high success rate. MCP tools should guard failure-prone operations. |
-| 6 | run_dev commands | Blocklist for MVP, log all commands, tighten to allowlist later. | Ship fast, observe real agent behavior, then lock down. |
-| 7 | Task persistence across restart | Persist task state. Resume where the agent left off after restart. | Worth the complexity — users expect reliability. |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Process model | Process supervision, not container split. Supervised: PocketBase, tunnel manager, dispatch/MCP server, logic service, prod static server. Transient: agent subprocess, Vite dev server. Dispatch/MCP source NOT in agent's writable path. | Same crash isolation as multi-container, dramatically simpler. Same model as Replit, Codex, Devin. |
+| Supervisor choice | `systemd --user` primary; `supervisord` fallback for minimal containers | Works without root on any modern distro with cgroup v2 delegation |
+| Platform | Linux-first for MVP; WSL2/VM for Windows/macOS self-hosters | Cross-platform cgroup abstraction not worth MVP complexity |
+| Resource limits | `ResourceLimits` interface exists as a no-op for MVP | Premature optimization; lock down once real abuse emerges |
+| Filesystem bootstrapping | Install script runs as root once; creates `anyclaw-infra` and `anyclaw-agent` users; services run non-root after install | Standard Linux pattern |
+| Restart prod logic service after deploy | `systemctl --user restart anyclaw-logic` (or supervisord equivalent), invoked by dispatch server | Standard supervisor mechanism |
 
-### Process Architecture
+### Agent Integration
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 8 | Process model | **Process supervision, not container split.** All AnyClaw services run as supervised processes (systemd / supervisord / pm2) with independent restart policies. No separate containers. **Self-hosted:** one Docker container with supervisord, OR native install with systemd. **Cloud-hosted:** one container per user with supervisord inside. **Supervised processes (auto-restart):** PocketBase, tunnel manager, dispatch/MCP server, logic service, prod static server. **Transient processes:** agent subprocess (per task), Vite dev server (per build). The dispatch/MCP server source files are NOT in the agent's writable path — agent cannot break it. cgroup limits on the agent process prevent CPU/RAM starvation. | Same crash isolation as three containers, dramatically simpler. The agent already runs commands natively (it's a coding agent — that's what it does). The container is the multi-tenancy boundary; supervisord is the crash-isolation boundary. Same model used by Replit, Codex sandboxes, and Devin. |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Agent execution | Transient subprocess using its own built-in tools for files/shell | Agents already know how to run commands — don't duplicate |
+| MCP tools philosophy | No scaffolding. MCP only for deploy, rollback, snapshot, ask_user, update_progress, create_collection | Robustness over convenience; guard failure-prone operations |
+| MCP transport | HTTP/SSE from day one | Cloud-ready from the start |
+| MCP loopback auth | Per-task bearer token in a file only the agent user can read, injected via `ANYCLAW_MCP_TOKEN` | Cross-platform, simple, sufficient for loopback |
+| Claude Code adapter | `claude -p` CLI mode for MVP; upgrade to TS SDK later if needed | Less code; clarification via MCP tool works fine |
+| `run_dev` commands | Blocklist for MVP, log all commands, tighten to allowlist later | Ship fast, observe real behavior, lock down |
+| Concurrent tasks | Single active task + queue; worktree-per-task from day one | Simplest for MVP without painting into a corner |
+| Task persistence across restart | Persist task state; resume after restart | Users expect reliability |
+| Task checkpoint schema | Agent-agnostic step tracking + optional agent-specific blob | UI generic, agent precise |
+| Task delivery guarantee | Exactly-once. Client-generated UUID + idempotent upsert. Orphaned `working` tasks marked `failed` on restart | User instructions must never be lost or duplicated |
+| Queue stall detection | Hard timeout only (default 30 min) | Heartbeat complexity unjustified |
+| Skill versioning | Independent with minimum-server-version declaration | Faster iteration on prompts |
+| Clarification timeout | User-configurable: proceed after 5 min (default) or pause indefinitely | Different users, different tolerance |
+| Worktree strategy | `dev/.worktrees/task-<id>/`. Merge to `main` on success, delete on failure | Isolation from day one; parallelization just removes the queue |
+| Merge conflicts (future parallelism) | Dedicated merge agent. Deferred | Not needed for sequential MVP |
+| ask_user resume | Resumed agent checks `_agent_messages` for pending questions first | No duplicates |
+| OpenClaw gateway failure handling | Deferred to post-MVP | Different failure modes need different handling |
 
 ### Mobile App
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 9 | Task dispatch UI | Dedicated "Request" tab + full-screen modal/bottom sheet. | Clear, discoverable, avoids WebView z-index conflicts. |
-| 10 | Min Android API | API 28 (Android 9.0). Drops ~5% of devices. | Better WebView, dark mode support, biometric API. |
-| 11 | Offline native shell | Cache-nothing for MVP. Server down = reconnect screen. | Spec already says no offline requirement. |
-| 12 | WebView auth token | JS bridge injection after page load. | Most secure — token never in URL or logs. |
-| 13 | Realtime communication | PocketBase Realtime SSE + REST. SSE for server→client push (progress, questions). REST POST for client→server (answers, commands). PocketBase handles persistence and state automatically. Task state survives app close/reopen — user can resume clarification questions. | Leverages existing PocketBase infra. Less custom code. Built-in persistence. |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Task dispatch UI | Dedicated "Request" tab + full-screen modal/bottom sheet | Clear, discoverable, no WebView z-index conflicts |
+| Min Android API | API 28 (Android 9.0) | Better WebView, dark mode, biometric API; drops ~5% of devices |
+| Offline behavior | Cache-nothing for MVP; server down = reconnect screen | No offline requirement |
+| WebView auth token | JS bridge injection after page load | Most secure — never in URL or logs |
+| Realtime communication | PocketBase Realtime SSE (server→client) + REST (client→server). Task state persists in PocketBase and survives app close/reopen | Leverages existing infra, built-in persistence |
 
-### Frontend & Styling
+### Frontend & Style Guide
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 14 | CSS framework | Tailwind v4. | Newer CSS-first config. Agents will learn it quickly, and we define conventions in the style guide skill. |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| CSS framework | Tailwind v4 | Newer CSS-first config; conventions enforced via style guide skill |
+| `@theme` tokens | Style guide ships a complete default `@theme` block (colors, spacing, typography, shadows) in `app.css`. Agent uses existing tokens; cannot add new tokens without user approval via `anyclaw_ask_user` | Consistency with user-approved extension path |
+| Dark mode | `@media (prefers-color-scheme: dark)` overrides in the default `@theme` block | Automatic, no toggle initially |
 
 ### Connection & Security
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 15 | Domain | `anyclawapp.com` (purchased). Mobile app uses `broker.anyclawapp.com`. | Already bought. |
-| 16 | OAuth providers | Google + Apple + GitHub at launch. | Apple required by App Store. GitHub for developer early-adopter audience. |
-| 17 | WebRTC Phase 2 timing | Launch with WSS relay only. Begin Phase 2 dev after launch. | Ship faster, accept relay costs initially. |
-| 18 | Broker region | US East (iad). Add regions when user distribution justifies it. | Best peering, largest user base. |
-| 19 | Phase 1 E2E encryption | Yes — NaCl box encryption on top of TLS. Broker cannot read relayed traffic even if compromised. | Privacy-maximalist audience expects this. ~200 lines of crypto code, negligible perf impact. |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Domain | `anyclawapp.com` (purchased); mobile app uses `broker.anyclawapp.com` | Owned |
+| OAuth providers | Google + Apple + GitHub at launch | Apple required by App Store; GitHub for developer early adopters |
+| OAuth strategy | Broker-issued short-lived JWTs (15 min) after OAuth validation; broker holds provider refresh tokens; `/auth/refresh` endpoint | Standard pattern (Supabase, Firebase, Clerk) |
+| Apple Sign In quirk | Broker persists name/email from first OAuth callback | Apple documented behavior |
+| Phase 1 E2E encryption | NaCl box encryption layered on TLS. Broker cannot read relayed traffic | Privacy-maximalist audience expects this |
+| NaCl library | `libsodium-wrappers` (WASM) on mobile and server | Industry standard; works everywhere including RN |
+| NaCl key lifecycle | Long-lived keypair per (device, server) pair, generated at pairing, stored in platform secure storage. No rotation for MVP; re-pair on device loss | Threat model is machine compromise, not conversation privacy |
+| Pairing MITM protection | 4-word BIP39 verification code displayed on both sides | Industry standard (Signal, WhatsApp, Threema) |
+| Encryption boundary | TLS-only for static assets; NaCl additionally for sensitive API payloads (PocketBase + dispatch) | Clean separation, minimal WebView complexity |
+| Debug mode | Opt-in flag in mobile settings; decrypted traffic logged locally only, never on broker | Troubleshooting without compromising default privacy |
+| WebRTC Phase 2 timing | Launch with WSS relay only; begin Phase 2 dev after launch | Ship faster |
+| Broker region | US East (iad); add regions as distribution justifies | Best peering, largest user base |
+| Tunnel multiplexing | In-envelope service tag (`pb`/`api`/`app`) routed by tunnel manager | No DNS/subdomain complexity |
+| VPS provider | Hetzner (US East + EU) | Proven, Docker-ready, generous bandwidth, low cost |
 
-### Server & Data
+### Server, Data & Secrets
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 20 | PocketBase credentials | PocketBase API tokens (not email/password). | More secure for programmatic access. |
-| 21 | API key storage | Encrypted in PocketBase for both self-hosted and cloud. Settings UI can manage keys in both modes. | Consistent experience. Mobile app settings screen works everywhere. |
-| 22 | Cloud hosting | Single VPS with Docker Compose first (one container per user with supervisord). Migrate to E2B microVMs or Kubernetes Agent Sandbox later when scale justifies it. | Start simple, scale when needed. Same container layout as self-hosted. |
-| 23 | Agent execution model | Agent runs natively as a transient subprocess. Uses its own built-in tools for files and shell commands. AnyClaw MCP tools only for things the agent can't do natively (deploy, rollback, snapshot, ask_user, update_progress, create_collection). cgroup limits prevent runaway commands from starving supervised processes. | Coding agents already know how to run commands — that's their job. MCP tools should add value, not duplicate native capability. |
-| 24 | Skill versioning | Independent with compatibility check. Skills declare minimum server version. Server rejects incompatible skills. | Faster iteration on prompts without requiring full server update. |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| PocketBase credentials | PocketBase API tokens, not email/password | More secure for programmatic access |
+| PocketBase token provisioning | Install script runs `pocketbase superuser create` non-interactively, calls admin API to mint a long-lived token, stores at `/data/.anyclaw/pb-token`. Superuser account remains for emergency access | Non-interactive, repeatable |
+| API key storage | Encrypted in PocketBase for both self-hosted and cloud. Settings UI manages keys in both modes | Consistent experience across modes |
+| Master encryption key | Generated at install time, stored at `/data/.anyclaw/master.key` mode `0600`, owned by `anyclaw-infra`. Cloud: derived from per-user provisioning secret | Simple, standard |
+| Encrypted secrets algorithm | AES-256-GCM, implemented in the dispatch server | Industry-standard authenticated encryption |
+| Cloud hosting | Single Hetzner VPS with Docker Compose (one container per user with supervisord inside). Migrate to E2B microVMs or Kubernetes Agent Sandbox later | Start simple, same layout as self-hosted |
 
-### Gap Resolutions (Post-Remaster)
+## Tech Stack Summary
 
-Additional decisions made after the architecture simplification, closing out the new gap list that emerged from remastering the design docs.
+| Component | Technology |
+|-----------|-----------|
+| Mobile app shell | Expo (React Native) + Expo Router |
+| WebView | react-native-webview |
+| Data & API | PocketBase (SQLite, REST, Realtime, auth, files) |
+| Server logic | Node.js + TypeScript |
+| Frontend UI | Vite + React + TypeScript + Tailwind v4 |
+| Background jobs | node-cron |
+| Versioning | Git (per-task worktrees merged to `main`) |
+| Agent integration | MCP server (HTTP/SSE) + agent-specific skills |
+| Agent dispatch | Pluggable adapters (OpenClaw gateway, Claude Code `-p`, generic webhook) |
+| Process supervision | systemd --user (primary), supervisord (fallback) |
+| Containerization | Docker / docker-compose (one container per user) |
+| Tunnel (phased) | WSS relay → WebRTC P2P → Cloudflare fallback |
+| E2E encryption | NaCl (libsodium-wrappers) on top of TLS |
+| Secret encryption | AES-256-GCM in dispatch server |
+| Broker | Node.js or Go API server, Hetzner (US East) |
 
-#### Process Supervision & Execution
+## Monetization
 
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 25 | Supervisor choice | **systemd** (user mode preferred) as primary. **supervisord** as fallback for minimal containers without systemd. | OpenClaw already uses systemd. `systemd --user` + `systemd-run --user --scope` works without root on any distro with cgroup v2 delegation (Ubuntu 22.04+, Debian 12+, Fedora). |
-| 26 | Resource limits (cgroup/JobObject) | **Deferred.** Design a `ResourceLimits` interface as a no-op for MVP. Populate later when real abuse patterns emerge. | Premature optimization. Trust the agent for MVP, monitor, lock down based on real data. |
-| 27 | Linux-first for MVP | Yes. Windows/macOS self-hosters use WSL2 or a Linux VM. | Cross-platform cgroup abstraction is not worth the MVP complexity. |
-| 28 | Restart prod logic service after deploy | `systemctl --user restart anyclaw-logic` (or supervisord equivalent). The dispatch server invokes this via a controlled shell out. | Standard supervisor mechanism. No custom plumbing. |
-| 29 | Filesystem permission bootstrapping | Install script runs as root once during setup. Creates users (`anyclaw-infra`, `anyclaw-agent`), sets directory ownership. After install, services run as non-root users. | Standard Linux install pattern. |
-
-#### Security & Encryption
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 30 | NaCl library | `libsodium-wrappers` (WASM) on both mobile and server. | Industry standard. Works everywhere including React Native. Maintained by the libsodium team. |
-| 31 | NaCl key lifecycle | Long-lived keypair per (device, server) pair, generated at pairing. Stored in platform secure storage (iOS Keychain / Android Keystore / libsecret on Linux / Credential Manager on Windows). **No rotation for MVP.** Re-pair flow on device loss. | Attack surface focus is machine compromise + API key leaks, not conversation privacy. Simple is correct. |
-| 32 | Pairing MITM protection | Display a 4-word verification code (BIP39 wordlist) derived from the shared secret on both sides. User visually confirms before proceeding. | Industry standard (Signal, Threema, WhatsApp all use this pattern). |
-| 33 | WebView traffic encryption boundary | **TLS-only for static assets** (HTML/CSS/JS from prod static server). **NaCl additionally for sensitive API payloads** (PocketBase API calls carrying user data, dispatch API calls). Clean separation, minimal WebView complexity. | Option (d) from Plan 5 Gap 1 — middle ground. Assets are public-ish; user data is private. |
-| 34 | Debug mode for encrypted traffic | Opt-in flag in mobile app settings. When enabled, the client logs decrypted traffic locally only (never on broker). | Simple troubleshooting path without compromising default privacy. |
-| 35 | MCP loopback auth | Per-task bearer token. Written to a file only the agent's user can read, injected via `ANYCLAW_MCP_TOKEN` env var. | Cross-platform, simple, sufficient for loopback. |
-
-#### Task Isolation & Workspace
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 36 | Task workspace isolation | **Worktree-per-task from day one.** Each task runs in its own git worktree under `dev/.worktrees/task-<id>/`. On success: merge worktree branch to `main`, delete worktree. On failure: delete worktree without merging. | Simple to set up, gives isolation from day one, and parallelization just requires removing the queue serialization later. |
-| 37 | Merge conflicts (future parallelism) | A dedicated "merge agent" handles conflicts when multiple parallel tasks touch the same files. Not needed for MVP (sequential tasks can't conflict). | Deferred to when parallelism ships. |
-| 38 | Task checkpoint schema | Hybrid: agent-agnostic step tracking (`lastCompletedStep`, `filesModified`) for UI + optional agent-specific blob for internal resume state. | UI can show progress generically; agent can resume precisely. |
-| 39 | ask_user resume after restart | On dispatch server restart, the resumed agent first checks `_agent_messages` for pending questions. If one is unanswered, the adapter waits for the answer (respecting the user's timeout mode) before re-dispatching. | No duplicate questions. Consistent with "pause indefinitely" semantics. |
-
-#### Delivery & Reliability
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 40 | Task delivery guarantee | **Exactly-once.** Client generates task UUID. Dispatch server does idempotent upsert to PocketBase `_tasks`. On restart, any task in `working` state without a running subprocess is atomically moved to `failed` with reason `"server_restart"`. User can always retry with a new UUID. | User instructions must never be lost or duplicated. This is the reliability guarantee AnyClaw owns. |
-| 41 | OpenClaw gateway failures | Deferred to post-MVP. Handle reactively when specific failure modes emerge. | Premature. Different failure modes need different handling. |
-| 42 | Queue stall detection | Hard timeout only (no heartbeat required). If a task runs longer than its configured max (default: 30 minutes), it's force-cancelled and marked failed. | Simple. Heartbeat complexity not justified for MVP. |
-
-#### Routing & Networking
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 43 | Tunnel multiplexing | In-envelope service tag: `{ type, client_id, service: "pb"|"api"|"app", payload }`. Tunnel manager routes to PocketBase (`pb`), dispatch/MCP server (`api`), or prod static server (`app`) based on the tag. | No DNS/subdomain gymnastics. Mobile app and tunnel both know the routing table. |
-| 44 | VPS provider | **Hetzner** (US East + EU datacenters, Docker-ready, generous bandwidth, lowest cost for reliable service). | Proven choice for small-scale self-hosting. |
-
-#### Mobile App Auth & Keys
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 45 | OAuth strategy | **Broker-issued JWT after OAuth validation.** Broker stores provider refresh tokens server-side. Broker exposes `/auth/refresh` endpoint. Access tokens are short-lived JWTs (15 min). | Standard pattern. Used by Supabase, Firebase Auth, Clerk, Auth0. |
-| 46 | Apple Sign In first-login quirk | Broker persists user details (name, email) from the first OAuth callback. Subsequent logins only provide the user ID. | Apple's documented behavior. Standard mitigation. |
-
-#### PocketBase & Secret Management
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 47 | PocketBase API token provisioning | Install script runs `./pocketbase superuser create` non-interactively with generated credentials, calls the admin API to generate a long-lived API token, then stores the token in `/data/.anyclaw/pb-token`. Superuser account remains for emergency admin access. | Non-interactive, repeatable, standard approach. |
-| 48 | Master encryption key | Generated at install time. Stored at `/data/.anyclaw/master.key` with mode `0600`, owned by the `anyclaw-infra` user. For cloud hosting, derived from a per-user provisioning secret. | Simple, standard. Key rotation is a later concern. |
-| 49 | Encrypted secrets algorithm | AES-256-GCM. Implemented in the dispatch server, which encrypts on write to PocketBase and decrypts on read. | Industry standard authenticated encryption. |
-
-#### Style Guide Specifics
-
-| # | Decision | Choice | Rationale |
-|---|----------|--------|-----------|
-| 50 | Tailwind v4 `@theme` tokens | Style guide skill will ship with a complete default `@theme` block in `app.css` (colors, spacing, typography, shadows) documented. Agent uses existing tokens; cannot add new `@theme` tokens without user approval via `anyclaw_ask_user`. | Consistency across agent-built UI. User-approved extension path. |
-| 51 | Dark mode pattern | `@media (prefers-color-scheme: dark)` overrides in the default `@theme` block. Agent follows the pattern for any new themes. | Automatic, no toggle needed initially. |
+| Tier | What's included | Cost |
+|------|----------------|------|
+| Free (self-hosted) | Mobile app + connection broker + AnyClaw server. User provides hardware + LLM API keys. | Free |
+| Cloud-hosted | Everything above, hosted by AnyClaw (one container per user on Hetzner). LLM tokens bundled or BYOK. | Monthly subscription |
 
 ## Out of Scope (for now)
 
-- Offline / degraded connectivity support (server down = app shows reconnect screen)
+- Offline / degraded connectivity support (server down = reconnect screen)
 - Multi-user / sharing features (single user per instance)
 - Custom domain support for self-hosters
-- Native widgets (iOS/Android home screen widgets) — future enhancement
+- Native home screen widgets
 - End-to-end encryption of data at rest on cloud-hosted instances (trust model TBD)
+- Parallel task execution (worktree layout already supports it; queue serialization is the only blocker)
+- Cross-platform native cgroup/JobObject resource limits

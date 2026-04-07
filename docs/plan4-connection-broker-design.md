@@ -1,114 +1,249 @@
-# Plan 4: Connection Broker -- Detailed Design
+# Plan 4: Connection Broker — Detailed Design
 
-**Goal:** Build a lightweight cloud service that authenticates users, registers self-hosted server instances, and brokers connections between the mobile app and the user's server. The broker implements a phased tunnel strategy: Phase 1 WSS relay, Phase 2 WebRTC P2P with the broker reduced to signaling, Phase 3 Cloudflare Tunnel fallback.
+**Goal:** Build a lightweight cloud service that authenticates AnyClaw users, registers self-hosted server instances, and brokers connections between the mobile app and the user's host. The broker implements a phased tunnel strategy: **Phase 1 (launch): WSS relay with NaCl end-to-end encryption**, **Phase 2 (post-launch): WebRTC P2P with the broker reduced to signaling**.
 
-**Guiding constraint:** The broker must be cheap to operate. In Phase 1 it relays all user traffic, so the design must minimize per-user bandwidth and make the transition to Phase 2 (P2P) as fast as possible.
+**Guiding constraint:** The broker must be cheap to operate, stateless where possible, and must never be able to read the plaintext traffic it relays. In Phase 1 it forwards every byte between the mobile app and the user's host, so the design minimises per-user bandwidth and makes the transition to Phase 2 (P2P) a drop-in upgrade rather than a rewrite.
 
-**Relationship to the user's host process architecture:** Per the main spec's Process Architecture section, the user's side is a single host (one Docker container or native install) running supervised processes: PocketBase, Tunnel Manager, Dispatch/MCP server, Logic service, and Prod static server. The broker treats the user's side as a single endpoint — one persistent WSS connection per user, maintained by the **Tunnel Manager** process (a supervised, always-restart process on the host). The broker relays encrypted bytes through this single tunnel and does not know or care that multiple processes live behind it. Multiplexing across the host's internal services (PocketBase on port 8090, Dispatch/MCP on port 3000, Prod static on port 4000) is performed by the Tunnel Manager on the user's side; the broker sees only opaque frames.
+**Relationship to the user's host (process supervision, not containers):** Per the main spec's Process Architecture section, the user's side is a single host — one Docker container or a native install — running supervised processes: PocketBase, Tunnel Manager, Dispatch/MCP server, Logic service, and Prod static server. The broker treats the user's side as a single endpoint: one persistent WSS connection per host, owned by the supervised **Tunnel Manager** process (`restart=always`). The broker relays opaque frames and does not know or care that multiple processes live behind the tunnel. Fan-out to the internal services (PocketBase on `127.0.0.1:8090`, Dispatch/MCP on `127.0.0.1:3000`, Prod static on `127.0.0.1:4000`) is performed by the Tunnel Manager on the user's side, driven by an in-envelope `service` tag (see §7.4).
 
 ---
 
-## 1. Auth System
+## 1. Overview
 
-### 1.1 Identity Provider
+### 1.1 What the Broker Does
 
-Use **Lucia Auth v3** (MIT, TypeScript) with a Postgres adapter. Lucia is a thin session library -- it handles password hashing (argon2id), session tokens, and cookie/header management without imposing framework opinions. It runs inside the broker's Node.js process.
+1. **Authenticates users** via OAuth (Google, Apple, GitHub — all three at launch, per spec decision #16).
+2. **Issues broker JWTs** (15 minute access token + refresh endpoint) backed by opaque server-side session records (per spec decision #45).
+3. **Registers self-hosted servers** against user accounts via a one-time pairing token with BIP39 MITM verification (per spec decision #32).
+4. **Tracks server liveness** via heartbeats, surfacing `online` / `degraded` / `offline` state to the mobile app.
+5. **Relays WSS traffic** between mobile clients and their paired hosts as opaque, NaCl-encrypted frames (Phase 1).
+6. **Signals WebRTC** (Phase 2, post-launch) by forwarding SDP offers/answers and ICE candidates, then getting out of the data path.
+7. **Runs coturn** for WebRTC TURN fallback (Phase 2).
 
-Alternative considered: **Auth.js (NextAuth)** -- rejected because it is tightly coupled to Next.js patterns and its session model is optimized for browser cookies, not mobile bearer tokens.
+### 1.2 What the Broker Does NOT Do
 
-Alternative considered: **Managed auth (Clerk, Auth0)** -- rejected for Phase 1 to avoid external dependency costs and latency. Can revisit if user growth justifies it.
+- **Never reads relay payloads.** All application-level traffic is NaCl-box encrypted end-to-end; the broker handles ciphertext only.
+- **Never proxies unauthenticated requests.** No open relay. Every WS connection is tied to a session and a server the user owns.
+- **Never stores user content.** Messages, tasks, code, DB contents live on the user's host. The broker only stores auth records, server metadata, and public keys.
+- **Never holds long-term private keys for users or servers.** Private keys live in device secure storage / server filesystem only.
+- **Never speaks HTTP to the user's host.** All traffic is tunneled over the one outbound WSS connection the Tunnel Manager opens. Zero inbound ports on the user's machine.
+- **Never rotates NaCl keys automatically** in MVP (per spec decision #31). Device loss triggers a re-pair.
+- **Does not host the agent, the coding workspace, or PocketBase.** Those are on the user's host.
 
-### 1.2 Registration and Login
+---
 
-**Email + password:**
-1. `POST /auth/register` -- email, password. Lucia hashes with argon2id, stores user row. Returns a session token (opaque, 256-bit random, stored in Postgres `sessions` table).
-2. `POST /auth/login` -- email, password. Validates credentials, creates session, returns token.
-3. Email verification via a signed link (`POST /auth/verify-email?token=...`). Use Resend (transactional email API, free tier: 100 emails/day) for sending.
+## 2. Domain & Hosting
 
-**OAuth (Google, Apple, GitHub — all three at launch):**
-1. `GET /auth/oauth/:provider` -- redirects to provider's consent screen.
-2. `GET /auth/oauth/:provider/callback` -- receives authorization code, exchanges for ID token, upserts user by provider+subject, creates session.
-3. On mobile: use `expo-auth-session` (Expo's managed OAuth flow with AuthSession.startAsync). The mobile app opens the broker's OAuth URL in an in-app browser, receives the callback redirect with the session token.
+### 2.1 Domain
 
-Lucia supports linking multiple OAuth providers to a single user via its `oauth_account` table (provider + provider_user_id -> user_id). A user who registers with email can later link Google/GitHub without creating a duplicate account.
+- **Apex domain:** `anyclawapp.com` (already purchased, per spec decision #15).
+- **Broker hostname:** `broker.anyclawapp.com`.
+- **DNS:** A/AAAA records point at the Hetzner VPS. TTL 300s for initial deployment, raise to 3600s once stable.
+- **Wildcard TLS:** Not needed. Only one hostname for the broker. `broker.anyclawapp.com` covers REST + WSS on port 443.
 
-### 1.3 Session Tokens and Multi-Device
+### 2.2 VPS Provider: Hetzner (spec decision #44)
 
-Sessions are opaque bearer tokens, not JWTs. Rationale: sessions can be revoked instantly by deleting the row, which matters when a phone is lost. JWTs require short expiry + refresh dance to approximate revocability.
+- **Location:** Hetzner US East (Ashburn, VA) datacenter — best peering for the initial US East user base (spec decision #18).
+- **Initial size:** CX22 (2 vCPU shared, 4 GB RAM, 40 GB NVMe, 20 TB bandwidth). ~€5/mo. Sufficient for ~500 concurrent WS connections and <10,000 registered users.
+- **Scale path:** Vertical first — CX32 (4 vCPU, 8 GB) then CX42 (8 vCPU, 16 GB). Horizontal when a single box saturates (see §12).
+- **OS:** Ubuntu 24.04 LTS. cgroup v2 delegation enabled by default (matches the host-side systemd-user requirement from spec decision #25).
 
-**Token lifecycle:**
-- Token returned as JSON in login/register response body (not a cookie -- mobile apps use `Authorization: Bearer <token>` header).
-- Session expiry: 30 days. Sliding window: each API call that validates the session extends expiry by 30 days if less than 15 days remain.
-- `POST /auth/logout` -- deletes the session row.
-- `POST /auth/logout-all` -- deletes all sessions for the user (lost phone scenario).
-- `GET /auth/sessions` -- lists active sessions with device name, last active timestamp, IP (for the user to audit).
+### 2.3 TLS: Caddy + Let's Encrypt
 
-**Multi-device:** A single user can have multiple active sessions (phone, tablet, second phone). Each session is independent. There is no "device registration" step -- a new login creates a new session. The mobile app stores the token in `expo-secure-store` (Keychain on iOS, Keystore on Android).
+- **Reverse proxy:** Caddy 2.x listening on 443, fronting the Fastify broker on `127.0.0.1:8080`.
+- **Certificates:** Automatic Let's Encrypt via Caddy's built-in ACME client. HTTP-01 challenge on port 80 with auto-redirect to 443.
+- **WebSocket upgrade:** Caddy passes WS upgrades transparently; no special configuration needed beyond `reverse_proxy` (Caddy handles `Upgrade` and `Connection` headers automatically).
+- **HSTS:** `max-age=31536000; includeSubDomains; preload`.
 
-### 1.4 Database Schema (Auth)
+**Caddyfile:**
 
-```sql
-CREATE TABLE users (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email         TEXT UNIQUE,
-  password_hash TEXT,          -- NULL for OAuth-only users
-  email_verified BOOLEAN DEFAULT FALSE,
-  created_at    TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE oauth_accounts (
-  provider         TEXT NOT NULL,       -- 'google', 'github', 'apple'
-  provider_user_id TEXT NOT NULL,
-  user_id          UUID REFERENCES users(id) ON DELETE CASCADE,
-  PRIMARY KEY (provider, provider_user_id)
-);
-
-CREATE TABLE sessions (
-  id         TEXT PRIMARY KEY,           -- 256-bit random token (base64url)
-  user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
-  device_name TEXT,                      -- e.g. "iPhone 15 Pro" (from User-Agent or app metadata)
-  ip_address  INET,
-  expires_at  TIMESTAMPTZ NOT NULL,
-  created_at  TIMESTAMPTZ DEFAULT now(),
-  last_active TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_sessions_user ON sessions(user_id);
-CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+```caddy
+broker.anyclawapp.com {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:8080
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    log {
+        output file /var/log/caddy/broker.log
+        format json
+    }
+}
 ```
 
-A background job runs hourly to `DELETE FROM sessions WHERE expires_at < now()`.
+### 2.4 Deployment Topology
+
+```
+Hetzner CX22 (broker.anyclawapp.com)
+├── Caddy          (443 → 127.0.0.1:8080, auto TLS)
+├── Fastify broker (Node 22 LTS, PM2-supervised)
+├── Postgres 16    (local, unix socket, daily pg_dump to off-box storage)
+├── Redis 7        (local, for rate limiting + relay connection map; see §12)
+└── coturn         (Phase 2: UDP 3478, TLS 5349)
+```
+
+All five run under systemd on the host (no Docker Compose for MVP — simpler ops, tighter integration with journald/logrotate). The Fastify broker process is managed by `pm2-runtime` behind a systemd unit to get restart-on-failure + zero-downtime reload.
+
+### 2.5 CI/CD
+
+- **Source:** GitHub monorepo subdirectory `broker/`.
+- **Pipeline:** GitHub Actions — on push to `main`: `pnpm install` → `pnpm test` → `pnpm build` → `rsync` the compiled JS + `package.json` to the VPS → `systemctl reload anyclaw-broker.service`.
+- **Migrations:** `pnpm migrate` step runs before reload. Migrations are forward-only SQL files under `src/db/migrations/`.
+- **Rollback:** Previous build kept in `/opt/anyclaw-broker/releases/<sha>/`. `systemctl reload` swaps the symlink. Rollback = swap symlink back + `systemctl reload`.
 
 ---
 
-## 2. Server Registration
+## 3. Auth System
 
-### 2.1 Registration Flow
+### 3.1 Identity Provider: Lucia Auth v3
 
-When a self-hosted AnyClaw host starts, the **Tunnel Manager** process (one of the supervised processes on the user's host) registers with the broker on behalf of the whole host:
+- **Library:** [`lucia`](https://lucia-auth.com) v3 (MIT, TypeScript, framework-agnostic) with a Postgres adapter.
+- **Responsibilities:** password hashing (argon2id), opaque session token generation, cookie/header extraction. Everything else (OAuth, JWT issuance, refresh endpoints) is custom code in the broker.
+- **Why Lucia:** thin, well-audited, and specifically designed to *not* impose framework conventions. It plays well with Fastify and with our "opaque session token on the server, short-lived JWT for the mobile client" model.
 
-1. The Tunnel Manager reads its config file which contains: `broker_url`, `user_email`, `server_token`. The `server_token` is generated during initial setup (a one-time pairing step in the mobile app that creates a token scoped to the user).
-2. `POST /servers/register` with body `{ server_token, server_name, version, capabilities }`.
-   - The broker validates `server_token` against the `server_tokens` table (links to a user_id).
-   - Creates or updates a row in the `servers` table. (Here "server" in the DB schema refers to the user's host as a whole, not an individual internal process.)
-   - Returns `{ server_id, heartbeat_interval_ms: 30000, wss_relay_url }`.
-3. The Tunnel Manager opens a persistent WebSocket to the relay URL (Phase 1) or to the signaling endpoint (Phase 2). This is the single tunnel the broker uses for all traffic to this host. If the Tunnel Manager crashes, supervisord restarts it (`restart=always`) and it reconnects automatically — other supervised processes on the host are unaffected.
+**Alternatives rejected:**
+- **Auth.js (NextAuth)** — tightly coupled to Next.js, session model optimised for browser cookies not mobile bearer tokens.
+- **Clerk / Auth0 / Supabase Auth** — external dependency cost, vendor lock-in for an auth-critical path, and we need custom pairing/JWT logic anyway.
 
-**Server token pairing (one-time setup):**
-- In the mobile app settings, user taps "Add Server".
-- App calls `POST /servers/create-token` (authenticated). Returns a `server_token` (single-use, 24-hour expiry) and a QR code / copyable string.
-- User pastes the token into the server's config file or scans the QR code on the machine running the server.
-- On first heartbeat with that token, the token is marked as "claimed" and bound to that server_id. It cannot be reused.
+### 3.2 OAuth-Only Registration (No Email/Password)
 
-### 2.2 Heartbeat Protocol
+Per spec decision #16, the MVP ships with **OAuth only**: Google, Apple, GitHub. No email/password registration. This eliminates the email verification, password reset, and credential stuffing attack surfaces entirely. A later release may add email/password for users without any of the three providers; Lucia supports it natively.
 
-After registration, the server sends heartbeats over its existing WebSocket connection (not separate HTTP calls -- avoids connection overhead).
+### 3.3 JWT Model (Broker-Issued) — per spec decision #45
 
-**Heartbeat message (server -> broker):**
+After OAuth validation, the broker issues its **own** JWT, decoupled from the upstream provider's access token:
+
+- **Access token:** JWT, HS256-signed with a 256-bit server secret, 15 minute expiry. Carries `{ sub: user_id, sid: session_id, exp }`. Used as `Authorization: Bearer <jwt>` on every REST and WSS request.
+- **Refresh token:** opaque 256-bit random, stored server-side in the `sessions` table. Returned once at login, persisted by the mobile app in `expo-secure-store`. Used against `POST /auth/refresh` to mint a new access token.
+- **Revocation:** delete the session row → all future refresh attempts fail. Access tokens live for at most 15 minutes after revocation, which is the explicit tradeoff for statelessness on hot-path requests.
+- **Provider refresh tokens:** Broker persists upstream provider refresh tokens server-side (encrypted, see §11) so the broker can re-validate user identity on long gaps. They never leave the broker.
+
+### 3.4 Multi-Device Support
+
+Each login creates a separate `sessions` row (one per device). There is no "device registration" step; logging in on a second phone produces a second session. Users can list and revoke sessions from the mobile app settings:
+
+- `GET /auth/sessions` — list active sessions with `device_name`, `last_active`, `ip_address` (coarse, for audit).
+- `POST /auth/logout` — revoke the current session.
+- `POST /auth/logout-all` — revoke every session for the user (lost phone).
+
+The mobile app stores the refresh token in `expo-secure-store` (iOS Keychain, Android Keystore).
+
+---
+
+## 4. OAuth Flow Detail
+
+All three providers follow the same shape: **authorization code flow with PKCE**, initiated from the mobile app via `expo-auth-session`, with the broker acting as the OAuth client and issuing its own JWT on success.
+
+### 4.1 Common Flow
+
+```
+Mobile App              Broker                 OAuth Provider
+    |                     |                         |
+ 1. |-- GET /auth/oauth/:provider/start ----------->|
+    |   (PKCE challenge generated on mobile)        |
+    |                     |                         |
+ 2. |<-- 302 to provider consent URL ---------------|
+    |   (with state, code_challenge, redirect_uri)  |
+    |                     |                         |
+ 3. |== user approves in AuthSession browser ======>|
+    |                     |                         |
+ 4. |<-- 302 to broker/auth/oauth/:provider/callback
+    |                     |                         |
+ 5. |                     |-- POST /token --------->|
+    |                     |   (code + verifier)     |
+    |                     |<-- access + refresh ----|
+    |                     |   + id_token            |
+    |                     |                         |
+ 6. |                     |-- verify id_token       |
+    |                     |   upsert user           |
+    |                     |   create session        |
+    |                     |   mint broker JWT       |
+    |                     |                         |
+ 7. |<-- 302 to anyclaw://auth/success#jwt=...&rt=...
+    |   (deep link back to mobile app)              |
+    |                     |                         |
+ 8. |-- POST /auth/exchange -----------------------
+    |   (short-lived one-time code → JWT + refresh) |
+```
+
+Step 7 returns a one-time **exchange code** in the deep link rather than the JWT directly (deep link query parameters can leak to other apps). The mobile app immediately POSTs the code to `/auth/exchange` over HTTPS to retrieve the real JWT + refresh token pair.
+
+### 4.2 Google
+
+- **Endpoint:** `https://accounts.google.com/o/oauth2/v2/auth` (authorization), `https://oauth2.googleapis.com/token` (token).
+- **Scopes:** `openid email profile`.
+- **ID token verification:** JWKS from `https://www.googleapis.com/oauth2/v3/certs`, cached 24h. Verify `iss` = `https://accounts.google.com`, `aud` = Google client ID, `exp` > now.
+- **User identity:** `sub` claim (stable Google user ID). Email from `email` claim.
+
+### 4.3 Apple
+
+- **Endpoint:** `https://appleid.apple.com/auth/authorize`, `https://appleid.apple.com/auth/token`.
+- **Scopes:** `name email`.
+- **Client secret:** Apple requires a **JWT-signed client secret** (not a static string). The broker signs a short-lived ES256 JWT with the Apple private key (`AuthKey_XXX.p8`) every time it calls `/auth/token`. Key ID, team ID, and private key stored as environment variables.
+- **ID token verification:** JWKS from `https://appleid.apple.com/auth/keys`. Verify `iss` = `https://appleid.apple.com`.
+- **First-login quirk (spec decision #46):** Apple only returns the user's name and email in the **first** authorization callback. Subsequent logins return only the `sub` claim. The broker must persist `name` and `email` into the `users` row on the first callback; on subsequent logins, the row is looked up by `(provider='apple', provider_user_id=sub)` and the existing name/email are reused. Missing this quirk produces anonymous accounts — the code path is covered by integration tests that simulate the second-login behaviour.
+- **User identity:** `sub` claim. Email may be a relay email (`@privaterelay.appleid.com`) if the user chose "Hide My Email"; store it as-is.
+
+### 4.4 GitHub
+
+- **Endpoint:** `https://github.com/login/oauth/authorize`, `https://github.com/login/oauth/access_token`.
+- **Scopes:** `read:user user:email`.
+- **No ID token:** GitHub does not implement OIDC. After the token exchange, the broker calls `GET https://api.github.com/user` with the access token to retrieve the user profile, and `GET https://api.github.com/user/emails` to retrieve the primary verified email.
+- **User identity:** `id` field (numeric GitHub user ID). Email: the one with `primary: true && verified: true`.
+
+### 4.5 Refresh Endpoint
+
+```
+POST /auth/refresh
+Body: { refresh_token: "<opaque-token>" }
+
+→ 200 { access_token: "<jwt>", access_token_expires_in: 900 }
+→ 401 { error: "invalid_refresh_token" }   (row deleted or never existed)
+→ 401 { error: "expired" }                 (session row past expires_at)
+```
+
+The refresh token itself is **not rotated** on each use (keeps mobile logic simple). Sliding expiry: each successful refresh sets `sessions.last_active = now()` and extends `expires_at` to `now() + 30 days`.
+
+---
+
+## 5. Server Registration
+
+### 5.1 Pairing Overview
+
+A "server" in broker terminology is the user's entire AnyClaw host (one row per host, not per process). The Tunnel Manager process on the host owns the relationship: it holds the `server_token`, maintains the WSS connection, and presents the host to the broker.
+
+### 5.2 Registration Flow
+
+1. Install script runs on the user's host. It generates the host's X25519 long-lived keypair `(server_pk, server_sk)`, storing `server_sk` at `/data/.anyclaw/server.key` with mode `0600` (owned by `anyclaw-infra` user).
+2. User completes the pairing flow (§6) in the mobile app, which provides the host with a `server_token`, the user's device public key `mobile_pk`, and a `broker_url`.
+3. Tunnel Manager writes these to its config file, then opens `wss://broker.anyclawapp.com/relay/server?token=<server_token>`.
+4. On first successful connect, the Tunnel Manager sends an in-band registration frame:
+   ```json
+   {
+     "type": "register",
+     "server_token": "<base64url>",
+     "server_pk": "<base64url X25519 public key>",
+     "server_name": "my-home-server",
+     "version": "0.3.1",
+     "capabilities": ["pocketbase", "dispatch", "prod-static"]
+   }
+   ```
+5. The broker validates `server_token` against the `server_tokens` table, upserts a row in `servers`, stores `server_pk`, marks the token as `claimed`, and returns:
+   ```json
+   {
+     "type": "registered",
+     "server_id": "<uuid>",
+     "heartbeat_interval_ms": 30000
+   }
+   ```
+6. The broker also relays the `server_pk` to the mobile app the next time it calls `GET /servers` so the app can derive the NaCl shared secret (see §8.3).
+
+### 5.3 Heartbeat Protocol
+
+Heartbeats flow over the **existing** Tunnel Manager WSS connection. No separate HTTP polling.
+
+**Server → Broker (every 30s):**
 ```json
 {
   "type": "heartbeat",
-  "server_id": "srv_abc123",
   "uptime_s": 3600,
   "active_connections": 1,
   "cpu_pct": 12,
@@ -117,690 +252,774 @@ After registration, the server sends heartbeats over its existing WebSocket conn
 }
 ```
 
-**Heartbeat interval:** 30 seconds. The broker expects a heartbeat within 90 seconds (3x interval). If missed:
-1. After 90s: mark server as `degraded`. Mobile app shows a yellow indicator.
-2. After 180s: mark server as `offline`. Mobile app shows a red indicator and "Server unreachable" message.
-3. When a heartbeat arrives again: mark server as `online`. Mobile app reconnects automatically.
-
-**Broker -> server pong:**
+**Broker → Server (ack):**
 ```json
 {
   "type": "heartbeat_ack",
-  "timestamp": "2026-04-05T12:00:00Z",
-  "pending_connections": 0
+  "timestamp": "2026-04-06T12:00:00Z",
+  "pending_clients": 0
 }
 ```
 
-The `pending_connections` field tells the server how many mobile clients are waiting to connect. This lets the server prepare resources.
+`pending_clients` is the number of mobile connections currently waiting to speak to this server — it lets the host spin up resources (e.g. warm up Vite dev) before the first data frame arrives.
 
-### 2.3 Database Schema (Servers)
+### 5.4 Liveness State Machine
+
+| State      | Entry condition                                   | Mobile UI          |
+|------------|---------------------------------------------------|--------------------|
+| `online`   | Heartbeat received within the last 90s            | Green dot          |
+| `degraded` | No heartbeat for 90s (but WSS still open)         | Yellow dot         |
+| `offline`  | No heartbeat for 180s OR WSS closed               | Red dot, reconnect |
+
+Transitions happen in a single background job (`health-checker`) that runs every 15s: `UPDATE servers SET status=... WHERE ...`. When status changes, the broker pushes a `server_status` control message to any connected mobile clients for that user so the UI reflects the new state within seconds.
+
+---
+
+## 6. Pairing UX
+
+**Goal:** A brand new host and a brand new phone can be paired in under a minute with cryptographic MITM protection that the user visually confirms.
+
+### 6.1 Token + Key Generation
+
+1. User taps "Add server" in the mobile app.
+2. App calls `POST /servers/pair/start` (authenticated). The broker creates a `server_tokens` row:
+   - `token`: 256-bit random, base64url.
+   - `user_id`: the authenticated user.
+   - `claimed`: false.
+   - `expires_at`: now + 24h.
+3. Broker returns `{ server_token, broker_url: "wss://broker.anyclawapp.com/relay/server" }`.
+4. App locally generates the device's X25519 long-lived keypair `(mobile_pk, mobile_sk)` via `libsodium-wrappers` and stores `mobile_sk` in `expo-secure-store` keyed by a placeholder `pending_pair_id` (rekeyed once the real `server_id` is known).
+5. App constructs a pairing payload:
+   ```json
+   {
+     "server_token": "<base64url>",
+     "mobile_pk": "<base64url>",
+     "broker_url": "wss://broker.anyclawapp.com/relay/server"
+   }
+   ```
+6. App encodes the JSON as a QR code (mobile-side, no broker involvement) and also offers "copy as text" for users pairing a host they're SSH'd into.
+
+### 6.2 Host-Side Claim
+
+1. On the host, the user runs `anyclaw pair` (an install-script-provided command).
+2. The CLI either scans the QR via a terminal QR reader (`zbarimg` if an image is piped in), or accepts the pasted text.
+3. The CLI writes the token + `mobile_pk` + `broker_url` into `/data/.anyclaw/tunnel.conf`.
+4. The CLI loads the already-generated `server_sk` and `server_pk` from `/data/.anyclaw/server.key`.
+5. The CLI computes the NaCl shared secret:
+   ```
+   shared_secret = X25519(server_sk, mobile_pk)
+   ```
+6. The CLI derives the 4-word BIP39 verification code from the shared secret:
+   ```
+   code = first_4_words_of_BIP39(first_44_bits_of_SHA256(shared_secret))
+   ```
+   This produces a code like `"ocean marble forest piano"`. Entropy = 44 bits — sufficient to defeat online MITM but short enough for a human to read aloud.
+7. The CLI prints the code and the message: *"Confirm this code matches the one shown in your phone."*
+8. The CLI then starts the Tunnel Manager (systemd unit), which opens the WSS connection and sends its `register` frame.
+
+### 6.3 Mobile-Side Confirmation
+
+1. Immediately after showing the QR, the mobile app polls `GET /servers/pair/status?token=<token>` every 2 seconds.
+2. When the broker reports `claimed`, the app fetches the newly-registered `server_pk` via the same endpoint.
+3. The app computes `shared_secret = X25519(mobile_sk, server_pk)` and derives the same 4-word BIP39 code.
+4. The app displays: *"Does your server show: **ocean marble forest piano**?"* with **Confirm** and **Cancel** buttons.
+5. **Confirm** → the app persists `(server_id, server_pk, mobile_sk, mobile_pk)` in secure storage, keyed by `server_id`. The pairing is now complete and the device can begin relaying.
+6. **Cancel** → the app calls `DELETE /servers/:id` to remove the registration. The user can retry pairing.
+
+**Why BIP39 (spec decision #32):** identical to the short-authentication-string pattern used by Signal, Threema, and WhatsApp. The 44-bit entropy provides ~17 trillion possible codes — an attacker running a MITM would need to brute force `server_pk` such that the derived code matches the victim's `mobile_pk` derivation, which requires on the order of `2^44` X25519 operations per target user.
+
+---
+
+## 7. Phase 1: WSS Relay
+
+### 7.1 Endpoints
+
+The broker exposes two WebSocket listeners under `broker.anyclawapp.com`:
+
+| Endpoint                    | Caller                 | Auth                                           |
+|-----------------------------|------------------------|------------------------------------------------|
+| `/relay/client`             | Mobile app             | `Authorization: Bearer <jwt>` + `?server_id=`  |
+| `/relay/server`             | Tunnel Manager on host | `?token=<server_token>` query param            |
+
+The broker keeps two in-memory maps (both backed by Redis pub/sub when running multiple broker instances — see §12):
+
+- `serverConnections: Map<server_id, WebSocket>` — one entry per registered host currently connected.
+- `clientConnections: Map<client_id, { ws: WebSocket, server_id: string, user_id: string }>` — one entry per live mobile client.
+
+### 7.2 Connection Establishment
+
+1. Mobile app calls `GET /servers` over HTTPS → receives `[{ server_id, name, status, server_pk }]`.
+2. User selects a server. The app opens `wss://broker.anyclawapp.com/relay/client?server_id=<id>` with `Authorization: Bearer <jwt>`.
+3. Broker validates the JWT, confirms `server_id` belongs to the authenticated user, assigns a random `client_id`.
+4. Broker looks up the server's WSS connection in `serverConnections`. If missing or `status != online` → broker closes the client WS with code `4001` reason `"server_offline"`.
+5. If present, broker sends a control frame to the host:
+   ```json
+   { "type": "connection_request", "client_id": "c_abc123", "session_id": "<jwt-sid>" }
+   ```
+6. Host responds:
+   ```json
+   { "type": "connection_accept", "client_id": "c_abc123" }
+   ```
+7. Broker now treats `(client_ws, server_ws, client_id)` as a routable pair. All subsequent data frames from either side tagged with this `client_id` are forwarded through.
+
+### 7.3 Multiplexing: In-Envelope Service Tag
+
+Per spec decision #43, the Tunnel Manager demultiplexes across **three** internal services using an in-envelope `service` tag. The envelope is the **only** thing in the clear (aside from the control messages above) — the `payload` is the NaCl-encrypted blob.
+
+**Data frame envelope (wire format):**
+
+```typescript
+// Binary frame, preamble is CBOR (chosen over JSON to save bytes for high-frequency frames):
+// [0]         version byte = 0x01
+// [1..=2]     envelope length (uint16 LE)
+// [3..]       CBOR envelope { type, client_id, service, stream_id, flags }
+// [N..]       encrypted payload: [24-byte nonce][ciphertext+MAC]
+```
+
+The envelope fields:
+
+| Field       | Type     | Meaning                                                               |
+|-------------|----------|-----------------------------------------------------------------------|
+| `type`      | string   | `"data"`, `"stream_open"`, `"stream_close"`, `"stream_error"`         |
+| `client_id` | string   | Demultiplexes across mobile clients on the host side                  |
+| `service`   | enum     | `"pb"` (PocketBase), `"api"` (Dispatch/MCP), `"app"` (Prod static)    |
+| `stream_id` | uint32   | Per-`client_id` logical HTTP/SSE stream identifier                    |
+| `flags`     | bitfield | `END_STREAM` bit for HTTP request/response delimiting                 |
+
+**Why both `client_id` AND `service`:** `client_id` handles "multiple phones on one account", while `service` handles "which internal process on the host handles this frame". Both dimensions are needed and neither can be inferred from the other.
+
+**Why `stream_id`:** the host-side Tunnel Manager holds long-lived HTTP connections to PocketBase and Dispatch/MCP (for SSE subscriptions). A single client can have multiple concurrent streams (e.g. one PocketBase REST call in flight while an SSE subscription is open). `stream_id` lets the client demultiplex responses to the right request handler without waiting for the previous stream to close.
+
+### 7.4 Tunnel Manager Routing Table
+
+On the host side, the Tunnel Manager handles an incoming encrypted frame as follows:
+
+```
+on_frame(envelope, ciphertext):
+    if envelope.client_id not in known_clients:
+        send stream_error(client_id, reason="unknown_client")
+        return
+
+    plaintext = nacl.box.open(ciphertext, envelope.nonce, mobile_pk[client_id], server_sk)
+
+    match envelope.service:
+        "pb"  -> forward to 127.0.0.1:8090 (PocketBase)
+        "api" -> forward to 127.0.0.1:3000 (Dispatch/MCP server)
+        "app" -> forward to 127.0.0.1:4000 (Prod static server)
+
+    on response from internal service:
+        ciphertext = nacl.box(response_bytes, next_nonce, mobile_pk[client_id], server_sk)
+        send frame with same client_id, service, stream_id
+```
+
+This table is fixed at build time. There are no subdomains, no Host headers, no DNS tricks — just a three-way switch inside the Tunnel Manager. The same routing applies unchanged when Phase 2 WebRTC replaces the broker relay; only the transport changes, not the envelope format.
+
+### 7.5 Binary Passthrough
+
+Both the client-side and the broker-side forwarding paths are **byte-for-byte copy loops**. The broker never parses the CBOR envelope; it only reads the `client_id` from a fixed offset in the preamble (uint16 length + CBOR tag scan for the `client_id` field) to look up the destination connection. This is a ~150-line hot loop and is the only code on the broker that touches per-frame data.
+
+### 7.6 Reconnection
+
+**Client-side (mobile):**
+1. On WS close / error, app waits 1s then retries.
+2. Exponential backoff: 1s, 2s, 4s, 8s, 16s, cap 30s. Jitter: ±25%.
+3. On reconnect: broker assigns a new `client_id`, host treats it as a fresh session. In-flight requests are lost; the PocketBase JS SDK's auto-retry handles it.
+4. If the app was backgrounded, reconnect happens on foreground. `expo-task-manager` is explicitly NOT used for background WS (battery-draining and unreliable per Expo docs).
+
+**Server-side (host Tunnel Manager):**
+1. On WS close, supervisord/systemd keeps the process alive (`restart=always`) and it reconnects with the same backoff schedule.
+2. During the reconnect gap, all currently-attached mobile clients see their pipes collapse and enter their own reconnect loops.
+3. When the host reconnects, broker sends a `server_reconnected` control frame to any waiting mobile clients and the pipes re-establish.
+
+### 7.7 Backpressure
+
+- Each WS has a 1 MB send buffer cap.
+- When the downstream buffer exceeds 1 MB, the broker pauses `.read()` on the upstream socket (Node.js `ws` library: `socket.pause()`). TCP backpressure propagates naturally to the other end.
+- Resume when the buffer drains below 512 KB.
+- If the buffer hits 4 MB (downstream peer completely stuck), the broker closes both legs with code `1009` (message too big / policy violation) to free memory.
+
+### 7.8 Keepalive
+
+Both WS directions use protocol-level ping frames every 15 seconds. If no pong is received within 10 seconds, the connection is considered dead and torn down. This is entirely handled by the `ws` library (`ws.ping()` + `ws.on('pong', ...)`).
+
+---
+
+## 8. NaCl End-to-End Encryption
+
+### 8.1 Primitives
+
+- **Key agreement:** X25519 (Curve25519 ECDH).
+- **AEAD:** XSalsa20-Poly1305, via `nacl.box` (high-level NaCl construction).
+- **Nonce:** 24 bytes, counter-based with direction prefix (see §8.4).
+- **Library (both sides):** [`libsodium-wrappers`](https://www.npmjs.com/package/libsodium-wrappers) (WASM build of libsodium — spec decision #30). Runs identically under Node.js on the host and under Hermes/JSC in React Native. No native modules to build for Expo prebuild.
+
+### 8.2 Key Lifecycle (spec decision #31)
+
+- **Mobile device key `(mobile_pk, mobile_sk)`:** generated during pairing (§6.1). Long-lived. Stored in `expo-secure-store` keyed by `server_id`. **Never rotated in MVP.**
+- **Host key `(server_pk, server_sk)`:** generated during install. Long-lived. Stored at `/data/.anyclaw/server.key` mode 0600. **Never rotated in MVP.**
+- **Shared secret `S = X25519(mobile_sk, server_pk) = X25519(server_sk, mobile_pk)`:** derived on demand, cached in memory.
+- **Device loss:** user revokes the session (§3.4) then re-pairs. The broker stores only public keys, so revocation is a single row delete in `device_keys`.
+
+Forward secrecy, ephemeral keys, double-ratchet, periodic rotation — all **out of scope for MVP** per the locked decision.
+
+### 8.3 Key Exchange Sequence Diagram
+
+```
+Mobile App                    Broker                     User's Host
+    |                           |                              |
+1.  | POST /servers/pair/start -|                              |
+    |   (JWT)                   |                              |
+    |<- server_token -----------|                              |
+    |                           |                              |
+2.  | libsodium.crypto_box_     |                              |
+    |   keypair()               |                              |
+    |   → (mobile_pk, mobile_sk)|                              |
+    |   store mobile_sk in      |                              |
+    |   expo-secure-store       |                              |
+    |                           |                              |
+3.  | [QR: token + mobile_pk]   |                              |
+    |===========================|=========> user scans ========|
+    |                           |                              |
+4.  |                           |      load server_sk from     |
+    |                           |      /data/.anyclaw/         |
+    |                           |      server.key              |
+    |                           |                              |
+5.  |                           |      crypto_scalarmult(      |
+    |                           |        server_sk, mobile_pk) |
+    |                           |        → shared_secret       |
+    |                           |      derive 4-word BIP39     |
+    |                           |      print to terminal       |
+    |                           |                              |
+6.  |                           |<- WSS /relay/server ---------|
+    |                           |   register{ token,           |
+    |                           |     server_pk, name, ... }   |
+    |                           |                              |
+    |                           |-> registered{server_id} ----|
+    |                           |                              |
+7.  | GET /servers/pair/status -|                              |
+    |<- claimed:true,           |                              |
+    |   server_id, server_pk ---|                              |
+    |                           |                              |
+8.  | crypto_scalarmult(        |                              |
+    |   mobile_sk, server_pk)   |                              |
+    |   → shared_secret         |                              |
+    | derive 4-word BIP39       |                              |
+    | display "confirm code"    |                              |
+    |                           |                              |
+9.  | user visually confirms    |                              |
+    | codes match → persist     |                              |
+    | (server_id, server_pk)    |                              |
+    |                           |                              |
+    | === pairing complete ===  |                              |
+```
+
+**Broker's view throughout:** `mobile_pk` (public), `server_pk` (public). It never sees `mobile_sk` or `server_sk`. Computing the shared secret requires at least one private key. Therefore the broker cannot derive `S` and cannot decrypt any frame.
+
+### 8.4 Encrypted Frame Format
+
+Every data frame payload (everything under the `service`-tagged envelope in §7.3) is encrypted:
+
+```
+[nonce: 24 bytes][ciphertext: plaintext_len + 16 bytes]
+```
+
+- Nonce is in the clear so the receiver can decrypt.
+- The 16-byte Poly1305 MAC is prepended to the ciphertext by `nacl.box` automatically.
+- Per-frame overhead: 24 (nonce) + 16 (MAC) = **40 bytes**. Negligible against typical 1-10 KB payloads.
+
+**Sender:**
+```typescript
+const nonce = nextNonce(direction);     // see §8.5
+const ct    = sodium.crypto_box_easy(plaintext, nonce, peerPk, mySk);
+ws.send(Buffer.concat([nonce, ct]));
+```
+
+**Receiver:**
+```typescript
+const nonce = frame.subarray(0, 24);
+const ct    = frame.subarray(24);
+try {
+  const pt = sodium.crypto_box_open_easy(ct, nonce, peerPk, mySk);
+  dispatch(pt);
+} catch (e) {
+  log.warn({ client_id, envelope }, "nacl_decrypt_failed");
+  // do NOT close the connection — could be in-flight corruption; let the next frame through
+}
+```
+
+### 8.5 Nonce Management
+
+Nonces must never repeat for the same keypair. Strategy: **counter-based with direction prefix**.
+
+- **Mobile → host:** `nonce[0] = 0x01`, `nonce[1..=23]` = big-endian counter, starting at 0.
+- **Host → mobile:** `nonce[0] = 0x02`, `nonce[1..=23]` = big-endian counter, starting at 0.
+
+The direction prefix guarantees the two sides cannot collide even though both counters start at zero. The 23-byte counter (2^184 values) cannot overflow in practice.
+
+**Across reconnects:** each side persists its "last used counter" in memory across WS reconnects **within a single app run**. On app cold start / host restart, the counter resets to 0 — but because NaCl box uses the direction prefix and we generate a **new ephemeral scope per session** (by mixing the session ID into the first byte after the direction prefix), reuse across cold starts is precluded:
+
+```
+nonce[0]    = direction (0x01 or 0x02)
+nonce[1..5] = uint32 session epoch (incremented on every cold start, persisted)
+nonce[5..24] = counter
+```
+
+Session epoch is persisted on the host at `/data/.anyclaw/nonce-epoch` and in `expo-secure-store` on mobile. Cold start reads, increments, writes back, then uses the new value. This closes the theoretical reconnect-collision hole without requiring tight counter persistence on every frame.
+
+### 8.6 What is NOT Encrypted (per spec decision #33)
+
+- **Control frames** (`connection_request`, `connection_accept`, `heartbeat`, `server_status`, `stream_open`, `stream_close`): cleartext within the TLS tunnel. The broker must read these to route.
+- **The in-envelope `service` tag and `client_id`**: cleartext for the same reason.
+- **The prod static server's HTML/CSS/JS assets (`service: "app"`):** traffic is still wrapped in NaCl per the same envelope rules; spec decision #33 notes that the assets are "public-ish" but they still flow through the encrypted envelope in the MVP for implementation simplicity. A later optimisation may skip encryption for `service: "app"` responses to save CPU on the host.
+
+### 8.7 Debug Mode (spec decision #34)
+
+An opt-in toggle in mobile app settings labelled *"Developer: log decrypted traffic locally"*. When enabled:
+
+- The mobile client writes decrypted frames to a rolling local log file (capped at 10 MB).
+- The log file is visible only to the mobile app; it is never uploaded, never sent to the broker, and is wiped on logout.
+- The host side has a symmetric env var `ANYCLAW_DEBUG_DECRYPTED_LOG=1` that logs to `/data/.anyclaw/debug/decrypted.log`.
+
+This gives developers a troubleshooting path for connectivity issues without compromising the default privacy model.
+
+---
+
+## 9. Phase 2: WebRTC P2P (Post-Launch)
+
+**Timing:** Launch ships with Phase 1 only (spec decision #17). Phase 2 development begins after launch. This section is deliberately lighter than Phase 1 — the design is locked enough to guarantee Phase 1 does not paint us into a corner.
+
+### 9.1 Goal
+
+Eliminate the broker from the data path. The broker becomes a signaling server only — it forwards SDP offers/answers and ICE candidates, then gets out of the way. Content flows directly between the mobile device and the host via an encrypted WebRTC data channel.
+
+### 9.2 Signaling Over Existing WSS
+
+The same WSS connections used for Phase 1 relay carry Phase 2 signaling messages. No new endpoints. The broker routes them identically to data frames, but the envelope `type` is `"signal_offer"`, `"signal_answer"`, or `"ice_candidate"`:
+
+```typescript
+{ type: "signal_offer",   client_id, sdp }
+{ type: "signal_answer",  client_id, sdp }
+{ type: "ice_candidate",  client_id, candidate, sdpMid, sdpMLineIndex }
+{ type: "signal_complete",client_id, connection_type: "direct" | "relay" }
+```
+
+The `connection_type` field lets the broker record whether a TURN fallback was needed so we can measure P2P success rate.
+
+### 9.3 React Native WebRTC
+
+- **Library:** `react-native-webrtc` with the official Expo config plugin `@config-plugins/react-native-webrtc`.
+- **Build:** `expo prebuild` + `eas build`. Not Expo Go. Development builds are required.
+- **Host side:** Node.js `wrtc` (native addon built against libwebrtc). Compatible with Debian/Ubuntu binary packages — ships in our Docker image.
+
+### 9.4 STUN / TURN
+
+- **STUN:** Google public servers (`stun:stun.l.google.com:19302`, plus two fallback Cloudflare STUN endpoints).
+- **TURN:** Self-hosted **coturn** on the same Hetzner VPS as the broker. coturn uses `--use-auth-secret` mode: the broker generates short-lived credentials (6 hour expiry) derived from a shared HMAC secret. Each `GET /servers` response includes current TURN credentials for the client and the host.
+- **Cost:** ~10-15% of sessions fall back to TURN (industry norm for mixed consumer NAT). TURN bandwidth cost is comparable to Phase 1 relay but only for that minority.
+
+### 9.5 Data Channel
+
+Single reliable, ordered data channel named `"anyclaw"`:
+```typescript
+pc.createDataChannel("anyclaw", { ordered: true, maxRetransmits: null });
+```
+
+It carries the same framing format as Phase 1 (CBOR envelope + NaCl ciphertext). The Tunnel Manager on the host fans out to PocketBase/Dispatch/Prod exactly as in Phase 1 — the `service` tag and routing table are unchanged. DTLS (mandatory in WebRTC) provides transport-layer encryption; NaCl provides the E2E layer **above** DTLS so the design is uniform across Phase 1 and Phase 2 and the user's privacy guarantee survives a hypothetical TURN server compromise.
+
+### 9.6 Fallback
+
+- If WebRTC fails to establish within 10 seconds (ICE gathering + connectivity checks), the client transparently falls back to Phase 1 WSS relay.
+- If a P2P channel is established but later drops for more than 5 seconds, fall back to WSS.
+- The user sees a brief spinner but no manual intervention.
+- The broker exposes a metric (`p2p_success_ratio`) so we can track regional patterns.
+
+---
+
+## 10. Security Model
+
+### 10.1 Transport Security
+
+- **REST + WSS:** HTTPS/WSS only. TLS 1.2+ via Caddy + Let's Encrypt. HSTS preload.
+- **Phase 1:** TLS (transport) + NaCl box (E2E). Broker never sees plaintext. A broker compromise leaks metadata (who connected to what, when, how much data), not content.
+- **Phase 2:** DTLS 1.2 (WebRTC mandatory) + NaCl box (E2E). Broker doesn't see data at all after signaling.
+
+### 10.2 Authorisation
+
+Every request is scoped to the authenticated user. Middleware enforces:
+
+- JWT is valid, not expired, matches an active session.
+- Any `server_id` the caller references belongs to `user_id` from the JWT.
+- `server_tokens` are single-use and single-user.
+- No admin API. Operational queries go through SSH + psql with audit logging in `pg_audit`.
+
+### 10.3 Rate Limiting
+
+Sliding-window counters in Redis (single key per `(ip, endpoint)` or `(user_id, endpoint)`):
+
+| Endpoint                         | Limit                    | Window |
+|----------------------------------|--------------------------|--------|
+| `GET /auth/oauth/:provider/start`| 20 / IP                  | 1h     |
+| `POST /auth/exchange`            | 20 / IP                  | 1h     |
+| `POST /auth/refresh`             | 60 / session             | 1h     |
+| `POST /servers/pair/start`       | 10 / user                | 1h     |
+| `GET /servers/pair/status`       | 120 / user               | 5m     |
+| `/relay/client` connects         | 5 concurrent / user      | —      |
+| `/relay/server` connects         | 1 concurrent / server    | —      |
+| Frames on any WS                 | 1000/sec (then backpressure) | —  |
+
+### 10.4 Bandwidth Caps
+
+- **Phase 1:** 1 GB/day per user of relay traffic. On exceed, broker sends a `rate_limited` control frame and closes the relay for 1 hour. Users hitting this are surfaced in the mobile app UI with *"Relay bandwidth exhausted — upgrade to direct P2P"* once Phase 2 ships.
+- **Phase 2:** no cap (P2P doesn't touch broker bandwidth). TURN fallback traffic counts against a separate 5 GB/day cap.
+
+### 10.5 Abuse Prevention
+
+- **No open relay:** broker only forwards between authenticated users and their own registered servers. Connection attempts for other users' servers return 403.
+- **Connection limits:** max 3 concurrent devices per user, max 2 registered servers per user (raise via support for early adopters).
+- **IP blocklist:** >50 failed OAuth callbacks in 1 hour → block IP for 24h at the Caddy layer (`fail2ban`-style, maintained by a periodic SQL query).
+- **Pairing token expiry:** 24h for unclaimed, single-use, deleted on claim.
+
+### 10.6 Server Zero-Port Guarantee
+
+The user's host **never listens on a public port**. The Tunnel Manager initiates an outbound WSS connection to the broker. All traffic flows over this single outbound connection. The host's firewall can `DROP` everything inbound. In Phase 2, WebRTC ICE also uses outbound-initiated UDP/TCP to STUN/TURN — still no inbound port required. This is the architectural property that lets AnyClaw run behind consumer NAT / carrier-grade NAT / corporate firewalls without any manual configuration.
+
+---
+
+## 11. Database Schema
+
+Everything lives in a single Postgres 16 database on the broker VPS. All tables use `UUID` primary keys and `TIMESTAMPTZ` for timestamps.
+
+### 11.1 `users`
+
+```sql
+CREATE TABLE users (
+    id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    email         TEXT         UNIQUE,              -- nullable (Apple relay, etc.)
+    display_name  TEXT,
+    avatar_url    TEXT,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    last_login_at TIMESTAMPTZ
+);
+```
+
+### 11.2 `oauth_accounts`
+
+Links one user to one or more OAuth providers. A user who signed up with Google can later link GitHub without duplicating the account.
+
+```sql
+CREATE TABLE oauth_accounts (
+    provider              TEXT        NOT NULL,     -- 'google' | 'apple' | 'github'
+    provider_user_id      TEXT        NOT NULL,
+    user_id               UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider_refresh_enc  BYTEA,                    -- AES-256-GCM, nullable (github doesn't give one)
+    provider_scopes       TEXT[]      NOT NULL DEFAULT '{}',
+    linked_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (provider, provider_user_id)
+);
+
+CREATE INDEX oauth_accounts_user_idx ON oauth_accounts(user_id);
+```
+
+### 11.3 `sessions`
+
+```sql
+CREATE TABLE sessions (
+    id             TEXT         PRIMARY KEY,        -- opaque base64url, 32 random bytes
+    user_id        UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_name    TEXT,                            -- from User-Agent / custom header
+    device_os      TEXT,                            -- 'ios' | 'android'
+    ip_address     INET,
+    refresh_token  TEXT         NOT NULL UNIQUE,    -- 32 random bytes, base64url
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    last_active    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ  NOT NULL
+);
+
+CREATE INDEX sessions_user_idx         ON sessions(user_id);
+CREATE INDEX sessions_expires_at_idx   ON sessions(expires_at);
+CREATE INDEX sessions_refresh_idx      ON sessions(refresh_token);
+```
+
+Expired sessions are deleted hourly: `DELETE FROM sessions WHERE expires_at < now();`.
+
+### 11.4 `servers`
+
+One row per paired user host.
+
+```sql
+CREATE TABLE servers (
+    id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT         NOT NULL,
+    version         TEXT,
+    server_pk       BYTEA        NOT NULL,          -- 32-byte X25519 public key
+    status          TEXT         NOT NULL DEFAULT 'offline'
+                                 CHECK (status IN ('online','degraded','offline')),
+    last_heartbeat  TIMESTAMPTZ,
+    capabilities    TEXT[]       NOT NULL DEFAULT '{}',
+    registered_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX servers_user_idx   ON servers(user_id);
+CREATE INDEX servers_status_idx ON servers(status);
+```
+
+### 11.5 `server_tokens`
+
+Single-use pairing tokens.
 
 ```sql
 CREATE TABLE server_tokens (
-  token       TEXT PRIMARY KEY,            -- random 256-bit base64url
-  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
-  claimed     BOOLEAN DEFAULT FALSE,
-  server_id   UUID,                        -- set when claimed
-  expires_at  TIMESTAMPTZ NOT NULL,
-  created_at  TIMESTAMPTZ DEFAULT now()
+    token       TEXT         PRIMARY KEY,           -- 32 random bytes, base64url
+    user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    claimed     BOOLEAN      NOT NULL DEFAULT FALSE,
+    server_id   UUID                 REFERENCES servers(id) ON DELETE SET NULL,
+    mobile_pk   BYTEA        NOT NULL,              -- published by the app, used by the host CLI
+    expires_at  TIMESTAMPTZ  NOT NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
-CREATE TABLE servers (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
-  name            TEXT NOT NULL,
-  version         TEXT,
-  status          TEXT DEFAULT 'offline',  -- 'online', 'degraded', 'offline'
-  server_pk       TEXT,                    -- X25519 public key (base64url), set during registration
-  last_heartbeat  TIMESTAMPTZ,
-  registered_at   TIMESTAMPTZ DEFAULT now()
-);
+CREATE INDEX server_tokens_user_idx ON server_tokens(user_id);
+```
 
-CREATE INDEX idx_servers_user ON servers(user_id);
+### 11.6 `device_keys`
 
+One row per `(session, server)` pair, storing the mobile device's X25519 public key so the host can encrypt responses back.
+
+```sql
 CREATE TABLE device_keys (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
-  server_id   UUID REFERENCES servers(id) ON DELETE CASCADE,
-  session_id  TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-  mobile_pk   TEXT NOT NULL,              -- X25519 public key (base64url) for this device-server pair
-  created_at  TIMESTAMPTZ DEFAULT now()
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID         NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+    server_id   UUID         NOT NULL REFERENCES servers(id)  ON DELETE CASCADE,
+    session_id  TEXT         NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    mobile_pk   BYTEA        NOT NULL,              -- 32-byte X25519 public key
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE (session_id, server_id)
 );
 
-CREATE INDEX idx_device_keys_server ON device_keys(server_id);
+CREATE INDEX device_keys_server_idx ON device_keys(server_id);
 ```
+
+### 11.7 `rate_limit_buckets`
+
+Backed by Redis in production; the Postgres table is a cold-storage mirror for audit and for the in-memory fallback when Redis is unavailable.
+
+```sql
+CREATE TABLE rate_limit_buckets (
+    bucket_key   TEXT         NOT NULL,             -- e.g. 'ip:1.2.3.4:login'
+    window_start TIMESTAMPTZ  NOT NULL,
+    count        INTEGER      NOT NULL,
+    PRIMARY KEY (bucket_key, window_start)
+);
+
+CREATE INDEX rate_limit_window_idx ON rate_limit_buckets(window_start);
+```
+
+Retention: rows older than 24h are deleted nightly.
 
 ---
 
-## 3. Phase 1: WSS Relay
+## 12. Scaling Considerations
 
-### 3.1 Architecture
+### 12.1 Phase 1 Bandwidth
 
-```
-Mobile App          Connection Broker         User's Host (Tunnel Manager process)
-    |                      |                            |
-    |-- WSS connect ------>|                            |
-    |   (Bearer token)     |                            |
-    |                      |<--- WSS (persistent) ------|
-    |                      |     (server_token)         |
-    |                      |                            |
-    |== encrypted frames =>|== encrypted frames =======>|
-    |<= encrypted frames ==|<= encrypted frames ========|
-                                                         |
-                                            internal loopback fan-out:
-                                              → PocketBase        (127.0.0.1:8090)
-                                              → Dispatch / MCP    (127.0.0.1:3000)
-                                              → Prod static       (127.0.0.1:4000)
-```
+Estimated per active user per day:
 
-The broker runs two WebSocket listener endpoints:
+| Traffic                              | Volume      |
+|--------------------------------------|-------------|
+| WebView asset loads (JS/CSS/images)  | ~10 MB      |
+| PocketBase REST calls                | ~1.4 MB     |
+| PocketBase SSE + dispatch progress   | ~0.6 MB     |
+| **Total per user per day**           | **~12 MB**  |
+| **Total per user per month**         | **~360 MB** |
 
-1. **`wss://broker.anyclawapp.com/relay/client`** -- mobile app connects here. Auth via `Authorization: Bearer <session_token>` in the WebSocket upgrade request headers (supported by all WS clients).
-2. **`wss://broker.anyclawapp.com/relay/server`** -- the user's host Tunnel Manager process connects here. Auth via `server_token` query parameter in the upgrade URL (since the host-side WS client controls the URL).
+### 12.2 Broker Bandwidth Cost Model
 
-The broker has no knowledge of what lives behind the tunnel. It relays opaque encrypted frames. Routing to the host's internal services (PocketBase, Dispatch/MCP, Prod static) is entirely the Tunnel Manager's responsibility.
+| Users   | Monthly bandwidth | Hetzner (20 TB included) | Overage cost |
+|---------|-------------------|--------------------------|--------------|
+| 100     | 36 GB             | Included                 | €0           |
+| 1,000   | 360 GB            | Included                 | €0           |
+| 10,000  | 3.6 TB            | Included                 | €0           |
+| 50,000  | 18 TB             | Near cap                 | €0           |
+| 100,000 | 36 TB             | 16 TB over               | ~€16         |
 
-### 3.2 Connection Establishment
+Hetzner CX22 includes 20 TB/month at no extra cost; overage is €1/TB. At 100k users we still pay less for bandwidth than the compute. **Phase 2 should land well before 100k users** to push most traffic off the broker regardless.
 
-1. Mobile app authenticates with the broker REST API, receives list of user's servers via `GET /servers` (returns server_id, name, status).
-2. User selects a server (or auto-selects the only one).
-3. Mobile app opens a WebSocket to `wss://broker.anyclawapp.com/relay/client?server_id=srv_abc123`.
-4. Broker validates the session token and checks that `server_id` belongs to the authenticated user.
-5. Broker looks up the server's existing WebSocket connection. If found and `status=online`:
-   - Broker sends a `connection_request` message to the server's WebSocket.
-   - Server responds with `connection_accept`.
-   - Broker creates a bidirectional pipe: frames from the client WS are forwarded to the server WS and vice versa.
-6. If the server is offline, broker returns a WebSocket close frame with code `4001` and reason `"server_offline"`. The mobile app shows the reconnect screen.
+### 12.3 Compute
 
-### 3.3 Protocol Messages
+The relay is I/O-bound. A single Node.js process on 2 vCPUs handles ~500 concurrent WS connections before CPU saturation. At 30% concurrency (assumed) that is ~1,600 active users per box. Vertical scaling to CX32 (4 vCPU) doubles that to ~3,200.
 
-All messages are JSON. Binary payloads (file uploads, images) are sent as binary WebSocket frames and forwarded without parsing.
+### 12.4 Migration to WebRTC
 
-**Control messages (broker <-> client, broker <-> server):**
+**Trigger:** when bandwidth or concurrent-connections metrics show the broker CPU exceeding 60% sustained on CX42, begin the Phase 2 rollout. Expected at roughly 10,000-20,000 active users.
 
-```typescript
-// Client -> Broker (upgrade header carries auth)
-// No explicit auth message needed; auth happens during WS handshake
+**Phase 2 broker load drops to:**
+- Signaling only: ~5 KB per connection establishment, once per app session.
+- TURN fallback: ~10-15% of sessions, full bandwidth but only for that minority.
+- Net bandwidth reduction: **~85-90%** at the broker.
 
-// Broker -> Client
-{ type: "connected", server_id: string, server_name: string }
-{ type: "server_offline", server_id: string }
-{ type: "server_reconnected", server_id: string }
-{ type: "error", code: string, message: string }
+### 12.5 Horizontal Scaling
 
-// Broker -> Server
-{ type: "connection_request", client_id: string, session_id: string }
-{ type: "client_disconnected", client_id: string }
+When a single broker box is not enough:
 
-// Server -> Broker
-{ type: "connection_accept", client_id: string }
-{ type: "connection_reject", client_id: string, reason: string }
-```
+1. **Add broker instances** behind Caddy (or a Hetzner load balancer when we outgrow a single LB). Sessions are stateless (JWT-verified), so any instance can handle any REST call.
+2. **Sticky WSS is not enough:** a mobile client might land on broker-A while the host's Tunnel Manager is on broker-B. Solution: **Redis pub/sub** with `serverConnections` as a Redis hash mapping `server_id → broker_instance_id`. Each broker subscribes to a topic `relay:<instance_id>`. Cross-instance relay publishes frames to the remote broker's topic; the remote broker delivers to the locally-held WS.
+3. **Postgres:** move to Hetzner Managed Postgres (or self-hosted with streaming replication). Read replicas for `GET /servers` and session lookups.
+4. **Multi-region:** when user distribution justifies it, deploy a second broker cluster in Hetzner Falkenstein (EU). Route by DNS geo (Cloudflare) or anycast.
 
-**Data messages (relayed transparently):**
+### 12.6 Redis Usage Summary
 
-```typescript
-// Client -> Broker -> Server (and reverse)
-// Wrapped in a thin envelope for multiplexing:
-{ type: "data", client_id: string, payload: any }
-
-// Binary frames: forwarded as-is with a 4-byte client_id prefix for multiplexing
-// [client_id: 4 bytes][payload: rest of frame]
-```
-
-**Multiplexing:** A single server WS connection serves multiple mobile clients. The `client_id` in data messages lets the server route responses to the correct mobile app session. The broker strips the envelope when forwarding to the client (each client gets a dedicated WS, so no multiplexing needed on the client side).
-
-### 3.4 Latency Optimization
-
-- **Single hop:** The broker does not parse or transform data frames. It reads from one WS and writes to the other. The relay loop is ~100 lines of code.
-- **Binary frames preferred:** For PocketBase API calls (which are HTTP-over-WS), the mobile app sends binary frames containing the serialized HTTP request. The server deserializes and routes to PocketBase locally. This avoids JSON parsing overhead in the relay.
-- **Broker placement:** Initial deployment on a single VPS in US East (iad) for best peering with the largest user base. Migrate to Fly.io for multi-region when user distribution justifies it.
-- **Backpressure:** If the server WS buffer exceeds 1 MB, the broker pauses reading from the client WS (TCP backpressure propagates naturally). Resume when buffer drains below 512 KB.
-- **Ping/pong:** Both client and server WS connections use WebSocket protocol-level pings every 15 seconds. If a pong is not received within 10 seconds, the connection is considered dead and torn down.
-
-### 3.5 Reconnection
-
-**Client reconnection:**
-1. On WS close or error, the mobile app waits 1 second and retries.
-2. Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s.
-3. On reconnect, the broker re-establishes the pipe to the server. Pending in-flight requests are lost (the PocketBase client in the WebView retries automatically via its SDK).
-4. If the app was backgrounded (iOS/Android), reconnection happens when the app returns to foreground. `expo-task-manager` is NOT used for background WS -- it is unreliable and battery-draining. The app simply reconnects on foreground.
-
-**Server reconnection:**
-1. If the server's WS to the broker drops, the server reconnects with exponential backoff (same schedule as client).
-2. During server reconnect, all connected mobile clients see `server_offline` and enter the reconnect screen.
-3. When the server reconnects, the broker sends `server_reconnected` to all waiting clients, who then re-establish their data pipes.
+| Key pattern                              | Purpose                              | TTL      |
+|------------------------------------------|--------------------------------------|----------|
+| `rl:ip:<ip>:<endpoint>`                  | Rate limit sliding window            | 1h       |
+| `rl:user:<user_id>:<endpoint>`           | Per-user rate limits                 | 1h       |
+| `server:<server_id>:instance`            | Which broker instance holds the WS   | 60s      |
+| `bandwidth:<user_id>:<yyyy-mm-dd>`       | Daily bandwidth counter              | 48h      |
+| `pubsub:relay:<instance_id>`             | Cross-instance frame forwarding      | —        |
 
 ---
 
-## 4. Phase 2: WebRTC P2P
+## 13. Tech Stack
 
-### 4.1 Goal
-
-Eliminate the broker from the data path. The broker becomes a signaling server only: it helps the mobile app and server exchange SDP offers/answers and ICE candidates, then steps out.
-
-### 4.2 React Native WebRTC Setup
-
-**Library:** `react-native-webrtc` (npm: `react-native-webrtc@latest`, ~125k weekly downloads).
-
-**Expo compatibility:** The package provides an official Expo config plugin via `@config-plugins/react-native-webrtc`. This requires:
-- `expo prebuild` (generates native iOS/Android projects). This means development builds, not Expo Go.
-- Adding to `app.json`:
-  ```json
-  {
-    "expo": {
-      "plugins": [
-        "@config-plugins/react-native-webrtc"
-      ]
-    }
-  }
-  ```
-- The plugin automatically configures iOS permissions (`NSCameraUsageDescription`, `NSMicrophoneUsageDescription` -- even though AnyClaw only uses data channels, the plugin requests them; these can be overridden to data-only in a custom config plugin fork if App Store review objects).
-- No full ejection required. `expo prebuild` + `eas build` handles the native compilation.
-
-**Server side:** The AnyClaw server (Node.js) uses the `wrtc` npm package (WebRTC for Node.js, based on Google's libwebrtc). This runs as a native addon -- compatible with the Docker-based server deployment.
-
-### 4.3 Signaling Protocol
-
-Signaling messages flow through the broker's existing WebSocket connections.
-
-```
-Mobile App              Broker                 User's Server
-    |                     |                         |
-    |-- signal_offer ---->|--- signal_offer ------->|
-    |                     |                         |
-    |<-- signal_answer ---|<-- signal_answer -------|
-    |                     |                         |
-    |-- ice_candidate --->|--- ice_candidate ------>|
-    |<-- ice_candidate ---|<-- ice_candidate -------|
-    |                     |                         |
-    |<========= WebRTC data channel ===============>|
-    |           (broker not involved)               |
-```
-
-**Signaling messages:**
-
-```typescript
-// Client -> Broker -> Server
-{
-  type: "signal_offer",
-  client_id: string,
-  server_id: string,
-  sdp: string                // SDP offer (RTCSessionDescription.sdp)
-}
-
-// Server -> Broker -> Client
-{
-  type: "signal_answer",
-  client_id: string,
-  sdp: string                // SDP answer
-}
-
-// Bidirectional (trickle ICE)
-{
-  type: "ice_candidate",
-  client_id: string,
-  server_id: string,
-  candidate: string,         // ICE candidate string
-  sdpMid: string,
-  sdpMLineIndex: number
-}
-
-// Server -> Broker -> Client (signaling complete)
-{
-  type: "signal_complete",
-  client_id: string,
-  connection_type: "direct" | "relay"  // whether TURN was needed
-}
-```
-
-### 4.4 STUN/TURN Infrastructure
-
-**STUN:** Use Google's free public STUN servers (`stun:stun.l.google.com:19302`) for ICE candidate gathering. STUN is lightweight (single UDP packet exchange) and does not relay traffic.
-
-**TURN:** Required when both the mobile device and the server are behind symmetric NATs (hole-punching fails). TURN relays media through a server, but unlike the Phase 1 WSS relay, TURN is a standardized protocol with wide availability.
-
-**TURN deployment options (ranked):**
-1. **Self-hosted coturn** on the same Fly.io/cloud infrastructure as the broker. Cost: ~$5-15/mo for a small VM. Gives full control over bandwidth accounting.
-2. **Cloudflare TURN** (part of Cloudflare Calls, free tier available). Reduces operational burden but adds a dependency.
-3. **Twilio TURN** (pay-per-GB). Simple API for credential generation but expensive at scale ($0.40/GB).
-
-Recommendation: start with self-hosted coturn. A single coturn instance handles thousands of concurrent TURN sessions.
-
-**TURN credential rotation:** The broker generates short-lived TURN credentials (valid 6 hours) using coturn's `--use-auth-secret` mode. The broker returns TURN credentials as part of the signaling response so the mobile app and server both have valid credentials before starting ICE.
-
-### 4.5 Data Channel Design
-
-A single WebRTC data channel named `"anyclaw"` carries all traffic:
-
-```typescript
-const dataChannel = peerConnection.createDataChannel("anyclaw", {
-  ordered: true,          // preserve message order (HTTP semantics need this)
-  maxRetransmits: null,   // reliable delivery (no packet loss)
-});
-```
-
-The channel carries the same message format as the Phase 1 WSS relay (JSON control messages + binary data frames), minus the multiplexing envelope (since P2P is 1:1 between a single client and server).
-
-**Fallback logic:** If the WebRTC data channel fails to establish within 10 seconds, or if it drops and cannot reconnect within 5 seconds, the client falls back to Phase 1 WSS relay automatically. The user sees a brief loading indicator but no manual intervention is needed.
-
-### 4.6 Multiple Devices with WebRTC
-
-Each mobile device establishes its own independent WebRTC peer connection to the server. The server maintains N peer connections for N connected devices. Since AnyClaw is single-user (one user, multiple devices), N is expected to be 1-3.
+| Layer             | Choice                                     | Rationale                                                      |
+|-------------------|--------------------------------------------|----------------------------------------------------------------|
+| Runtime           | Node.js 22 LTS (TypeScript)                | Shares tooling with the rest of AnyClaw, I/O-bound workload    |
+| HTTP framework    | Fastify 4                                  | Fast, first-class WS via `@fastify/websocket`, schema validation |
+| WebSocket         | `ws` (via `@fastify/websocket`)            | Battle-tested, zero-copy forwarding, permessage-deflate        |
+| Auth              | Lucia Auth v3                              | Thin, framework-agnostic, argon2id built in                    |
+| JWT               | `jose`                                     | Well-audited JWT/JWS library, ES256 + HS256                    |
+| Database          | Postgres 16                                | Multi-writer, mature, Hetzner managed path available           |
+| DB client         | `postgres` (porsager/postgres)             | Zero-dep, prepared statements, pipelining                      |
+| Cache / pub-sub   | Redis 7                                    | Rate limits, cross-instance relay routing                      |
+| Crypto            | `libsodium-wrappers` (WASM)                | Spec decision #30, works identically on RN and Node            |
+| Logging           | `pino`                                     | Fastify default, JSON structured, minimal overhead             |
+| Metrics           | `@fastify/metrics` (Prometheus)            | Standard, Grafana-ready                                        |
+| Migrations        | Hand-rolled SQL files + tiny runner        | No ORM needed, keeps schema in-repo and reviewable             |
+| Reverse proxy     | Caddy 2                                    | Automatic Let's Encrypt, WS-friendly                           |
+| Process manager   | systemd + pm2-runtime                      | Matches host-side supervision model                            |
+| Container/host    | Ubuntu 24.04 on Hetzner CX22 (no Docker)   | Simpler ops for a single-purpose box                           |
+| TURN (Phase 2)    | coturn                                     | Standard, self-hosted, `--use-auth-secret` mode                |
 
 ---
 
-## 5. Security Model
-
-### 5.1 TLS Everywhere
-
-- **Broker REST API:** HTTPS only. TLS termination via Let's Encrypt (certbot/Caddy on the VPS, or at the load balancer after migrating to Fly.io).
-- **Broker WebSocket:** WSS (WebSocket over TLS). Same TLS termination.
-- **Phase 1 relay:** Both legs (client-to-broker and broker-to-server) are WSS. On top of TLS, all relayed traffic is encrypted end-to-end using NaCl box (Curve25519 + XSalsa20 + Poly1305). The broker cannot read relayed content even if compromised. See section 5.6 for the key exchange protocol.
-- **Phase 2 WebRTC:** DTLS is mandatory in the WebRTC spec. All data channel traffic is encrypted peer-to-peer. The broker never sees the plaintext.
-
-### 5.2 Authorization Model
-
-Every request is scoped to the authenticated user:
-- A session token can only access servers belonging to that user.
-- The broker verifies `user_id` matches on every relay connection and signaling message.
-- Server tokens are scoped to a single user and single server after claiming.
-- There is no admin API. Operational tasks (user lookup, server list) use direct database queries with audit logging.
-
-### 5.3 Rate Limiting
-
-Implemented at the broker's HTTP/WS layer using a sliding window counter in Redis (or in-memory if Redis is not yet deployed):
-
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| `POST /auth/register` | 5 per IP | 1 hour |
-| `POST /auth/login` | 10 per IP | 15 minutes |
-| `POST /auth/login` (per account) | 5 failed attempts | 15 minutes (then lockout for 15 min) |
-| `POST /servers/create-token` | 10 per user | 1 hour |
-| WebSocket connections per user | 5 concurrent | -- |
-| WebSocket messages per connection | 1000 per second | -- (backpressure handles sustained load) |
-
-After 5 failed login attempts on an account, the account is locked for 15 minutes. The user can still reset their password via email.
-
-### 5.4 Abuse Prevention
-
-- **No open relay:** The broker only relays traffic between authenticated users and their own registered servers. It does not accept arbitrary WebSocket connections.
-- **Bandwidth cap (Phase 1):** Each user's relay traffic is capped at 1 GB/day. If exceeded, the broker sends a `rate_limited` control message and closes the relay. Users hitting this cap are encouraged to upgrade to Phase 2 (WebRTC) which has no broker-side bandwidth cost.
-- **Connection limits:** Maximum 3 concurrent mobile devices per user. Maximum 2 registered servers per user.
-- **Server token expiry:** Unclaimed server tokens expire after 24 hours. Claimed tokens do not expire but can be revoked by the user.
-- **IP-based blocking:** If an IP generates excessive failed auth attempts (>50 in an hour), block it for 24 hours at the load balancer level.
-
-### 5.5 Server Zero-Port Guarantee
-
-The user's server never listens on a public port. It initiates an outbound WebSocket connection to the broker. All traffic flows over this outbound connection. The server's firewall can block all inbound traffic. In Phase 2, WebRTC ICE handles NAT traversal via STUN/TURN -- still no inbound port required.
-
----
-
-## 6. Scaling Considerations
-
-### 6.1 Phase 1 Bandwidth Cost
-
-Estimate per active user:
-- **WebView traffic:** The agent-built React app is served from the user's server. Each page load is ~500 KB (JS bundle + assets). Assume 20 page loads/day = 10 MB/day.
-- **API traffic:** PocketBase REST calls. Each call is ~2 KB request + ~5 KB response. Assume 200 API calls/day = 1.4 MB/day.
-- **Realtime:** PocketBase SSE subscriptions. ~1 KB per event, ~100 events/day = 100 KB/day.
-- **Total per user per day:** ~12 MB.
-- **Total per user per month:** ~360 MB.
-
-**Bandwidth cost at scale (Phase 1 relay, all traffic through broker):**
-
-| Users | Monthly bandwidth | Cost (Fly.io: $0.02/GB outbound) |
-|-------|------------------|----------------------------------|
-| 100 | 36 GB | $0.72 |
-| 1,000 | 360 GB | $7.20 |
-| 10,000 | 3.6 TB | $72.00 |
-| 100,000 | 36 TB | $720.00 |
-
-At 1,000 users, Phase 1 relay bandwidth is very affordable. At 100,000 users it costs ~$720/mo in bandwidth alone -- still manageable but Phase 2 should be live well before then.
-
-**Compute cost:** The relay is CPU-cheap (it is just copying bytes between sockets). A single VPS (2 vCPU, 2 GB RAM, US East) can handle ~500 concurrent WebSocket connections. At 1,000 users with ~30% concurrent, that is 300 connections -- one machine suffices. After migrating to Fly.io, a shared-cpu-1x machine ($1.94/mo) handles the same load.
-
-### 6.2 Phase 2 Cost Reduction
-
-With WebRTC P2P, the broker handles only signaling:
-- **Signaling traffic:** ~5 KB per connection establishment (SDP + ICE candidates). This happens once per session (when the app opens), not per request.
-- **TURN fallback:** Estimated 10-15% of connections fail P2P hole-punching and fall back to TURN. TURN bandwidth is comparable to Phase 1 relay but only for that 10-15%.
-- **Net reduction:** ~85-90% bandwidth reduction at the broker. The 100,000-user scenario drops from $720/mo to ~$72-108/mo.
-
-### 6.3 Horizontal Scaling Strategy
-
-Phase 1 (MVP, <1,000 users): single VPS in US East (iad) running Docker Compose (broker + Postgres). Postgres with daily backups. TLS via Let's Encrypt (Caddy or certbot). Domain: `broker.anyclawapp.com`.
-
-Phase 1.5 (scaling trigger): Migrate to Fly.io when the single VPS becomes a bottleneck or multi-region is needed. Fly.io provides anycast routing, automatic TLS, and easy multi-region deployment. The Docker-based setup makes this migration straightforward.
-
-Phase 2 (1,000-10,000 users):
-- Multiple broker instances behind Fly.io's anycast routing.
-- WebSocket connections are sticky (Fly.io handles this via `fly-replay` header).
-- Shared state (session validation, server registry) via Postgres. Connection mapping (which broker instance holds which server's WS) via Redis pub/sub.
-- If client connects to broker-A but the server's WS is on broker-B, broker-A publishes to Redis, broker-B receives and forwards.
-
-Phase 3 (>10,000 users):
-- Postgres read replicas for auth lookups.
-- Dedicated TURN cluster.
-- Regional broker deployments (US, EU, Asia).
-
----
-
-## 7. Tech Stack
-
-### 7.1 Broker Runtime: Node.js (TypeScript)
-
-**Why Node.js over Go or Rust:**
-- The rest of the AnyClaw server stack is Node.js + TypeScript. Using the same language for the broker means shared types, shared tooling (eslint, vitest, tsconfig), and a smaller mental overhead for contributors.
-- The `ws` npm package is highly optimized for WebSocket relay workloads (zero-copy buffer forwarding, permessage-deflate).
-- The broker is I/O-bound (shuttling bytes between sockets), not CPU-bound. Node.js's event loop handles this well.
-- If the broker becomes a bottleneck, the relay hot path (~100 lines) can be rewritten as a native addon in Rust (via napi-rs) without changing the rest of the codebase.
-
-**Go counterargument:** Go's goroutine model handles many concurrent connections more naturally than Node.js. If we expect >50,000 concurrent WebSocket connections on a single instance, Go (with `gobwas/ws` for low-allocation WS handling) would be the better choice. At AnyClaw's expected scale (<10,000 users for the first year), Node.js is sufficient.
-
-**Framework:** Fastify (not Express). Fastify has better performance, built-in schema validation (via JSON Schema / Typebox), and first-class WebSocket support via `@fastify/websocket`.
-
-### 7.2 Database: Postgres
-
-**Why Postgres over SQLite:**
-- The broker is a multi-process cloud service. SQLite's single-writer limitation makes it unsuitable for concurrent writes from multiple broker instances.
-- Managed Postgres is available on every cloud provider. Fly.io Postgres (actually Supabase-powered) is $0/mo for 1 GB.
-- Postgres handles session lookups, server registry queries, and rate limiting counters efficiently with proper indexes.
-
-**Schema summary:**
-- `users` -- ~1 KB per row. At 100,000 users: ~100 MB.
-- `sessions` -- ~200 bytes per row. At 300,000 sessions: ~60 MB.
-- `servers` -- ~200 bytes per row. At 100,000 servers: ~20 MB.
-- Total: well under 1 GB for the foreseeable future.
-
-### 7.3 Cache / Rate Limiting: In-Memory (then Redis)
-
-For MVP, rate limiting counters and connection maps live in-process (a `Map<string, number[]>` with sliding window expiry). This works with a single broker instance.
-
-When scaling to multiple instances, add Redis (Fly.io Upstash, or self-hosted on Fly). Redis stores:
-- Rate limiting counters (sliding window sorted sets).
-- Connection map: `server_id -> broker_instance_id` so that cross-instance relay works.
-- Pub/sub channel for relay forwarding between broker instances.
-
-### 7.4 Deployment
-
-- **Platform (initial):** Single VPS in US East (iad) with Docker Compose. Reasons: simplest to operate, cheapest to start, need to co-host with OpenClaw. Migrate to Fly.io when multi-region or auto-scaling is needed.
-- **Platform (future):** Fly.io. WebSocket-friendly (no timeout limits), multi-region, cheap, good CLI/CD integration.
-- **Container:** Single Dockerfile. Node.js 22 LTS Alpine image. The broker binary is ~50 MB including node_modules. Docker Compose orchestrates broker + Postgres on the VPS.
-- **TLS:** Caddy as reverse proxy (automatic Let's Encrypt for `broker.anyclawapp.com`). On Fly.io migration, TLS moves to the load balancer.
-- **CI/CD:** GitHub Actions. On push to `main`: build Docker image, run tests, deploy via SSH to VPS (later: `flyctl deploy`).
-- **Monitoring:** Prometheus endpoint in Fastify. Key metrics: active WS connections, relay bytes/sec, auth requests/sec, P95 latency, error rate. On VPS: Grafana Cloud free tier or Axiom.
-- **Logging:** Structured JSON logs (pino, Fastify's default logger). Ship to Axiom (free tier: 500 MB/mo).
-
-### 7.5 File Structure
+## 14. File Structure
 
 ```
-anyclaw-broker/
+broker/
 ├── package.json
 ├── tsconfig.json
-├── Dockerfile
-├── docker-compose.yml              # Broker + Postgres for VPS deployment
-├── Caddyfile                       # Reverse proxy + auto TLS for broker.anyclawapp.com
-├── fly.toml                        # For future Fly.io migration
+├── pnpm-lock.yaml
+├── Caddyfile
+├── systemd/
+│   └── anyclaw-broker.service
 ├── src/
-│   ├── index.ts                  # Fastify server entrypoint
-│   ├── config.ts                 # Environment variables, defaults
+│   ├── index.ts                    # Fastify entrypoint, route registration
+│   ├── config.ts                   # Env vars, secrets, defaults
 │   ├── db/
-│   │   ├── client.ts             # Postgres client (pg or postgres.js)
-│   │   ├── migrate.ts            # Migration runner
+│   │   ├── client.ts               # postgres.js client + helpers
+│   │   ├── migrate.ts              # forward-only migration runner
 │   │   └── migrations/
 │   │       ├── 001_users.sql
-│   │       ├── 002_sessions.sql
-│   │       ├── 003_servers.sql
-│   │       ├── 004_server_tokens.sql
-│   │       └── 005_device_keys.sql
+│   │       ├── 002_oauth_accounts.sql
+│   │       ├── 003_sessions.sql
+│   │       ├── 004_servers.sql
+│   │       ├── 005_server_tokens.sql
+│   │       ├── 006_device_keys.sql
+│   │       └── 007_rate_limit_buckets.sql
 │   ├── auth/
-│   │   ├── routes.ts             # /auth/* REST endpoints
-│   │   ├── lucia.ts              # Lucia auth setup
-│   │   ├── oauth.ts              # OAuth provider configs
-│   │   └── middleware.ts         # Session validation middleware
+│   │   ├── routes.ts               # /auth/* REST endpoints
+│   │   ├── lucia.ts                # Lucia setup + Postgres adapter
+│   │   ├── jwt.ts                  # Mint + verify broker JWT
+│   │   ├── refresh.ts              # Refresh endpoint + sliding expiry
+│   │   ├── session.ts              # Session CRUD
+│   │   ├── middleware.ts           # Bearer token auth middleware
+│   │   └── oauth/
+│   │       ├── google.ts           # Google OIDC flow
+│   │       ├── apple.ts            # Apple Sign In (ES256 client secret, first-login quirk)
+│   │       ├── github.ts           # GitHub /user + /user/emails fetch
+│   │       └── pkce.ts             # Shared PKCE helpers
 │   ├── servers/
-│   │   ├── routes.ts             # /servers/* REST endpoints
-│   │   ├── registry.ts           # Server registration + heartbeat logic
-│   │   └── health-checker.ts     # Background job: mark stale servers offline
+│   │   ├── routes.ts               # /servers/* REST endpoints
+│   │   ├── pairing.ts              # Token generation + claim flow
+│   │   ├── registry.ts             # Register + heartbeat + status
+│   │   └── health-checker.ts       # Background job: degrade/offline transitions
 │   ├── relay/
-│   │   ├── client-handler.ts     # WSS handler for mobile app connections
-│   │   ├── server-handler.ts     # WSS handler for AnyClaw server connections
-│   │   ├── pipe.ts               # Bidirectional frame forwarding
-│   │   └── connection-map.ts     # In-memory (later Redis) server->WS mapping
-│   ├── signaling/
-│   │   ├── handler.ts            # WebRTC signaling message routing
-│   │   └── turn-credentials.ts   # Short-lived TURN credential generation
+│   │   ├── client-handler.ts       # WSS /relay/client handler
+│   │   ├── server-handler.ts       # WSS /relay/server handler
+│   │   ├── envelope.ts             # CBOR envelope encode/decode
+│   │   ├── pipe.ts                 # Zero-copy bidirectional forwarding
+│   │   ├── connection-map.ts       # In-memory + Redis serverConnections
+│   │   └── backpressure.ts         # Buffer watermarks, pause/resume
+│   ├── signaling/                  # Phase 2 WebRTC
+│   │   ├── handler.ts              # Signal message routing over existing WSS
+│   │   └── turn-credentials.ts     # coturn short-lived credential generation
 │   ├── crypto/
-│   │   ├── nacl.ts               # NaCl box encrypt/decrypt helpers
-│   │   ├── key-exchange.ts       # X25519 key generation + shared secret derivation
-│   │   └── nonce.ts              # Counter-based nonce management
-│   └── middleware/
-│       ├── rate-limit.ts         # Sliding window rate limiter
-│       └── error-handler.ts      # Centralized error handling
+│   │   ├── aes-gcm.ts              # Provider refresh token encryption
+│   │   └── bip39.ts                # 4-word verification code helpers (for /status response)
+│   ├── middleware/
+│   │   ├── rate-limit.ts           # Sliding window, Redis-backed
+│   │   ├── error-handler.ts        # Centralised error mapping
+│   │   └── logger.ts               # Request logging + correlation IDs
+│   └── metrics/
+│       └── prometheus.ts           # Counters, gauges, histograms
 ├── tests/
 │   ├── auth/
+│   │   ├── google.test.ts
+│   │   ├── apple.test.ts           # First-login quirk regression test
+│   │   ├── github.test.ts
+│   │   ├── refresh.test.ts
+│   │   └── session.test.ts
+│   ├── servers/
+│   │   ├── pair.test.ts
 │   │   ├── register.test.ts
-│   │   ├── login.test.ts
-│   │   └── oauth.test.ts
+│   │   └── heartbeat.test.ts
 │   ├── relay/
 │   │   ├── connect.test.ts
 │   │   ├── forward.test.ts
-│   │   └── reconnect.test.ts
+│   │   ├── envelope.test.ts
+│   │   ├── reconnect.test.ts
+│   │   └── backpressure.test.ts
 │   ├── signaling/
 │   │   └── webrtc.test.ts
-│   └── crypto/
-│       ├── nacl.test.ts
-│       └── key-exchange.test.ts
+│   └── e2e/
+│       ├── pair-and-relay.test.ts  # Full flow: OAuth → pair → WSS relay with NaCl
+│       └── multi-device.test.ts
 └── .env.example
 ```
 
 ---
 
-## 8. Technical Decisions (Resolved)
+## 15. Testing Strategy
 
-All five open decisions from the original design have been resolved by the main spec's locked decisions.
+### 15.1 Unit Tests (vitest)
 
-| # | Decision | Resolution | Source |
-|---|----------|------------|--------|
-| 1 | Domain and TLS | `anyclawapp.com` purchased. Broker at `broker.anyclawapp.com`. TLS via Let's Encrypt (Caddy on VPS, load balancer on Fly.io). | Spec decision #15 |
-| 2 | OAuth providers | Google + Apple + GitHub at launch. Apple required by App Store. GitHub for developer early-adopter audience. | Spec decision #16 |
-| 3 | Phase 2 timing | Launch with WSS relay only. Begin Phase 2 (WebRTC P2P) development after launch. | Spec decision #17 |
-| 4 | Broker region | US East (iad). Add regions when user distribution justifies it. | Spec decision #18 |
-| 5 | E2E encryption | YES -- NaCl box encryption on top of TLS in Phase 1. Broker cannot read relayed traffic. See section 5.6 for protocol. | Spec decision #19 |
+- **Auth:** JWT mint/verify round-trip, Apple client-secret JWT signing, PKCE verifier validation, refresh token sliding expiry.
+- **Pairing:** server token generation, single-use enforcement, expiry cleanup, BIP39 derivation matches between mobile and host implementations (golden vectors).
+- **Envelope:** CBOR encode/decode round-trip for every `type` × `service` combination, fuzz test with malformed frames.
+- **Rate limiter:** sliding window edges, Redis failure fallback to in-memory.
 
-Additional locked decision affecting this design:
+### 15.2 Integration Tests (vitest + testcontainers)
 
-| # | Decision | Resolution | Source |
-|---|----------|------------|--------|
-| 6 | Cloud hosting | Single VPS with Docker Compose first. Migrate to Fly.io later. VPS needs to host OpenClaw alongside AnyClaw. | Spec decision #22 |
+Spin up Postgres + Redis in Docker for each test run. Each test exercises the full Fastify stack:
 
----
+- **Auth flows:** mock OAuth provider endpoints (nock), verify full authorization-code → JWT → refresh cycle for Google, Apple (including first-login quirk), GitHub.
+- **Pairing flow:** start pair → poll status → register (simulated host) → claim → verify shared-secret derivation produces matching BIP39 codes.
+- **Heartbeat state machine:** fast-forward mock clock through the 90s/180s thresholds, assert the right UI-state control frames are emitted.
 
-## 5.6 NaCl End-to-End Encryption (Phase 1)
+### 15.3 End-to-End Tests
 
-### 5.6.1 Goal
+- **Pair-and-relay:** full lifecycle. Test harness spins up a fake "host" that generates keys, connects to `/relay/server`, answers `connection_request`, and echoes every data frame. Mobile side (also simulated) runs the pairing flow, establishes a relay, and exchanges NaCl-encrypted frames through the real broker. Asserts decryption succeeds, nonce counters increment, and the broker never observes plaintext.
+- **Multi-device:** same host, two simulated mobile clients, both relaying concurrently. Verifies `client_id` multiplexing and that cross-client frames are not delivered to the wrong recipient.
+- **Reconnect:** kill the simulated host mid-session. Assert mobile clients see `server_offline`, the host reconnects with a new WSS, pairing is preserved (server_id stable), and new data frames flow.
+- **Backpressure:** stream a 100 MB blob from host to mobile with a deliberately slow mobile receiver. Assert the broker pauses reading from the host and neither side OOMs.
 
-All data relayed through the broker in Phase 1 is encrypted end-to-end using NaCl box (Curve25519 key agreement + XSalsa20-Poly1305 authenticated encryption). The broker forwards opaque ciphertext. Even a compromised broker learns nothing about the content of relayed messages.
+### 15.4 Load Tests
 
-### 5.6.2 Cryptographic Primitives
+- **k6** scripts drive 500 concurrent relay sessions for 10 minutes against a single CX22 instance, targeting typical PocketBase call patterns. Exit criteria: p95 latency < 150 ms, CPU < 70%, zero dropped frames.
+- **Chaos:** kill Postgres mid-test, assert rate limiter falls back to in-memory and REST calls continue serving the happy path; restart Postgres, assert recovery within 10 seconds.
 
-- **Key agreement:** Curve25519 (X25519 ECDH)
-- **Authenticated encryption:** XSalsa20-Poly1305 (NaCl `crypto_box`)
-- **Nonce:** 24 bytes, incremented per message (see 5.6.5)
-- **Library (mobile/client):** `tweetnacl` (npm, pure JS, audited, 0 dependencies) or `libsodium-wrappers` (npm, WASM build of libsodium)
-- **Library (server):** `libsodium-wrappers` (npm) or `sodium-native` (npm, native binding, faster)
+### 15.5 Security Tests
 
-### 5.6.3 Key Exchange Protocol
-
-The key exchange happens during the server pairing step (when the user adds a self-hosted server to their account). The broker facilitates the exchange but never learns the shared secret.
-
-**Pairing flow (extended with key exchange):**
-
-```
-Mobile App                    Broker                     User's Server
-    |                           |                              |
-    |  1. POST /servers/        |                              |
-    |     create-token          |                              |
-    |  (authenticated)          |                              |
-    |                           |                              |
-    |  <- server_token +        |                              |
-    |     broker_relay_pubkey   |                              |
-    |                           |                              |
-    |  2. Generate ephemeral    |                              |
-    |     X25519 keypair:       |                              |
-    |     (mobile_pk, mobile_sk)|                              |
-    |                           |                              |
-    |  3. Display to user:      |                              |
-    |     server_token +        |                              |
-    |     mobile_pk (QR/copy)   |                              |
-    |                           |                              |
-    |                           |   4. User pastes/scans       |
-    |                           |      server_token + mobile_pk|
-    |                           |      into server config      |
-    |                           |                              |
-    |                           |   5. Server generates its own|
-    |                           |      X25519 keypair:         |
-    |                           |      (server_pk, server_sk)  |
-    |                           |                              |
-    |                           |   6. Server computes shared  |
-    |                           |      secret:                 |
-    |                           |      shared = X25519(        |
-    |                           |        server_sk, mobile_pk) |
-    |                           |                              |
-    |                           |   7. POST /servers/register  |
-    |                           |      { server_token,         |
-    |                           |        server_pk, ... }      |
-    |                           |                              |
-    |  8. GET /servers          |                              |
-    |     (includes server_pk   |                              |
-    |      for each server)     |                              |
-    |                           |                              |
-    |  9. Mobile computes       |                              |
-    |     shared secret:        |                              |
-    |     shared = X25519(      |                              |
-    |       mobile_sk, server_pk)|                             |
-    |                           |                              |
-    |  (shared secrets match    |                              |
-    |   via Diffie-Hellman)     |                              |
-```
-
-**Why the broker cannot learn the shared secret:**
-- The broker sees `mobile_pk` (in step 3, embedded in the pairing token/QR) and `server_pk` (in step 7, sent during registration).
-- The broker never sees `mobile_sk` or `server_sk` (private keys that never leave the devices).
-- Computing the shared secret requires one private key + the other's public key (X25519 Diffie-Hellman). The broker has neither private key.
-
-**Key storage:**
-- **Mobile app:** `mobile_sk` is stored in `expo-secure-store` (iOS Keychain / Android Keystore), keyed by `server_id`. `mobile_pk` can be derived from `mobile_sk` or stored alongside it.
-- **Server:** `server_sk` is stored in the server's config directory with filesystem permissions restricted to the server process. Not stored in PocketBase (which the agent can access).
-- **Broker:** Stores only `mobile_pk` and `server_pk` (public keys). These are not secret.
-
-### 5.6.4 Encrypted Message Format
-
-All data frames in the Phase 1 relay are encrypted before being sent over the WebSocket:
-
-```
-Encrypted frame layout:
-[nonce: 24 bytes][ciphertext: N bytes (includes 16-byte Poly1305 MAC)]
-```
-
-The sender:
-1. Serializes the plaintext message (JSON for control messages, raw bytes for binary frames).
-2. Generates the next nonce (see 5.6.5).
-3. Calls `nacl.box(plaintext, nonce, recipientPublicKey, senderSecretKey)` to produce ciphertext.
-4. Sends `nonce || ciphertext` as a binary WebSocket frame.
-
-The receiver:
-1. Reads the first 24 bytes as the nonce.
-2. Calls `nacl.box.open(ciphertext, nonce, senderPublicKey, recipientSecretKey)` to recover plaintext.
-3. If decryption fails (MAC check), drops the frame and logs a warning. Does not close the connection (could be a transient corruption).
-
-**Overhead:** 24 bytes (nonce) + 16 bytes (MAC) = 40 bytes per frame. Negligible for typical messages (1-10 KB).
-
-### 5.6.5 Nonce Management
-
-Nonces must never repeat for the same key pair. Strategy: **counter-based nonces with direction prefix.**
-
-- Mobile-to-server nonces: first byte = `0x01`, remaining 23 bytes = big-endian counter starting at 0.
-- Server-to-mobile nonces: first byte = `0x02`, remaining 23 bytes = big-endian counter starting at 0.
-
-The direction prefix ensures that even if both sides start their counters at 0, nonces never collide. The 23-byte counter space (2^184) will never overflow in practice.
-
-Counters reset to 0 each time a new WebSocket connection is established (reconnect). This is safe because the same key pair is reused, but nonce reuse is avoided because the counters always increment within a connection, and a reconnect resets both sides' counters simultaneously.
-
-### 5.6.6 Multi-Device Considerations
-
-Each mobile device generates its own X25519 keypair during pairing. The server stores multiple `(device_id, mobile_pk)` pairs. When the server receives an encrypted frame from the broker, the broker's multiplexing envelope (`client_id`) identifies which device sent it, and the server uses the corresponding `mobile_pk` for decryption.
-
-### 5.6.7 Control Messages vs. Data Messages
-
-**Control messages** (broker <-> client, broker <-> server) such as `connection_request`, `server_offline`, and `heartbeat` are NOT encrypted with NaCl. They are broker-level protocol messages that the broker must read to function. These travel over TLS only.
-
-**Data messages** (client <-> server, relayed through broker) are always NaCl-encrypted. The broker forwards them as opaque binary blobs. The multiplexing envelope (`type: "data"` + `client_id`) is kept in the clear so the broker can route, but the `payload` field is replaced with the encrypted blob:
-
-```typescript
-// What the broker sees for a data message:
-{
-  type: "data",
-  client_id: "c_abc123",
-  encrypted: true,
-  payload: <binary: nonce || ciphertext>
-}
-```
-
----
-
-## 9. New Gaps
-
-The following new technical decisions emerged from the locked decisions above, particularly from the NaCl E2E encryption requirement.
-
-### Gap 1: NaCl Key Rotation
-
-The current design generates one X25519 keypair per device-server pair during the initial pairing step. These keys are used indefinitely. Questions:
-
-- **Should keys rotate?** Long-lived keys mean a compromised `mobile_sk` exposes all future traffic. Periodic rotation (e.g., weekly) limits the window.
-- **Rotation mechanism:** If keys rotate, how does the new public key reach the other side? The broker can relay public keys, but the old shared secret should be used to authenticate the rotation (sign the new public key with the old key to prevent MITM during rotation).
-- **Forward secrecy:** NaCl box with static keys does not provide forward secrecy. A compromised private key exposes all past traffic that was recorded. Should we add an ephemeral key exchange per session (like a double-ratchet or just ephemeral X25519 per connection)?
-
-### Gap 2: Key Backup and Recovery
-
-- **What happens if the user loses their phone?** The `mobile_sk` is in the Keychain/Keystore and may not survive a device wipe. The user would need to re-pair the server (generate new keys). Is this acceptable UX, or do we need encrypted key backup?
-- **Multi-device key independence:** Each device has its own keypair. Losing one device does not affect others. But a server-side key loss (disk failure) requires ALL devices to re-pair. Should the server key be included in the server backup strategy?
-
-### Gap 3: Pairing Token Transport Security
-
-- The pairing flow sends `mobile_pk` via QR code or copyable string. If the user copies it through a compromised clipboard (clipboard sniffing malware), an attacker could substitute their own public key (MITM).
-- **Mitigation options:** (a) Display a short verification code on both sides (derived from the shared secret) that the user visually confirms. (b) Accept the risk -- clipboard MITM is a local-device-compromise scenario where the attacker likely has broader access anyway.
-
-### Gap 4: NaCl Library Choice
-
-- `tweetnacl` (pure JS) vs. `libsodium-wrappers` (WASM) vs. `sodium-native` (native binding). Need to decide per platform:
-  - Mobile (React Native): `tweetnacl` is simplest (no native code), but is it fast enough for encrypting every relayed frame? Benchmarking needed.
-  - Server (Node.js): `sodium-native` is fastest but adds a native dependency to the Docker image. `libsodium-wrappers` is WASM and works everywhere.
-
-### Gap 5: Debugging Encrypted Relay Traffic
-
-- With NaCl encryption, the broker cannot inspect relay traffic for diagnostics. How do we debug connectivity issues?
-- **Options:** (a) A debug mode flag that temporarily disables E2E encryption (opted in by the user). (b) Client-side and server-side logging of decrypted traffic (local only, never on the broker). (c) Rely on connection-level metrics (frame counts, byte counts, error rates) without content inspection.
-
-### Gap 6: Nonce Counter Persistence Across Reconnects
-
-- Section 5.6.5 says counters reset to 0 on reconnect. If the same WebSocket connection drops and reconnects very quickly, there is a theoretical risk of nonce reuse if frames were in-flight during the drop.
-- **Safer alternative:** Persist the last-used nonce counter and always start above it. But this adds state management complexity. Need to evaluate whether the theoretical risk justifies the complexity.
-
-### Gap 7: Tunnel Manager Internal Multiplexing (Subdomain vs Path Routing)
-
-The Process Architecture update in the main spec introduced three internal services behind a single tunnel on the user's host: PocketBase (port 8090), Dispatch/MCP (port 3000), and Prod static (port 4000). The Tunnel Manager must route each relayed request to the correct internal service, but the broker and the mobile app currently treat the tunnel as a single opaque pipe. Open questions:
-
-- **Routing strategy:** Should the mobile app address services by **subdomain** (e.g. `pb.<server-id>.anyclawapp.com`, `api.<server-id>.anyclawapp.com`, `app.<server-id>.anyclawapp.com`) with the Tunnel Manager inspecting a virtual Host header, or by **path prefix** on a single host (e.g. `/pb/*`, `/api/*`, `/app/*`)? Subdomain routing is cleaner for cookies/CORS and matches how PocketBase and the prod static server expect to be reached at a root path; path routing is simpler for the broker (one hostname) but requires rewriting paths inside the Tunnel Manager and may break absolute URLs in the agent-built React app.
-- **Where is the decision enforced?** Does the mobile WebView hit real per-service subdomains that resolve to the broker, or does the mobile-side client library embed a routing tag in each frame (e.g. `{ service: "pb" | "dispatch" | "prod", ...}`) that the Tunnel Manager reads after decryption? The latter avoids any broker-side DNS/TLS gymnastics but puts the routing decision entirely inside encrypted payloads.
-- **Relationship to the multiplexing envelope:** Section 3.3's `client_id` envelope multiplexes **across mobile clients**, not across internal services. A second dimension (service id) is needed. Proposal: extend the data envelope to `{ type: "data", client_id, service: "pb" | "dispatch" | "prod", payload: <encrypted> }` where `service` stays in the clear so the Tunnel Manager can route without decrypting.
-- **WebSocket vs HTTP semantics:** PocketBase Realtime uses SSE; the Dispatch/MCP server also uses SSE (per spec decision #4 and #13). The Tunnel Manager must keep long-lived per-client streams open against multiple internal services simultaneously. Does the framing format need explicit stream open/close control messages per `(client_id, service)` pair?
-- **Impact on Phase 2 (WebRTC):** With a direct P2P data channel, the same routing tag scheme still applies — the Tunnel Manager becomes the data channel peer and performs the same fan-out. Subdomain routing would not work over a raw data channel at all, which is another argument for in-envelope service tagging.
-
-Recommendation to revisit during Plan 4 implementation: start with **in-envelope `service` tag** (works for both Phase 1 WSS and Phase 2 WebRTC, no DNS/cert complications), and treat subdomain routing as a purely cosmetic option the agent-built React app can use for links the user opens outside the WebView.
-
-### Gap 8: VPS Provider Selection
-
-- The locked decision says "single VPS first" but does not specify the provider. Options: Hetzner (cheapest, EU and US datacenters), DigitalOcean, Linode/Akamai, Vultr, OVH.
-- Selection criteria: US East availability, Docker support, bandwidth pricing, reliability, SSH-based deploy simplicity.
+- **Fuzzing:** libfuzzer-style harness (via `jsfuzz`) on the envelope decoder and the NaCl frame decryption path.
+- **Auth hardening:** verify rate limits via burst tests; confirm 401 on tampered JWTs; confirm 403 on cross-user `server_id` access.
+- **Pairing MITM:** simulate a broker-in-the-middle swap of `mobile_pk` during pairing; assert the BIP39 codes do not match and therefore the user confirmation step would fail (documented manual check, since the test can't "see" what the user sees).

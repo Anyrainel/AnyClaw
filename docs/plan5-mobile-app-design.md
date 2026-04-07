@@ -1,24 +1,46 @@
 # Plan 5: Mobile App — Technical Design
 
-**Goal:** Build the AnyClaw companion mobile app -- a thin Expo (React Native) shell that wraps the agent-built web UI in a WebView, manages server connections, dispatches tasks to the coding agent, and provides version history with rollback.
+## 1. Overview
 
-**Architecture:** The app has two layers: (1) a native shell built with Expo Router (tabs + stack navigation) that handles connection setup, task dispatch, version history, and settings; (2) a full-screen WebView that loads the agent-built React frontend from the user's server. The native shell and WebView communicate via a postMessage/onMessage JS bridge. The app authenticates via the broker at `broker.anyclawapp.com`, then connects through a **single tunnel endpoint** (a relay subdomain brokered via `broker.anyclawapp.com`) to the user's host. On the host, a tunnel manager multiplexes incoming traffic across three supervised processes using path-based routing: `/pb/*` → PocketBase (data + Realtime SSE), `/api/*` → dispatch/MCP server (task submission, rollback, version history, emergency controls), `/app/*` → prod static server (the agent-built WebView content). All traffic is NaCl-encrypted on top of TLS.
+The AnyClaw mobile app is a thin Expo (React Native) shell that wraps the agent-built web UI in a WebView and provides the four native capabilities that must work even when the agent-built app is broken: connection management, task dispatch (with clarification Q&A), version history with rollback, and settings.
 
-**Tech Stack:** Expo SDK 52, expo-router v4, react-native-webview, expo-secure-store, expo-notifications, zustand (state management), React Native Reanimated (animations), tweetnacl (NaCl encryption).
+**Four responsibilities:**
 
-**Locked decisions applied:** Task dispatch UI is a dedicated "Request" tab + full-screen modal/bottom sheet (not FAB). Min Android API 28 (Android 9.0). WebView auth via JS bridge injection. Realtime via PocketBase SSE + REST. NaCl E2E encryption. OAuth: Google + Apple + GitHub. Domain: `anyclawapp.com`, broker at `broker.anyclawapp.com`. Supervised-process server architecture (PocketBase, tunnel manager, dispatch/MCP server, logic service, prod static server) — no container splits; path-based routing through a single tunnel.
+1. **WebView viewer** — A full-screen WebView loads the agent-built React frontend from the user's server at `/app/*`. The native shell and the WebView communicate via a postMessage/onMessage JS bridge. The session token is injected via the bridge after page load (never in the URL).
+2. **Task dispatch** — A dedicated "Request" tab with a strict state machine (idle → input → clarifying → working → deploying → done/failed). Submits requests to the dispatch/MCP server at `/api/*` and observes progress via PocketBase Realtime SSE on `/pb/*`. Survives app close/reopen — pending clarification questions resume on next launch.
+3. **Version history & rollback** — A "Versions" tab lists deployments with agent-written descriptions. Rollback calls `POST /api/rollback` and always works (the dispatch server is its own supervised process outside the agent's writable path), even when the logic service is crash-looping.
+4. **Settings** — Clarification timeout mode, API key management, connection/server management, device re-pair flow, and an opt-in debug mode for encrypted traffic.
+
+**Server-side routing (reminder from main spec).** The user's host runs several independently supervised processes behind a single tunnel endpoint. The tunnel manager uses an in-envelope service tag to route traffic:
+
+| Path | Process | Purpose |
+|------|---------|---------|
+| `/app/*` | Prod static server | Serves the agent-built React bundle into the WebView |
+| `/api/*` | Dispatch/MCP server | Task dispatch, rollback, versions, restart-app, health. Always available. |
+| `/pb/*` | PocketBase | Data, auth, realtime SSE for `_tasks`, `_deployments`, `_agent_messages` |
+
+All traffic is TLS-encrypted to the broker relay; sensitive API payloads are additionally NaCl-box encrypted end-to-end so the broker cannot read them even if compromised.
 
 ---
 
-## 1. Expo Project Setup
+## 2. Tech Stack
 
-### SDK and Workflow
-
-- **Expo SDK 52** (latest stable as of early 2026). Provides managed build pipeline, OTA updates via EAS Update, and push notification infrastructure.
-- **Managed workflow for Phase 1.** No native code, no ejection. Expo Go for development. EAS Build for production binaries.
-- **Development builds (expo-dev-client) for Phase 2** when WebRTC is needed (`@config-plugins/react-native-webrtc` requires `expo prebuild`). This is not a full ejection -- Expo still manages the build pipeline, but native modules are compiled in.
-
-### Key Dependencies
+| Concern | Library | Notes |
+|---------|---------|-------|
+| Framework | Expo SDK 52 (managed workflow) | EAS Build + EAS Update + Expo Push; no native code until WebRTC Phase 2 |
+| Routing | `expo-router` v4 | File-based routes, tabs + stack, deep links |
+| WebView | `react-native-webview` 13.x | Bidirectional JS bridge, `onRenderProcessGone` |
+| State | `zustand` 5.x | Stores for connection, task, versions, settings |
+| PocketBase client | `pocketbase` 0.25.x | REST + Realtime SSE; handles reconnect |
+| OAuth | `expo-auth-session` + `expo-web-browser` | Google, Apple, GitHub |
+| Secure storage | `expo-secure-store` | iOS Keychain / Android Keystore |
+| NaCl crypto | `libsodium-wrappers` | WASM, maintained by libsodium team |
+| Base64 util | `tweetnacl-util` | Interop helpers for byte <-> base64 |
+| Push notifications | `expo-notifications` + `expo-device` | Expo Push service |
+| Haptics / safe area | `expo-haptics`, `react-native-safe-area-context` | — |
+| Animations | `react-native-reanimated` 3.x | Bottom sheet, task card transitions |
+| Dates | `date-fns` | Version timestamps |
+| Testing | `jest-expo`, `@testing-library/react-native` | — |
 
 ```json
 {
@@ -27,212 +49,162 @@
     "expo-router": "~4.0.0",
     "expo-secure-store": "~14.0.0",
     "expo-notifications": "~0.29.0",
-    "expo-constants": "~17.0.0",
-    "expo-device": "~7.0.0",
+    "expo-auth-session": "~6.0.0",
+    "expo-web-browser": "~14.0.0",
     "expo-haptics": "~14.0.0",
+    "expo-device": "~7.0.0",
+    "expo-constants": "~17.0.0",
     "react-native-webview": "13.x",
     "react-native-reanimated": "~3.16.0",
-    "zustand": "^5.0.0",
-    "@react-native-async-storage/async-storage": "2.x",
     "react-native-safe-area-context": "~5.0.0",
     "react-native-gesture-handler": "~2.20.0",
-    "date-fns": "^4.0.0",
+    "zustand": "^5.0.0",
     "pocketbase": "^0.25.0",
-    "tweetnacl": "^1.0.3",
+    "libsodium-wrappers": "^0.7.15",
     "tweetnacl-util": "^0.15.1",
-    "expo-auth-session": "~6.0.0",
-    "expo-web-browser": "~14.0.0"
-  },
-  "devDependencies": {
-    "typescript": "~5.6.0",
-    "@types/react": "~18.3.0",
-    "jest": "^29.0.0",
-    "jest-expo": "~52.0.0"
+    "date-fns": "^4.0.0"
   }
 }
-```
-
-### Platform Requirements
-
-- **iOS:** 15.1+ (Expo SDK 52 default)
-- **Android:** API 28 / Android 9.0+ (override Expo's default API 23 minimum). Set in `app.json`:
-
-```json
-{
-  "expo": {
-    "android": {
-      "minSdkVersion": 28
-    }
-  }
-}
-```
-
-Rationale: API 28+ provides a modern WebView with reliable SSE support, dark mode APIs, and biometric authentication. Drops ~5% of Android devices.
-
-### Project Structure
-
-```
-anyclaw-mobile/
-├── app.json                          # Expo config
-├── package.json
-├── tsconfig.json
-├── app/                              # expo-router file-based routing
-│   ├── _layout.tsx                   # Root layout (auth gate + providers)
-│   ├── (auth)/                       # Unauthenticated screens
-│   │   ├── _layout.tsx               # Stack navigator for auth flow
-│   │   ├── login.tsx                 # Login / signup (OAuth: Google, Apple, GitHub)
-│   │   └── server-setup.tsx          # Server discovery + connection
-│   ├── (main)/                       # Authenticated screens
-│   │   ├── _layout.tsx               # Tab navigator
-│   │   ├── index.tsx                 # Home tab (WebView)
-│   │   ├── task.tsx                  # Task dispatch tab
-│   │   ├── versions.tsx              # Version history tab
-│   │   └── settings.tsx              # Settings tab
-│   └── (main)/task/
-│       └── [id].tsx                  # Task detail (deep link from notification)
-├── components/
-│   ├── WebViewShell.tsx              # WebView wrapper with bridge
-│   ├── TaskCard.tsx                  # Task state machine UI
-│   ├── TaskInput.tsx                 # Text input for new task
-│   ├── ClarifyingQuestion.tsx        # Agent question + answer input
-│   ├── ActivityLog.tsx               # Scrolling agent activity feed
-│   ├── VersionRow.tsx                # Single version in history list
-│   ├── RollbackConfirm.tsx           # Confirmation bottom sheet
-│   ├── ConnectionStatus.tsx          # Header badge: connected/reconnecting/offline
-│   └── EmptyState.tsx                # Placeholder for no-content screens
-├── lib/
-│   ├── api.ts                        # HTTP/REST client for server communication
-│   ├── bridge.ts                     # WebView JS bridge helpers
-│   ├── auth.ts                       # Auth token management (OAuth: Google/Apple/GitHub)
-│   ├── crypto.ts                     # NaCl key generation, key exchange, encrypt/decrypt
-│   ├── pocketbase.ts                # PocketBase client init + SSE subscription helpers
-│   └── notifications.ts             # Push notification registration + handling
-├── stores/
-│   ├── connection.ts                 # Server connection state (zustand)
-│   ├── task.ts                       # Active task state machine (zustand)
-│   └── versions.ts                   # Cached version list (zustand)
-├── types/
-│   ├── task.ts                       # TaskStatus, TaskHandle, ActivityEntry
-│   ├── version.ts                    # VersionInfo, RollbackResult
-│   └── server.ts                     # ServerInfo, ConnectionCredentials
-└── assets/
-    └── images/
 ```
 
 ---
 
-## 2. Screen / Navigation Structure
+## 3. Platform Requirements
 
-### Navigation Hierarchy
+- **iOS 15.1+** (Expo SDK 52 default). WKWebView with modern JS engine.
+- **Android API 28+** (Android 9.0+). Drops ~5% of devices. Required for reliable Chromium WebView, dark-mode APIs, and biometric auth.
+
+```json
+// app.json
+{
+  "expo": {
+    "name": "AnyClaw",
+    "scheme": "anyclaw",
+    "ios": { "bundleIdentifier": "com.anyclaw.app", "deploymentTarget": "15.1" },
+    "android": { "package": "com.anyclaw.app", "minSdkVersion": 28 },
+    "plugins": ["expo-router", "expo-secure-store"]
+  }
+}
+```
+
+---
+
+## 4. Project Structure
+
+```
+anyclaw-mobile/
+├── app.json
+├── package.json
+├── tsconfig.json
+├── app/                              # expo-router file-based routes
+│   ├── _layout.tsx                   # Root: providers + auth gate
+│   ├── (auth)/
+│   │   ├── _layout.tsx               # Stack
+│   │   ├── login.tsx                 # OAuth (Google / Apple / GitHub)
+│   │   ├── server-list.tsx           # Pick an online server
+│   │   └── pair.tsx                  # BIP39 verification code display
+│   └── (main)/
+│       ├── _layout.tsx               # Tab navigator
+│       ├── index.tsx                 # Home  — WebView
+│       ├── request.tsx               # Request — task dispatch
+│       ├── versions.tsx              # Versions — history + rollback
+│       ├── settings.tsx              # Settings
+│       └── task/[id].tsx             # Deep-link target for push notifications
+├── components/
+│   ├── WebViewShell.tsx
+│   ├── TaskCard.tsx
+│   ├── TaskInput.tsx
+│   ├── ClarifyingQuestion.tsx
+│   ├── ActivityLog.tsx
+│   ├── VersionRow.tsx
+│   ├── RollbackConfirm.tsx           # Bottom sheet
+│   ├── ConnectionStatus.tsx          # Header badge
+│   └── Bip39VerificationCard.tsx
+├── lib/
+│   ├── api.ts                        # Encrypted REST client for /api/*
+│   ├── bridge.ts                     # WebView <-> native JS bridge helpers
+│   ├── auth.ts                       # OAuth + broker JWT management
+│   ├── crypto.ts                     # libsodium init, pairing, box encrypt/decrypt
+│   ├── pocketbase.ts                 # PocketBase init + SSE subscribe helpers
+│   ├── broker.ts                     # Broker API (auth, servers, connect, key-exchange)
+│   └── notifications.ts              # Expo Push registration + deep-link handler
+├── stores/
+│   ├── connection.ts
+│   ├── task.ts
+│   ├── versions.ts
+│   └── settings.ts
+└── types/
+    ├── task.ts
+    ├── version.ts
+    └── server.ts
+```
+
+---
+
+## 5. Navigation Structure
+
+### Hierarchy
 
 ```
 Root Layout (_layout.tsx)
-├── Auth Gate: checks expo-secure-store for valid token
+├── Auth gate (reads expo-secure-store on launch)
 │
-├── (auth) — Stack Navigator (unauthenticated)
-│   ├── login          — Email/password or OAuth login via broker
-│   └── server-setup   — Server discovery, tunnel test, save credentials
+├── (auth) — Stack
+│   ├── login         — OAuth buttons
+│   ├── server-list   — Pick server from broker registry
+│   └── pair          — Show BIP39 verification code, confirm
 │
-└── (main) — Tab Navigator (authenticated + connected)
-    ├── Home tab       — Full-screen WebView (agent-built UI)
-    ├── Request tab    — Task dispatch (full-screen modal/bottom sheet for input/clarify/working/done/failed)
-    ├── Versions tab   — Version history list with rollback
-    └── Settings tab   — Server status, adapter config, logs, account
+└── (main) — Tabs
+    ├── Home      — WebView (full-bleed, no header)
+    ├── Request   — Task dispatch (state machine card)
+    ├── Versions  — History list + rollback
+    └── Settings  — Account, keys, server, re-pair, debug
 ```
 
-### Tab Bar Design
+The Request tab shows a `!` badge whenever `activeTask.state === "clarifying"`.
 
-The tab bar uses four icons and sits at the bottom of the screen. The Home tab is the default. A small badge on the Task tab appears when the agent has a pending clarifying question.
-
-```
-  [Home]    [Request]    [Versions]    [Settings]
-    o        o (!)           o             o
-```
-
-- **Home** -- Globe or app icon. The WebView fills the entire safe area above the tab bar. No header.
-- **Request** -- Sparkle or wand icon. Opens a full-screen modal/bottom sheet for task dispatch. Header: "New Request" or the current task's short title. Badge appears when agent has a pending clarifying question.
-- **Versions** -- Clock/history icon. Scrollable list. Header: "Version History".
-- **Settings** -- Gear icon. Grouped settings list. Header: "Settings".
-
-### Root Layout Implementation
+### Root layout (auth gate)
 
 ```tsx
 // app/_layout.tsx
 import { Slot, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore } from "@/stores/connection";
 
 export default function RootLayout() {
-  const { isAuthenticated, isConnected } = useConnectionStore();
+  const { isAuthenticated, isConnected, restoreSession } = useConnectionStore();
   const segments = useSegments();
   const router = useRouter();
 
-  useEffect(() => {
-    const inAuthGroup = segments[0] === "(auth)";
+  useEffect(() => { restoreSession(); }, []);
 
-    if (!isAuthenticated && !inAuthGroup) {
-      router.replace("/(auth)/login");
-    } else if (isAuthenticated && !isConnected && !inAuthGroup) {
-      router.replace("/(auth)/server-setup");
-    } else if (isAuthenticated && isConnected && inAuthGroup) {
-      router.replace("/(main)");
-    }
+  useEffect(() => {
+    const inAuth = segments[0] === "(auth)";
+    if (!isAuthenticated && !inAuth) router.replace("/(auth)/login");
+    else if (isAuthenticated && !isConnected && !inAuth) router.replace("/(auth)/server-list");
+    else if (isAuthenticated && isConnected && inAuth) router.replace("/(main)");
   }, [isAuthenticated, isConnected, segments]);
 
   return <Slot />;
 }
 ```
 
-### Main Tab Layout
+### Main tab layout
 
 ```tsx
 // app/(main)/_layout.tsx
 import { Tabs } from "expo-router";
-import { useTaskStore } from "../../stores/task";
-import { ConnectionStatus } from "../../components/ConnectionStatus";
+import { useTaskStore } from "@/stores/task";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 export default function MainLayout() {
-  const hasPendingQuestion = useTaskStore(
-    (s) => s.activeTask?.state === "clarifying"
-  );
-
+  const pending = useTaskStore(s => s.activeTask?.state === "clarifying");
   return (
-    <Tabs
-      screenOptions={{
-        headerRight: () => <ConnectionStatus />,
-        tabBarActiveTintColor: "#7C3AED",
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Home",
-          headerShown: false, // WebView is full-bleed
-          tabBarIcon: ({ color }) => <GlobeIcon color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="task"
-        options={{
-          title: "Request",
-          tabBarBadge: hasPendingQuestion ? "!" : undefined,
-          tabBarIcon: ({ color }) => <WandIcon color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="versions"
-        options={{
-          title: "Versions",
-          tabBarIcon: ({ color }) => <HistoryIcon color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-          tabBarIcon: ({ color }) => <GearIcon color={color} />,
-        }}
-      />
+    <Tabs screenOptions={{ headerRight: () => <ConnectionStatus />, tabBarActiveTintColor: "#7C3AED" }}>
+      <Tabs.Screen name="index"    options={{ title: "Home",     headerShown: false }} />
+      <Tabs.Screen name="request"  options={{ title: "Request",  tabBarBadge: pending ? "!" : undefined }} />
+      <Tabs.Screen name="versions" options={{ title: "Versions" }} />
+      <Tabs.Screen name="settings" options={{ title: "Settings" }} />
     </Tabs>
   );
 }
@@ -240,754 +212,494 @@ export default function MainLayout() {
 
 ---
 
-## 3. WebView Integration
+## 6. WebView Integration
 
-### Loading the Agent-Built UI
+### URL routing and auth
 
-The WebView loads the production frontend from the user's server through the single tunnel endpoint, under the `/app/*` path. The URL does **not** include the auth token -- tokens are injected via the JS bridge after page load to avoid exposing them in URLs, server logs, or referrer headers.
-
-```
-https://<tunnel-host>/app/
-```
-
-In Phase 1 (broker relay), the tunnel host is a subdomain on the broker (e.g., `abc123.relay.anyclawapp.com`). The host's tunnel manager multiplexes `/pb/*`, `/api/*`, and `/app/*` to the corresponding supervised processes (PocketBase, dispatch/MCP server, prod static server). In Phase 2 (WebRTC), the WebView connects to a local HTTP server that proxies over the data channel -- but this is transparent to the WebView component, and the same path-based routing applies on the host side.
-
-**Auth flow:** The native shell loads the page without a token. The page's JS waits for the bridge to inject a `session-token` message. Once received, the frontend uses the token for all API calls. This is the most secure option -- the token never appears in URLs, logs, or browser history.
-
-### WebViewShell Component
+The WebView loads `${serverUrl}/app/` — never with the token in the URL. A bridge-init script fires `bridge-ready`; the native shell responds with `session-token`; the frontend then uses that token for its own PocketBase calls.
 
 ```tsx
 // components/WebViewShell.tsx
 import { useRef, useCallback, useState } from "react";
-import { View, ActivityIndicator, StyleSheet, Text, Pressable } from "react-native";
+import { View, StyleSheet, ActivityIndicator } from "react-native";
 import { WebView, WebViewMessageEvent } from "react-native-webview";
-import { useConnectionStore } from "../stores/connection";
-import { BridgeMessage, parseBridgeMessage, sendBridgeMessage } from "../lib/bridge";
+import { useConnectionStore } from "@/stores/connection";
+import { useVersionStore } from "@/stores/versions";
+import { parseBridgeMessage, sendBridgeMessage } from "@/lib/bridge";
+import { ErrorScreen } from "./ErrorScreen";
+
+const BRIDGE_INIT = `
+  window.AnyClaw = {
+    postMessage: (m) => window.ReactNativeWebView.postMessage(JSON.stringify(m)),
+    onMessage: null,
+  };
+  document.addEventListener('message', (e) => {
+    try { const m = JSON.parse(e.data); window.AnyClaw.onMessage && window.AnyClaw.onMessage(m); } catch {}
+  });
+  window.AnyClaw.postMessage({ type: 'bridge-ready' });
+  true;
+`;
 
 export function WebViewShell() {
-  const webViewRef = useRef<WebView>(null);
-  const { serverUrl, sessionToken } = useConnectionStore();
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Auth token is NOT in the URL -- injected via JS bridge after page load
-  const uri = `${serverUrl}/app/`;
+  const ref = useRef<WebView>(null);
+  const { serverUrl, sessionToken, connectionState } = useConnectionStore();
+  const [err, setErr] = useState<{ kind: "unreachable" | "app-broken" | "auth"; msg: string } | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const onMessage = useCallback((event: WebViewMessageEvent) => {
     const msg = parseBridgeMessage(event.nativeEvent.data);
     if (!msg) return;
-
     switch (msg.type) {
       case "bridge-ready":
-        // Inject auth token via JS bridge (never in URL)
-        sendBridgeMessage(webViewRef, {
-          type: "session-token",
-          token: sessionToken!,
-        });
+        sendBridgeMessage(ref, { type: "session-token", token: sessionToken! });
         break;
-      case "deploy-complete":
-        // Agent deployed a new version -- reload the WebView
-        webViewRef.current?.reload();
-        break;
-      case "navigate-to-task":
-        // Agent-built UI wants to open the task tab
-        // Handled via expo-router navigation
-        break;
-      case "health-check":
-        sendBridgeMessage(webViewRef, { type: "health-check-ack" });
+      case "navigate-to-versions":
+        // expo-router handles navigation; emit an event or use router imperatively
         break;
     }
   }, [sessionToken]);
 
-  if (loadError) {
-    return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorTitle}>Cannot reach server</Text>
-        <Text style={styles.errorBody}>{loadError}</Text>
-        <Pressable
-          style={styles.retryButton}
-          onPress={() => {
-            setLoadError(null);
-            setIsLoading(true);
-            webViewRef.current?.reload();
-          }}
-        >
-          <Text style={styles.retryText}>Retry</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  if (err) return <ErrorScreen kind={err.kind} message={err.msg} onRetry={() => { setErr(null); ref.current?.reload(); }} />;
 
   return (
-    <View style={styles.container}>
-      {isLoading && (
-        <ActivityIndicator style={styles.loader} size="large" />
-      )}
+    <View style={{ flex: 1 }}>
+      {loading && <ActivityIndicator style={StyleSheet.absoluteFill} size="large" />}
       <WebView
-        ref={webViewRef}
-        source={{ uri }}
-        style={styles.webview}
+        ref={ref}
+        source={{ uri: `${serverUrl}/app/` }}
+        originWhitelist={[serverUrl!]}
+        javaScriptEnabled
+        domStorageEnabled
         onMessage={onMessage}
-        onLoadEnd={() => setIsLoading(false)}
-        onError={(syntheticEvent) => {
-          const { nativeEvent } = syntheticEvent;
-          setLoadError(nativeEvent.description || "Connection failed");
+        onLoadEnd={() => setLoading(false)}
+        injectedJavaScriptBeforeContentLoaded={BRIDGE_INIT}
+        onError={(e) => setErr({ kind: "unreachable", msg: e.nativeEvent.description })}
+        onHttpError={(e) => {
+          const s = e.nativeEvent.statusCode;
+          if (s === 401) setErr({ kind: "auth", msg: "Session expired" });
+          else if (s >= 500) setErr({ kind: "app-broken", msg: `Server error ${s}` });
         }}
-        onHttpError={(syntheticEvent) => {
-          const { nativeEvent } = syntheticEvent;
-          if (nativeEvent.statusCode >= 500) {
-            setLoadError(`Server error (${nativeEvent.statusCode})`);
-          }
-        }}
-        // Security: only allow navigation to the user's own server
-        originWhitelist={[serverUrl]}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        startInLoadingState={false}
-        // Inject bridge initialization into the page
-        injectedJavaScriptBeforeContentLoaded={BRIDGE_INIT_SCRIPT}
+        onRenderProcessGone={() => ref.current?.reload()}
+        onContentProcessDidTerminate={() => ref.current?.reload()}
       />
     </View>
   );
 }
-
-const BRIDGE_INIT_SCRIPT = `
-  window.AnyClaw = {
-    postMessage: (msg) => window.ReactNativeWebView.postMessage(JSON.stringify(msg)),
-    onMessage: null, // set by the agent-built frontend
-  };
-
-  // Listen for messages from the native shell
-  document.addEventListener('message', (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      if (window.AnyClaw.onMessage) {
-        window.AnyClaw.onMessage(msg);
-      }
-    } catch (e) {}
-  });
-
-  // Notify native shell that the bridge is ready
-  window.AnyClaw.postMessage({ type: 'bridge-ready' });
-  true;
-`;
 ```
 
-### JS Bridge Protocol
-
-Messages between the native shell and the WebView are JSON objects with a `type` discriminator:
+### Bridge protocol
 
 ```typescript
 // lib/bridge.ts
-
-/** Messages from WebView -> Native */
-type WebViewToNative =
+export type WebViewToNative =
   | { type: "bridge-ready" }
-  | { type: "navigate-to-task" }
+  | { type: "navigate-to-request" }
   | { type: "navigate-to-versions" }
   | { type: "health-check" };
 
-/** Messages from Native -> WebView */
-type NativeToWebView =
-  | { type: "reload" }                        // Trigger a page refresh
-  | { type: "health-check-ack" }
-  | { type: "session-token"; token: string }   // Refresh the auth token
-  | { type: "theme-changed"; theme: "light" | "dark" };
+export type NativeToWebView =
+  | { type: "session-token"; token: string }
+  | { type: "reload" }
+  | { type: "theme-changed"; theme: "light" | "dark" }
+  | { type: "health-check-ack" };
 
 export type BridgeMessage = WebViewToNative | NativeToWebView;
 
-export function parseBridgeMessage(data: string): BridgeMessage | null {
-  try {
-    const parsed = JSON.parse(data);
-    if (parsed && typeof parsed.type === "string") return parsed;
-  } catch {}
-  return null;
+export function parseBridgeMessage(raw: string): BridgeMessage | null {
+  try { const p = JSON.parse(raw); return typeof p?.type === "string" ? p : null; } catch { return null; }
 }
-
-export function sendBridgeMessage(
-  webViewRef: React.RefObject<WebView>,
-  msg: NativeToWebView
-) {
-  webViewRef.current?.injectJavaScript(
-    `document.dispatchEvent(new MessageEvent('message', { data: '${JSON.stringify(msg)}' })); true;`
+export function sendBridgeMessage(ref: React.RefObject<WebView>, msg: NativeToWebView) {
+  const payload = JSON.stringify(msg).replace(/'/g, "\\'");
+  ref.current?.injectJavaScript(
+    `document.dispatchEvent(new MessageEvent('message', { data: '${payload}' })); true;`
   );
 }
 ```
 
-### Reload on Deploy
+### Reload-on-deploy
 
-When the agent completes a deployment, the server broadcasts a PocketBase realtime SSE event on the `_deployments` collection. The mobile app subscribes to this via a persistent SSE connection (managed in the connection store, not the WebView). On receiving a deploy event, the native shell sends a `reload` message to the WebView:
+The connection store subscribes to `_deployments` via PocketBase Realtime SSE. On a create event, it both reloads the WebView and refreshes the version list:
 
 ```typescript
-// Inside connection store initialization
-pb.collection("_deployments").subscribe("*", (event) => {
-  if (event.action === "create") {
-    // New deployment -- tell WebView to reload
+pb.collection("_deployments").subscribe("*", (e) => {
+  if (e.action === "create") {
     webViewRef.current?.reload();
-    // Also refresh version list
     useVersionStore.getState().fetchVersions();
   }
 });
 ```
 
-### Error Handling
+### Error handling matrix
 
 | Scenario | Detection | Behavior |
 |----------|-----------|----------|
-| Server unreachable | WebView `onError` fires | Show native error screen with "Retry" button and connection status |
-| `/app/*` returns 5xx (logic service or prod static server crashed) | WebView `onHttpError` with status >= 500 | Show native "App is broken" screen with a prominent "Open Version History" button that routes to the Versions tab. The dispatch/MCP server on `/api/*` is a separately supervised process that `restart=always`, so version history + rollback remain available even while the agent-built app is down. |
-| `/app/*` returns 401 | WebView `onHttpError` with status 401 | Attempt token refresh; if that fails, redirect to login |
-| WebView JS crash | WebView `onRenderProcessGone` (Android) / `onContentProcessDidTerminate` (iOS) | Auto-reload the WebView, show brief toast |
-| Slow load (>10s) | Timer started on load begin | Show "Still loading..." overlay with option to retry |
+| Tunnel down / server unreachable | `onError` or network failure in `lib/api` | Red header badge, full-screen reconnect card, exponential backoff |
+| Logic service crashed (5xx on `/app/*` API calls) | `onHttpError >= 500` | "Your app has a problem" screen with a prominent "Open Version History" button routing to Versions tab |
+| Prod static server crashed | WebView load failure | Same "app broken" screen; Versions tab still functional via `/api/*` |
+| Session token expired (401 on `/app/*`) | `onHttpError 401` | Silent refresh against broker; on failure, log out |
+| WebView content process died | `onRenderProcessGone` / `onContentProcessDidTerminate` | Auto-reload, toast |
+| Dispatch server down | `/api/health` fails | Header badge turns red; submit button disabled; Versions tab becomes read-only |
+| PocketBase SSE dropped | SDK `onError` | SDK auto-reconnects; on reconnect, refetch `_tasks` for the active task |
 
-**Emergency rollback path:** Because the dispatch/MCP server is supervised with `restart=always` and lives outside the agent's writable path, `POST /api/rollback` and `GET /api/versions` are available whenever the host is reachable — even if the logic service is crash-looping from bad agent code or the prod static server returned a broken bundle. The native shell never depends on `/app/*` being healthy to render the Versions tab; it talks directly to `/api/*` and `/pb/*`.
+**Emergency rollback is always available.** Because the dispatch/MCP server is a separately supervised process with `restart=always` whose source lives outside the agent's writable path, `POST /api/rollback` and `GET /api/versions` work whenever the tunnel is up — even when `/app/*` is completely broken. The Versions tab never depends on `/app/*` being healthy.
 
 ---
 
-## 4. Task Dispatch UI
+## 7. Task Dispatch UI
 
-### State Machine
-
-The active task follows a strict state machine. Only one task is active at a time.
+### State machine
 
 ```
-                 +-----------+
-                 |   idle    |  (no active task)
-                 +-----+-----+
-                       |
-                  user submits
-                       |
-                 +-----v-----+
-                 |   input    |  (request sent to server)
-                 +-----+-----+
-                       |
-              server accepts task
-                       |
-            +----------v-----------+
-            |                      |
-      +-----v-----+        +------v------+
-      | clarifying |        |   working   |
-      +-----+-----+        +------+------+
-            |                      |
-       user answers           agent finishes
-            |                      |
-            +-------> working      |
-                                   |
-                            +------v------+
-                            |  deploying  |
-                            +------+------+
-                                   |
-                         +---------+---------+
-                         |                   |
-                   +-----v-----+      +------v-----+
-                   |   done    |      |   failed   |
-                   +-----------+      +------+-----+
-                                             |
-                                        user taps retry
-                                             |
-                                       back to input
+                 +-------+
+                 | idle  |
+                 +---+---+
+                     | user submits
+                     v
+                 +-------+    submit fails    +--------+
+                 | input |------------------->| failed |
+                 +---+---+                    +----+---+
+           accepted  |                             ^
+                     v                             |
+        +---------+  |  +---------+ error          |
+        |clarify  |<-+->| working |----------------+
+        +----+----+     +----+----+                |
+             | answer        | agent done          |
+             v               v                     |
+          working       +---------+    fail        |
+                        |deploying|----------------+
+                        +----+----+
+                             | success
+                             v
+                         +------+
+                         | done |--> user dismiss --> idle
+                         +------+
 ```
 
-### Zustand Task Store
+Only one active task at a time. Transitions are driven by PocketBase SSE updates on `_tasks`, with optimistic local updates where appropriate.
+
+### Zustand task store
 
 ```typescript
 // stores/task.ts
 import { create } from "zustand";
+import { apiClient } from "@/lib/api";
+import { subscribeToTask, getPocketBase } from "@/lib/pocketbase";
 
-type TaskState =
-  | "idle"
-  | "input"
-  | "clarifying"
-  | "working"
-  | "deploying"
-  | "done"
-  | "failed";
+export type TaskState = "idle" | "input" | "clarifying" | "working" | "deploying" | "done" | "failed";
 
-interface ActiveTask {
+export interface ActivityEntry { timestamp: string; message: string; level: "info" | "warn" | "error"; }
+
+export interface ActiveTask {
   id: string;
   request: string;
   state: TaskState;
-  question?: string;           // present when state === "clarifying"
-  qaHistory: Array<{ question: string; answer: string }>;
-  progressSummary?: string;    // present when state === "working" | "deploying"
-  activityLog: Array<{ timestamp: string; message: string; type: string }>;
-  versionDescription?: string; // present when state === "done"
-  error?: string;              // present when state === "failed"
+  question?: string;
+  qaHistory: { question: string; answer: string }[];
+  progressSummary?: string;
+  activityLog: ActivityEntry[];
+  versionDescription?: string;
+  error?: string;
+  createdAt: string;
+}
+
+interface ServerTaskRecord {
+  id: string;
+  request: string;
+  state: TaskState;
+  question?: string;
+  qaHistory?: { question: string; answer: string }[];
+  progressSummary?: string;
+  activityLog?: ActivityEntry[];
+  versionDescription?: string;
+  error?: string;
+  created: string;
 }
 
 interface TaskStore {
   activeTask: ActiveTask | null;
   pastTasks: ActiveTask[];
+  _unsubscribe: (() => void) | null;
 
   submitTask: (request: string) => Promise<void>;
   answerQuestion: (answer: string) => Promise<void>;
   cancelTask: () => Promise<void>;
-  retryTask: () => void;
+  retryTask: () => Promise<void>;
   dismissTask: () => void;
-
-  // Called by the polling/subscription loop
-  _updateFromServer: (status: ServerTaskStatus) => void;
+  resumeActiveTask: () => Promise<void>;
+  _applyServerRecord: (rec: ServerTaskRecord) => void;
 }
 
 export const useTaskStore = create<TaskStore>((set, get) => ({
   activeTask: null,
   pastTasks: [],
+  _unsubscribe: null,
 
   submitTask: async (request) => {
-    const api = getApi();
-    const handle = await api.dispatchTask(request);
+    const idempotencyKey = crypto.randomUUID();
     set({
       activeTask: {
-        id: handle.taskId,
-        request,
-        state: "input",
-        qaHistory: [],
-        activityLog: [],
+        id: idempotencyKey, request, state: "input",
+        qaHistory: [], activityLog: [], createdAt: new Date().toISOString(),
       },
     });
-    // Start polling for status updates
-    get()._startPolling(handle.taskId);
+    try {
+      const { taskId } = await apiClient.post<{ taskId: string }>("/api/tasks", { request, idempotencyKey });
+      const unsub = subscribeToTask(taskId, (rec) => get()._applyServerRecord(rec));
+      set((s) => ({
+        _unsubscribe: unsub,
+        activeTask: s.activeTask ? { ...s.activeTask, id: taskId, state: "working" } : null,
+      }));
+    } catch (e: any) {
+      set((s) => ({
+        activeTask: s.activeTask ? { ...s.activeTask, state: "failed", error: e.message } : null,
+      }));
+    }
   },
 
   answerQuestion: async (answer) => {
-    const task = get().activeTask;
-    if (!task || task.state !== "clarifying") return;
-
-    const api = getApi();
-    await api.answerQuestion(task.id, answer);
-    set((prev) => ({
-      activeTask: prev.activeTask
-        ? {
-            ...prev.activeTask,
-            qaHistory: [
-              ...prev.activeTask.qaHistory,
-              { question: prev.activeTask.question!, answer },
-            ],
-            question: undefined,
-            state: "working", // optimistic, will be corrected by next poll
-          }
-        : null,
+    const t = get().activeTask;
+    if (!t || t.state !== "clarifying" || !t.question) return;
+    set((s) => ({
+      activeTask: s.activeTask ? {
+        ...s.activeTask,
+        qaHistory: [...s.activeTask.qaHistory, { question: t.question!, answer }],
+        question: undefined,
+        state: "working",
+      } : null,
     }));
+    await apiClient.post(`/api/tasks/${t.id}/answer`, { answer });
   },
 
   cancelTask: async () => {
-    const task = get().activeTask;
-    if (!task) return;
-    const api = getApi();
-    await api.cancelTask(task.id);
-    set((prev) => ({
-      activeTask: null,
-      pastTasks: prev.activeTask
-        ? [{ ...prev.activeTask, state: "failed", error: "Cancelled" }, ...prev.pastTasks]
-        : prev.pastTasks,
-    }));
+    const t = get().activeTask;
+    if (!t) return;
+    await apiClient.post(`/api/tasks/${t.id}/cancel`, {});
+    get().dismissTask();
   },
 
-  retryTask: () => {
-    const task = get().activeTask;
-    if (!task || task.state !== "failed") return;
-    // Re-submit the same request
-    get().submitTask(task.request);
+  retryTask: async () => {
+    const t = get().activeTask;
+    if (!t || t.state !== "failed") return;
+    const request = t.request;
+    get().dismissTask();
+    await get().submitTask(request);
   },
 
   dismissTask: () => {
-    set((prev) => ({
+    get()._unsubscribe?.();
+    set((s) => ({
+      _unsubscribe: null,
       activeTask: null,
-      pastTasks: prev.activeTask
-        ? [prev.activeTask, ...prev.pastTasks]
-        : prev.pastTasks,
+      pastTasks: s.activeTask ? [s.activeTask, ...s.pastTasks].slice(0, 50) : s.pastTasks,
     }));
   },
 
-  _updateFromServer: (status) => {
-    set((prev) => {
-      if (!prev.activeTask) return prev;
-      return {
-        activeTask: {
-          ...prev.activeTask,
-          state: status.state,
-          question: status.question,
-          progressSummary: status.progressSummary,
-          versionDescription: status.versionDescription,
-          error: status.error,
-          activityLog: status.activityLog ?? prev.activeTask.activityLog,
-        },
-      };
+  // Runs on app launch — resume any in-flight task so clarification questions survive close/reopen.
+  resumeActiveTask: async () => {
+    const pb = getPocketBase();
+    const res = await pb.collection("_tasks").getList(1, 1, {
+      filter: 'state != "done" && state != "failed" && state != "cancelled"',
+      sort: "-created",
     });
+    if (res.items.length === 0) return;
+    const rec = res.items[0] as unknown as ServerTaskRecord;
+    get()._applyServerRecord(rec);
+    const unsub = subscribeToTask(rec.id, (r) => get()._applyServerRecord(r));
+    set({ _unsubscribe: unsub });
   },
+
+  _applyServerRecord: (rec) => set((s) => ({
+    activeTask: {
+      id: rec.id,
+      request: rec.request,
+      state: rec.state,
+      question: rec.question,
+      qaHistory: rec.qaHistory ?? s.activeTask?.qaHistory ?? [],
+      progressSummary: rec.progressSummary,
+      activityLog: rec.activityLog ?? s.activeTask?.activityLog ?? [],
+      versionDescription: rec.versionDescription,
+      error: rec.error,
+      createdAt: rec.created,
+    },
+  })),
 }));
 ```
 
-### Server Communication for Tasks
-
-Tasks are dispatched and monitored through the **dispatch/MCP server**'s REST API, reached via the `/api/*` path on the single tunnel. The mobile app does NOT communicate directly with the coding agent -- it goes through the dispatch server's adapter layer, which spawns the agent as a transient subprocess per task.
-
-**Supervised-process model (from mobile app's perspective):**
-- **Dispatch/MCP server** (`/api/*`) -- a supervised process with `restart=always`. Handles task dispatch, clarification answers, cancellation, version history, emergency rollback, and logic-service restart. Its source is outside the agent's writable path, so it remains available even when agent-authored code (the logic service) is broken. This is the "control plane" capability from the old design, now just a process rather than a container.
-- **PocketBase** (`/pb/*`) -- a supervised process. Stores task state, versions, clarification Q&A, and streams updates over Realtime SSE.
-- **Prod static server** (`/app/*`) -- a supervised process that serves the agent-built React bundle into the WebView.
-- **Logic service** -- agent-modifiable Node.js service; supervised with `restart=on-failure`. The mobile app never talks to it directly; the WebView frontend calls it for custom endpoints.
-- **Agent subprocess** -- spawned per task by the dispatch server with cgroup limits. Transient. Mobile app never contacts it directly.
-
-**Endpoints (served by the dispatch/MCP server under `/api/*`):**
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/tasks` | Submit a new task. Body: `{ request: string }`. Returns `{ taskId: string }`. |
-| POST | `/api/tasks/:id/answer` | Answer a clarifying question. Body: `{ answer: string }`. |
-| POST | `/api/tasks/:id/cancel` | Cancel a running task. |
-| GET | `/api/versions` | List deployment history. |
-| POST | `/api/rollback` | Emergency rollback — atomic code + DB snapshot restore. Always available. |
-| POST | `/api/restart-app` | Restart the logic service (agent code) after a crash loop. |
-| GET | `/api/health` | Health check for all supervised processes. |
-
-**Realtime communication: PocketBase SSE + REST**
-
-All realtime updates flow through **PocketBase Realtime SSE** (server-to-client push). Client-to-server actions use **REST POST**. This covers:
-
-- **Progress updates** -- SSE subscription on the `_tasks` collection. When the adapter updates the task record in PocketBase, the change streams to the mobile app in real time.
-- **Clarification questions** -- Agent writes a question to the task record in PocketBase. SSE pushes it to the mobile app. User answers via REST POST to the control plane.
-- **Task history** -- Fetched via PocketBase REST API. Past tasks persist in PocketBase and can be browsed offline if cached.
-
-**Task state persistence:** Task state lives in PocketBase (`/pb/*`) — this is the single source of truth. The dispatch/MCP server writes to PocketBase when it accepts a task, and both the dispatch server and the agent subprocess update the same `_tasks` records throughout the task lifecycle. There is no separate task store in the dispatch server. Because PocketBase is its own supervised process (not coupled to the logic service), it stays up across logic-service crashes, so task state survives even when the agent-authored app is broken. If the user closes the app during a clarification question, the question persists in PocketBase; when the user reopens the app, it reconnects to PocketBase SSE on `/pb/*` and resumes where it left off.
-
-```typescript
-// lib/pocketbase.ts — task status subscription
-import PocketBase from "pocketbase";
-
-let pb: PocketBase;
-
-export function initPocketBase(serverUrl: string, authToken: string) {
-  pb = new PocketBase(`${serverUrl}/pb`);
-  pb.authStore.save(authToken, null);
-  return pb;
-}
-
-export function subscribeToTask(
-  taskId: string,
-  onUpdate: (status: TaskStatus) => void
-) {
-  pb.collection("_tasks").subscribe(taskId, (event) => {
-    onUpdate(event.record as unknown as TaskStatus);
-  });
-
-  // Return unsubscribe function
-  return () => pb.collection("_tasks").unsubscribe(taskId);
-}
-
-export function subscribeToDeployments(onDeploy: (event: any) => void) {
-  pb.collection("_deployments").subscribe("*", onDeploy);
-  return () => pb.collection("_deployments").unsubscribe("*");
-}
-```
-
-**Reconnection on SSE drop:** If the SSE connection drops, the PocketBase JS SDK automatically reconnects. On reconnect, the app fetches the latest task state via REST GET to catch any missed updates, then resumes SSE streaming.
-
-**Resume after app close/reopen:**
-
-```typescript
-// In task store initialization (called on app launch)
-async function resumeActiveTask() {
-  const pb = getPocketBaseClient();
-  // Query for any task in a non-terminal state
-  const activeTasks = await pb.collection("_tasks").getList(1, 1, {
-    filter: 'state != "done" && state != "failed" && state != "cancelled"',
-    sort: "-created",
-  });
-  if (activeTasks.items.length > 0) {
-    const task = activeTasks.items[0];
-    // Restore task into the zustand store
-    useTaskStore.getState()._updateFromServer(task);
-    // Re-subscribe to SSE for this task
-    subscribeToTask(task.id, (status) => {
-      useTaskStore.getState()._updateFromServer(status);
-    });
-  }
-}
-```
-
-### TaskCard Component
+### TaskCard component
 
 ```tsx
 // components/TaskCard.tsx
-import { View, Text, TextInput, Pressable, ScrollView } from "react-native";
-import { useTaskStore } from "../stores/task";
+import { View, Text, Pressable } from "react-native";
+import { useTaskStore } from "@/stores/task";
+import { TaskInput } from "./TaskInput";
 import { ClarifyingQuestion } from "./ClarifyingQuestion";
 import { ActivityLog } from "./ActivityLog";
 
 export function TaskCard() {
-  const task = useTaskStore((s) => s.activeTask);
+  const { activeTask, cancelTask, retryTask, dismissTask } = useTaskStore();
+  if (!activeTask) return <TaskInput />;
 
-  if (!task) return <TaskInput />;
-
-  switch (task.state) {
+  const t = activeTask;
+  switch (t.state) {
     case "input":
-      return (
-        <View style={styles.card}>
-          <Text style={styles.request}>{task.request}</Text>
-          <Text style={styles.status}>Sending to agent...</Text>
-          <LoadingDots />
-        </View>
-      );
-
+      return <Card><Text>{t.request}</Text><Text>Sending...</Text></Card>;
     case "clarifying":
       return (
-        <View style={styles.card}>
-          <Text style={styles.request}>{task.request}</Text>
-          {task.qaHistory.map((qa, i) => (
-            <View key={i} style={styles.qaRound}>
-              <Text style={styles.agentQuestion}>{qa.question}</Text>
-              <Text style={styles.userAnswer}>{qa.answer}</Text>
+        <Card>
+          <Text style={styles.request}>{t.request}</Text>
+          {t.qaHistory.map((qa, i) => (
+            <View key={i}>
+              <Text style={styles.agentQ}>{qa.question}</Text>
+              <Text style={styles.userA}>{qa.answer}</Text>
             </View>
           ))}
-          <ClarifyingQuestion question={task.question!} />
-        </View>
+          <ClarifyingQuestion question={t.question!} />
+        </Card>
       );
-
     case "working":
     case "deploying":
       return (
-        <View style={styles.card}>
-          <Text style={styles.request}>{task.request}</Text>
-          <Text style={styles.status}>
-            {task.state === "deploying" ? "Deploying..." : "Working..."}
-          </Text>
-          {task.progressSummary && (
-            <Text style={styles.progress}>{task.progressSummary}</Text>
-          )}
-          <ActivityLog entries={task.activityLog} />
-          <Pressable style={styles.cancelButton} onPress={cancelTask}>
-            <Text>Cancel</Text>
-          </Pressable>
-        </View>
+        <Card>
+          <Text style={styles.request}>{t.request}</Text>
+          <Text>{t.state === "deploying" ? "Deploying..." : "Working..."}</Text>
+          {t.progressSummary && <Text>{t.progressSummary}</Text>}
+          <ActivityLog entries={t.activityLog} />
+          <Pressable onPress={cancelTask}><Text>Cancel</Text></Pressable>
+        </Card>
       );
-
     case "done":
       return (
-        <View style={styles.cardSuccess}>
-          <Text style={styles.checkmark}>Done</Text>
-          <Text style={styles.versionDesc}>{task.versionDescription}</Text>
-          <Pressable style={styles.dismissButton} onPress={dismissTask}>
-            <Text>Dismiss</Text>
-          </Pressable>
-        </View>
+        <Card style={styles.success}>
+          <Text>Done</Text>
+          <Text>{t.versionDescription}</Text>
+          <Pressable onPress={dismissTask}><Text>Dismiss</Text></Pressable>
+        </Card>
       );
-
     case "failed":
       return (
-        <View style={styles.cardError}>
-          <Text style={styles.errorTitle}>Task Failed</Text>
-          <Text style={styles.errorBody}>{task.error}</Text>
-          <View style={styles.row}>
-            <Pressable style={styles.retryButton} onPress={retryTask}>
-              <Text>Retry</Text>
-            </Pressable>
-            <Pressable style={styles.dismissButton} onPress={dismissTask}>
-              <Text>Dismiss</Text>
-            </Pressable>
-          </View>
-        </View>
+        <Card style={styles.error}>
+          <Text>Task failed</Text>
+          <Text>{t.error}</Text>
+          <Pressable onPress={retryTask}><Text>Retry</Text></Pressable>
+          <Pressable onPress={dismissTask}><Text>Dismiss</Text></Pressable>
+        </Card>
       );
   }
 }
 ```
 
-### TaskInput Component
+### Clarification Q&A and resume-after-close
 
-```tsx
-// components/TaskInput.tsx
-import { useState } from "react";
-import { View, TextInput, Pressable, Text, Keyboard } from "react-native";
-import { useTaskStore } from "../stores/task";
-import * as Haptics from "expo-haptics";
+Clarification questions live in PocketBase `_agent_messages` (and are mirrored on the `_tasks` record). Because PocketBase is its own supervised process and task state is persisted server-side, the user can close the app in the middle of a Q&A round and reopen hours later — `resumeActiveTask()` runs on every app launch, finds any task not in a terminal state, restores it into the store, and re-subscribes to SSE. A push notification (see §12) ensures the user knows a question is pending even if the app is backgrounded.
 
-export function TaskInput() {
-  const [text, setText] = useState("");
-  const submitTask = useTaskStore((s) => s.submitTask);
+### Dispatch server endpoints
 
-  const handleSubmit = async () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    Keyboard.dismiss();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await submitTask(trimmed);
-    setText("");
-  };
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.label}>What would you like to build?</Text>
-      <TextInput
-        style={styles.input}
-        value={text}
-        onChangeText={setText}
-        placeholder="e.g. Add a mood tracker with daily check-ins"
-        multiline
-        maxLength={2000}
-        textAlignVertical="top"
-      />
-      <Pressable
-        style={[styles.submitButton, !text.trim() && styles.submitDisabled]}
-        onPress={handleSubmit}
-        disabled={!text.trim()}
-      >
-        <Text style={styles.submitText}>Submit</Text>
-      </Pressable>
-    </View>
-  );
-}
-```
+| Method | Path | Body | Purpose |
+|--------|------|------|---------|
+| POST | `/api/tasks` | `{ request, idempotencyKey }` | Submit task. Idempotent upsert keyed by client-generated UUID. |
+| POST | `/api/tasks/:id/answer` | `{ answer }` | Reply to a clarifying question |
+| POST | `/api/tasks/:id/cancel` | `{}` | Cancel a running task |
+| GET  | `/api/versions` | — | List deployment history |
+| POST | `/api/rollback` | `{ versionId }` | Atomic code + DB rollback (always available) |
+| POST | `/api/restart-app` | `{}` | Restart the logic service (crash-loop recovery) |
+| GET  | `/api/health` | — | Per-process health |
 
 ---
 
-## 5. Version History & Rollback
+## 8. Version History & Rollback
 
-### Screen Design
-
-The Versions tab is a flat list of deployments, most recent first. Each row shows:
+### Versions tab layout
 
 ```
-+-----------------------------------------------+
-|  v12  "Added mood tracker with charts"         |
-|  Apr 5, 2026 at 2:34 PM                       |
-|  3 files changed                               |
-+-----------------------------------------------+
++------------------------------------------------+
+|  Version History                  [Reconnect]  |
++------------------------------------------------+
+|  v12  "Added mood tracker with charts"  [now]  |
+|  Apr 5, 2026 - 2:34 PM - 3 files               |
++------------------------------------------------+
 |  v11  "Fixed navigation bug on habits page"    |
-|  Apr 5, 2026 at 11:12 AM                      |
-|  1 file changed                                |
-+-----------------------------------------------+
+|  Apr 5, 2026 - 11:12 AM - 1 file               |
++------------------------------------------------+
 |  v10  "Added daily habits checklist"           |
-|  Apr 4, 2026 at 4:58 PM                       |
-|  7 files changed                               |
-+-----------------------------------------------+
+|  Apr 4, 2026 - 4:58 PM - 7 files               |
++------------------------------------------------+
 ```
 
-Tapping a row expands it inline to show:
-- Full version description (agent-written, non-technical)
-- List of changed files (collapsed by default)
-- "Rollback to this version" button (only for non-current versions)
+Tapping a row expands it inline to show the full agent-written description and a "Rollback to this version" button (hidden for the current version).
 
-### Data Model
-
-Versions are stored in a PocketBase `_versions` collection:
+### Data model and fetch
 
 ```typescript
-interface VersionInfo {
+export interface VersionInfo {
   id: string;
   versionNumber: number;
-  description: string;        // Agent-written, user-friendly
+  description: string;      // agent-written, non-technical
   gitCommitHash: string;
-  hasDbSnapshot: boolean;     // Whether a DB snapshot exists for this version
+  hasDbSnapshot: boolean;   // distinct messaging in the rollback sheet
   filesChanged: number;
-  createdAt: string;          // ISO timestamp
+  createdAt: string;
   isCurrent: boolean;
 }
 ```
 
-### Fetching Versions
-
 ```typescript
 // stores/versions.ts
 import { create } from "zustand";
+import { apiClient } from "@/lib/api";
 
 interface VersionStore {
   versions: VersionInfo[];
   isLoading: boolean;
   error: string | null;
-
   fetchVersions: () => Promise<void>;
-  rollbackTo: (versionId: string) => Promise<RollbackResult>;
+  rollbackTo: (versionId: string) => Promise<void>;
 }
 
 export const useVersionStore = create<VersionStore>((set, get) => ({
-  versions: [],
-  isLoading: false,
-  error: null,
+  versions: [], isLoading: false, error: null,
 
   fetchVersions: async () => {
     set({ isLoading: true, error: null });
     try {
-      const pb = getPocketBaseClient();
-      const records = await pb.collection("_versions").getList(1, 50, {
-        sort: "-versionNumber",
-      });
-      set({
-        versions: records.items.map(mapToVersionInfo),
-        isLoading: false,
-      });
-    } catch (err) {
-      set({ error: "Failed to load versions", isLoading: false });
+      const versions = await apiClient.get<VersionInfo[]>("/api/versions");
+      set({ versions, isLoading: false });
+    } catch (e: any) {
+      set({ error: e.message, isLoading: false });
     }
   },
 
   rollbackTo: async (versionId) => {
-    const api = getApi();
-    const result = await api.post(`/api/rollback`, { versionId });
-    // After rollback, refresh the version list
+    await apiClient.post("/api/rollback", { versionId });
     await get().fetchVersions();
-    return result;
+    // The deploy event will fire an SSE message -> WebView auto-reloads.
   },
 }));
 ```
 
-### Rollback Flow
+### Rollback confirmation sheet
 
-Rollback is always user-initiated. The flow has a mandatory confirmation step:
+Rollback is always user-initiated. The confirmation bottom sheet uses different copy depending on whether a DB snapshot exists:
 
-1. User taps a version row to expand it.
-2. User taps "Rollback to this version".
-3. A bottom sheet appears with:
-   - Warning text: "This will revert your app to version N. Any changes made after this version will be undone."
-   - If the version has a DB snapshot: "Database will also be restored to this version's state."
-   - If the version does NOT have a DB snapshot: "Note: Only code will be reverted. Database changes since this version will remain."
-   - Two buttons: "Cancel" and "Confirm Rollback".
-4. On confirm, the app calls POST `/api/rollback` with `{ versionId }` on the dispatch/MCP server.
-5. The server performs the rollback (git checkout + optional DB restore).
-6. The server emits a deploy event on the `_deployments` collection.
-7. The WebView reloads. The version list refreshes to show the restored version as current.
-
-### RollbackConfirm Component
+- **With snapshot:** "Database will also be restored to this version's state."
+- **Without snapshot:** "Only code will be reverted. Database changes since this version will remain."
 
 ```tsx
 // components/RollbackConfirm.tsx
-import { View, Text, Pressable } from "react-native";
-import { BottomSheet } from "./BottomSheet";
-
-interface Props {
-  version: VersionInfo;
-  visible: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-  isLoading: boolean;
-}
-
-export function RollbackConfirm({ version, visible, onConfirm, onCancel, isLoading }: Props) {
+export function RollbackConfirm({ version, visible, onConfirm, onCancel, loading }: {
+  version: VersionInfo; visible: boolean; onConfirm: () => void; onCancel: () => void; loading: boolean;
+}) {
   return (
     <BottomSheet visible={visible} onDismiss={onCancel}>
       <Text style={styles.title}>Rollback to v{version.versionNumber}?</Text>
-      <Text style={styles.description}>"{version.description}"</Text>
-      <Text style={styles.warning}>
-        This will revert your app to version {version.versionNumber}. Any
-        changes made after this version will be undone.
-      </Text>
-      {version.hasDbSnapshot ? (
-        <Text style={styles.info}>
-          Database will also be restored to this version's state.
-        </Text>
-      ) : (
-        <Text style={styles.caution}>
-          Note: Only code will be reverted. Database changes since this version
-          will remain.
-        </Text>
-      )}
-      <View style={styles.actions}>
-        <Pressable style={styles.cancelBtn} onPress={onCancel} disabled={isLoading}>
-          <Text>Cancel</Text>
-        </Pressable>
-        <Pressable style={styles.confirmBtn} onPress={onConfirm} disabled={isLoading}>
-          <Text style={styles.confirmText}>
-            {isLoading ? "Rolling back..." : "Confirm Rollback"}
-          </Text>
+      <Text style={styles.quote}>"{version.description}"</Text>
+      <Text>Any changes made after this version will be undone.</Text>
+      {version.hasDbSnapshot
+        ? <Text>Database will also be restored to this version's state.</Text>
+        : <Text>Only code will be reverted. Database changes will remain.</Text>}
+      <View style={styles.row}>
+        <Pressable onPress={onCancel} disabled={loading}><Text>Cancel</Text></Pressable>
+        <Pressable onPress={onConfirm} disabled={loading}>
+          <Text>{loading ? "Rolling back..." : "Confirm Rollback"}</Text>
         </Pressable>
       </View>
     </BottomSheet>
@@ -997,312 +709,408 @@ export function RollbackConfirm({ version, visible, onConfirm, onCancel, isLoadi
 
 ---
 
-## 6. Connection Setup Flow
+## 9. Connection Setup Flow
 
-### Login Screen
+### Login (broker OAuth)
 
-The login screen authenticates the user against the AnyClaw connection broker at `broker.anyclawapp.com`. This is the user's AnyClaw account, not their server credentials.
-
-**OAuth providers:** Google, Apple, and GitHub. Apple is required by the App Store for apps that offer third-party sign-in. GitHub targets the developer early-adopter audience.
+Login authenticates against `https://broker.anyclawapp.com` — the user's AnyClaw account, not their server. OAuth providers: **Google, Apple, GitHub**. Apple is required by the App Store; GitHub targets developer early adopters.
 
 **Flow:**
-1. User opens app for the first time.
-2. Login screen shows three OAuth buttons: "Continue with Google", "Continue with Apple", "Continue with GitHub".
-3. Tapping a button opens the OAuth flow via `expo-auth-session` + `expo-web-browser`. The OAuth redirect URI points to the broker at `https://broker.anyclawapp.com/api/auth/callback/{provider}`.
-4. Broker validates the OAuth token, creates or looks up the user, and returns a JWT + refresh token.
-5. Both tokens are stored in `expo-secure-store` (encrypted keychain on iOS, encrypted SharedPreferences on Android).
+
+1. User taps "Continue with Google / Apple / GitHub".
+2. `expo-auth-session` opens the system browser to the broker's OAuth initiation endpoint, which redirects to the provider.
+3. Provider returns to the broker's callback URL. Broker validates the code, creates/looks up the user, and stores the provider's refresh token server-side.
+4. Broker redirects back to the app with a short-lived (15 min) JWT access token and a long-lived broker refresh token.
+5. App stores both in `expo-secure-store`. On Apple's first-login quirk (name/email only on first call), the broker is responsible for persistence — the mobile app does nothing special.
 
 ```typescript
-// lib/auth.ts
+// lib/broker.ts
+import * as AuthSession from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
 
-const TOKEN_KEY = "anyclaw_auth_token";
-const REFRESH_KEY = "anyclaw_refresh_token";
-const SERVER_CREDS_KEY = "anyclaw_server_creds";
+const BROKER = "https://broker.anyclawapp.com";
+const redirectUri = AuthSession.makeRedirectUri({ scheme: "anyclaw" });
 
-export async function storeAuthTokens(token: string, refresh: string) {
-  await SecureStore.setItemAsync(TOKEN_KEY, token);
-  await SecureStore.setItemAsync(REFRESH_KEY, refresh);
+export async function loginWithProvider(provider: "google" | "apple" | "github") {
+  const discovery = { authorizationEndpoint: `${BROKER}/auth/${provider}/start` };
+  const req = new AuthSession.AuthRequest({
+    clientId: "anyclaw-mobile", redirectUri, scopes: ["openid", "email"],
+  });
+  const result = await req.promptAsync(discovery);
+  if (result.type !== "success") throw new Error("OAuth cancelled");
+  // The broker returned its own JWTs in the redirect params.
+  const { access_token, refresh_token } = result.params;
+  await SecureStore.setItemAsync("broker_jwt", access_token);
+  await SecureStore.setItemAsync("broker_refresh", refresh_token);
 }
 
-export async function getAuthToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(TOKEN_KEY);
-}
-
-export async function clearAuth() {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
-  await SecureStore.deleteItemAsync(REFRESH_KEY);
-  await SecureStore.deleteItemAsync(SERVER_CREDS_KEY);
+export async function refreshBrokerJwt(): Promise<string> {
+  const refresh = await SecureStore.getItemAsync("broker_refresh");
+  if (!refresh) throw new Error("No refresh token");
+  const res = await fetch(`${BROKER}/auth/refresh`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ refresh_token: refresh }),
+  });
+  if (!res.ok) throw new Error("Refresh failed");
+  const { access_token } = await res.json();
+  await SecureStore.setItemAsync("broker_jwt", access_token);
+  return access_token;
 }
 ```
 
-### Server Discovery
-
-After login, the app queries the broker for the user's registered servers:
+### Server discovery
 
 ```
 GET https://broker.anyclawapp.com/api/servers
 Authorization: Bearer <jwt>
 
 Response:
-{
-  "servers": [
-    {
-      "id": "srv_abc123",
-      "name": "Home Server",
-      "lastSeen": "2026-04-05T14:30:00Z",
-      "status": "online",
-      "version": "0.3.1"
-    }
-  ]
+{ "servers": [{ "id":"srv_abc", "name":"Home Server", "status":"online", "lastSeen":"...", "paired": true }] }
+```
+
+- Zero servers: show "Install the AnyClaw server" onboarding with install script instructions.
+- One paired online server: auto-connect.
+- Multiple servers: show list; user taps one.
+- Unpaired server: jump into the pairing flow (§9.3).
+
+### Pairing with BIP39 verification code
+
+First-time connection to a server requires pairing to defend against MITM at the broker. Both sides derive a 4-word BIP39 verification code from the shared secret and display it; the user visually confirms they match before continuing.
+
+```
++----------------------------------------+
+|  Verify your server                     |
+|                                         |
+|  On your server terminal you should     |
+|  see the same four words:               |
+|                                         |
+|     apple  river  lantern  music        |
+|                                         |
+|  Do these match?                        |
+|                                         |
+|  [ No, cancel ]     [ Yes, they match ] |
++----------------------------------------+
+```
+
+```typescript
+// lib/crypto.ts — pairing
+import sodium from "libsodium-wrappers";
+import { wordlist } from "@/lib/bip39-english";
+import * as SecureStore from "expo-secure-store";
+
+export async function initCrypto() { await sodium.ready; }
+
+export interface PairingKeys {
+  clientPublicKey: Uint8Array;
+  clientSecretKey: Uint8Array;
+  serverPublicKey: Uint8Array;
+}
+
+export async function generatePairingKeypair() {
+  await initCrypto();
+  const kp = sodium.crypto_box_keypair();
+  return { publicKey: kp.publicKey, secretKey: kp.privateKey };
+}
+
+// Derive a 4-word BIP39 code from the two public keys (same on both sides).
+export function verificationCode(clientPk: Uint8Array, serverPk: Uint8Array): string[] {
+  const h = sodium.crypto_generichash(8, sodium.from_string("anyclaw-pair"),
+    new Uint8Array([...clientPk, ...serverPk]));
+  const words: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const idx = ((h[i*2] << 8) | h[i*2+1]) % wordlist.length;
+    words.push(wordlist[idx]);
+  }
+  return words;
+}
+
+export async function storePairingKeys(serverId: string, keys: PairingKeys) {
+  await SecureStore.setItemAsync(`nacl_${serverId}`, JSON.stringify({
+    client_pk: sodium.to_base64(keys.clientPublicKey),
+    client_sk: sodium.to_base64(keys.clientSecretKey),
+    server_pk: sodium.to_base64(keys.serverPublicKey),
+  }));
 }
 ```
 
-If the user has no servers, the app shows setup instructions (install Docker, run the server setup script, etc.).
+Pairing sequence:
 
-If the user has one server and it is online, the app auto-connects. If multiple servers exist, the user picks one.
+1. Client: `const { publicKey, secretKey } = await generatePairingKeypair()`.
+2. Client: `POST broker/api/pair { serverId, clientPublicKey }`.
+3. Broker relays to server; server generates its own keypair and returns `serverPublicKey`.
+4. Both sides compute `verificationCode(client_pk, server_pk)`. Server prints it to the install-script stdout; client shows it in the Pair screen.
+5. User taps "Yes, they match" — client stores all three keys in `expo-secure-store` and proceeds to tunnel establishment.
+6. User taps "No" — client aborts, broker invalidates the pairing attempt.
 
-### Tunnel Establishment (Phase 1: Broker Relay)
+Re-pair is available from Settings for device loss (see §13).
 
-1. App sends a connect request to the broker:
-   ```
-   POST https://broker.anyclawapp.com/api/connect
-   Body: { serverId: "srv_abc123" }
-   ```
-2. Broker allocates a relay subdomain (e.g., `abc123.relay.anyclawapp.com`) and opens a WSS tunnel to the server.
-3. Broker returns the relay URL and a session token:
-   ```json
-   {
-     "relayUrl": "https://abc123.relay.anyclawapp.com",
-     "sessionToken": "sess_xyz789",
-     "pbAuthToken": "pb_token_for_pocketbase_client"
-   }
-   ```
-4. The app stores these in the connection store and in `expo-secure-store` for reconnection on app restart.
-5. The WebView loads `https://abc123.relay.anyclawapp.com/app/` (auth token injected via JS bridge, not URL). The host's tunnel manager routes this to the prod static server.
-6. The PocketBase client connects to `https://abc123.relay.anyclawapp.com/pb` for realtime subscriptions. The tunnel manager routes this to the PocketBase process.
-7. The native shell's task/versions API calls go to `https://abc123.relay.anyclawapp.com/api/*`, routed to the dispatch/MCP server.
+### Tunnel establishment (Phase 1: WSS relay)
 
-### Connection Store
+```typescript
+// After pairing:
+const conn = await fetch(`${BROKER}/api/connect`, {
+  method: "POST",
+  headers: { "Authorization": `Bearer ${jwt}`, "content-type": "application/json" },
+  body: JSON.stringify({ serverId }),
+}).then(r => r.json());
+
+// { relayUrl: "https://abc123.relay.anyclawapp.com", sessionToken, pbAuthToken }
+
+await SecureStore.setItemAsync("server_session", JSON.stringify({
+  serverId, relayUrl: conn.relayUrl, sessionToken: conn.sessionToken, pbAuthToken: conn.pbAuthToken,
+}));
+```
+
+All three path prefixes (`/app/*`, `/api/*`, `/pb/*`) are served from the same relay URL; the tunnel manager on the host routes by prefix to the right supervised process.
+
+### Connection store and reconnect
 
 ```typescript
 // stores/connection.ts
 import { create } from "zustand";
 import * as SecureStore from "expo-secure-store";
+import { apiClient } from "@/lib/api";
+import { initPocketBase } from "@/lib/pocketbase";
+import { refreshBrokerJwt } from "@/lib/broker";
+
+type State = "disconnected" | "connecting" | "connected" | "reconnecting";
 
 interface ConnectionStore {
   isAuthenticated: boolean;
   isConnected: boolean;
-  serverUrl: string | null;       // relay URL or direct URL
+  serverUrl: string | null;
   sessionToken: string | null;
   pbAuthToken: string | null;
-  serverInfo: ServerInfo | null;
-  connectionState: "disconnected" | "connecting" | "connected" | "reconnecting";
+  connectionState: State;
 
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
-  connectToServer: (serverId: string) => Promise<void>;
+  restoreSession: () => Promise<void>;
   reconnect: () => Promise<void>;
-  restoreSession: () => Promise<void>;  // Called on app launch
+  logout: () => Promise<void>;
 }
 
+const BACKOFF = [1000, 2000, 4000, 8000, 16000, 30000];
+
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
-  isAuthenticated: false,
-  isConnected: false,
-  serverUrl: null,
-  sessionToken: null,
-  pbAuthToken: null,
-  serverInfo: null,
+  isAuthenticated: false, isConnected: false,
+  serverUrl: null, sessionToken: null, pbAuthToken: null,
   connectionState: "disconnected",
 
   restoreSession: async () => {
-    const token = await SecureStore.getItemAsync("anyclaw_auth_token");
-    if (!token) return;
+    const jwt = await SecureStore.getItemAsync("broker_jwt");
+    if (!jwt) return;
     set({ isAuthenticated: true });
-
-    const creds = await SecureStore.getItemAsync("anyclaw_server_creds");
-    if (!creds) return;
-    const { serverUrl, sessionToken, pbAuthToken } = JSON.parse(creds);
-
-    set({ connectionState: "connecting" });
+    const sess = await SecureStore.getItemAsync("server_session");
+    if (!sess) return;
+    const { relayUrl, sessionToken, pbAuthToken } = JSON.parse(sess);
+    set({ serverUrl: relayUrl, sessionToken, pbAuthToken, connectionState: "connecting" });
     try {
-      // Verify the session is still valid
-      const res = await fetch(`${serverUrl}/api/health`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      if (res.ok) {
-        set({
-          isConnected: true,
-          serverUrl,
-          sessionToken,
-          pbAuthToken,
-          connectionState: "connected",
-        });
-      } else {
-        // Session expired, need to re-establish via broker
-        set({ connectionState: "disconnected" });
-      }
+      apiClient.configure({ baseUrl: relayUrl, sessionToken });
+      await apiClient.get("/api/health");
+      initPocketBase(relayUrl, pbAuthToken);
+      set({ isConnected: true, connectionState: "connected" });
     } catch {
       set({ connectionState: "reconnecting" });
-      // Will retry in background
+      get().reconnect();
     }
   },
 
-  // ... login, connectToServer, etc.
+  reconnect: async () => {
+    for (let i = 0; ; i++) {
+      try {
+        await apiClient.get("/api/health");
+        set({ isConnected: true, connectionState: "connected" });
+        return;
+      } catch {
+        if (i === 0) { try { await refreshBrokerJwt(); } catch {} }
+        await new Promise(r => setTimeout(r, BACKOFF[Math.min(i, BACKOFF.length - 1)]));
+      }
+    }
+  },
+
+  logout: async () => {
+    await SecureStore.deleteItemAsync("broker_jwt");
+    await SecureStore.deleteItemAsync("broker_refresh");
+    await SecureStore.deleteItemAsync("server_session");
+    set({ isAuthenticated: false, isConnected: false, serverUrl: null, sessionToken: null, pbAuthToken: null });
+  },
 }));
 ```
 
-### Reconnection Strategy
-
-When the connection drops:
-1. The connection store transitions to `"reconnecting"`.
-2. The `ConnectionStatus` header badge turns yellow with "Reconnecting...".
-3. The app retries with exponential backoff: 1s, 2s, 4s, 8s, 16s, then every 30s.
-4. On reconnect, the WebView reloads and PocketBase realtime subscriptions are re-established.
-5. If the relay session expired (broker returns 401), the app silently requests a new relay session from the broker using the stored JWT. No user action required unless the JWT itself expired.
-
 ---
 
-## 7. NaCl E2E Encryption
+## 10. NaCl E2E Encryption
 
-All traffic between the mobile app and the user's server is NaCl-encrypted on top of TLS. This ensures the broker relay (Phase 1) cannot read traffic even if compromised.
+### Library and key lifecycle
 
-### Key Management
+- **Library:** `libsodium-wrappers` (WASM) — same on mobile and server.
+- **Primitive:** `crypto_box` authenticated public-key encryption.
+- **Key lifecycle:** Long-lived keypair per `(device, server)` pair generated at pairing (§9.3) and stored in `expo-secure-store` (iOS Keychain / Android Keystore). **No rotation for MVP.** Re-pair flow recovers from device loss.
 
-The mobile app uses `tweetnacl` (NaCl) for key generation, key exchange, and encrypt/decrypt operations.
+### Encryption boundary
 
-**Key generation (on first connection):**
+Per spec decision #33:
+
+- **TLS-only for static assets** — HTML/CSS/JS from the prod static server at `/app/*` ride on TLS alone. Assets are not secret.
+- **NaCl additionally for sensitive API payloads** — PocketBase API calls carrying user data (`/pb/*`) and dispatch API calls (`/api/*`) are wrapped in a NaCl box on top of TLS. The broker relay, even if compromised, sees only opaque bytes.
+
+This keeps the WebView simple (no complex proxy scheme for asset loading) while protecting everything that carries user data.
+
+### Encrypt/decrypt primitives
 
 ```typescript
 // lib/crypto.ts
-import nacl from "tweetnacl";
-import { encodeBase64, decodeBase64 } from "tweetnacl-util";
-import * as SecureStore from "expo-secure-store";
+import sodium from "libsodium-wrappers";
 
-const KEYPAIR_KEY = "anyclaw_nacl_keypair";
+export interface Envelope { ciphertext: string; nonce: string; }
 
-export async function getOrCreateKeyPair(): Promise<nacl.BoxKeyPair> {
-  const stored = await SecureStore.getItemAsync(KEYPAIR_KEY);
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    return {
-      publicKey: decodeBase64(parsed.publicKey),
-      secretKey: decodeBase64(parsed.secretKey),
-    };
-  }
+export function encryptJSON(plain: unknown, theirPk: Uint8Array, mySk: Uint8Array): Envelope {
+  const nonce = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
+  const ct = sodium.crypto_box_easy(sodium.from_string(JSON.stringify(plain)), nonce, theirPk, mySk);
+  return { ciphertext: sodium.to_base64(ct), nonce: sodium.to_base64(nonce) };
+}
 
-  const keyPair = nacl.box.keyPair();
-  await SecureStore.setItemAsync(
-    KEYPAIR_KEY,
-    JSON.stringify({
-      publicKey: encodeBase64(keyPair.publicKey),
-      secretKey: encodeBase64(keyPair.secretKey),
-    })
+export function decryptJSON<T = unknown>(env: Envelope, theirPk: Uint8Array, mySk: Uint8Array): T {
+  const pt = sodium.crypto_box_open_easy(
+    sodium.from_base64(env.ciphertext), sodium.from_base64(env.nonce), theirPk, mySk,
   );
-  return keyPair;
+  if (!pt) throw new Error("Decryption failed");
+  return JSON.parse(sodium.to_string(pt));
 }
 ```
 
-**Key exchange via broker:**
-
-1. On first connection to a server, the mobile app generates a NaCl keypair and stores it in `expo-secure-store`.
-2. The app sends its public key to the broker: POST `https://broker.anyclawapp.com/api/key-exchange` with `{ serverId, clientPublicKey }`.
-3. The broker relays the client's public key to the server and returns the server's public key.
-4. Both sides now have each other's public keys and can compute a shared secret for NaCl box encryption.
-5. Public keys are cached locally. Re-exchange only happens if the server's key changes (server reinstall).
-
-**Encrypt/decrypt:**
+### API client integration
 
 ```typescript
-export function encryptMessage(
-  message: string,
-  theirPublicKey: Uint8Array,
-  mySecretKey: Uint8Array
-): { encrypted: string; nonce: string } {
-  const nonce = nacl.randomBytes(nacl.box.nonceLength);
-  const messageBytes = new TextEncoder().encode(message);
-  const encrypted = nacl.box(messageBytes, nonce, theirPublicKey, mySecretKey);
-  return {
-    encrypted: encodeBase64(encrypted),
-    nonce: encodeBase64(nonce),
-  };
+// lib/api.ts
+import { encryptJSON, decryptJSON, Envelope } from "./crypto";
+import { loadPairingKeys } from "./crypto-storage";
+
+interface Config { baseUrl: string; sessionToken: string; serverId: string; debug?: boolean; }
+
+class ApiClient {
+  private cfg: Config | null = null;
+  configure(cfg: Config) { this.cfg = cfg; }
+
+  async post<T>(path: string, body: unknown): Promise<T> {
+    const { baseUrl, sessionToken, serverId, debug } = this.requireCfg();
+    const keys = await loadPairingKeys(serverId);
+    const envelope = encryptJSON(body, keys.serverPublicKey, keys.clientSecretKey);
+    if (debug) console.log("[api] plaintext request", path, body);
+
+    const res = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-nacl-box",
+        "authorization": `Bearer ${sessionToken}`,
+        "x-anyclaw-client-pk": sodium.to_base64(keys.clientPublicKey),
+      },
+      body: JSON.stringify(envelope),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const env: Envelope = await res.json();
+    const plain = decryptJSON<T>(env, keys.serverPublicKey, keys.clientSecretKey);
+    if (debug) console.log("[api] plaintext response", path, plain);
+    return plain;
+  }
+
+  async get<T>(path: string): Promise<T> {
+    // GET uses the same NaCl envelope in the response body; request has no body.
+    const { baseUrl, sessionToken, serverId, debug } = this.requireCfg();
+    const keys = await loadPairingKeys(serverId);
+    const res = await fetch(`${baseUrl}${path}`, { headers: { "authorization": `Bearer ${sessionToken}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const env: Envelope = await res.json();
+    const plain = decryptJSON<T>(env, keys.serverPublicKey, keys.clientSecretKey);
+    if (debug) console.log("[api] plaintext response", path, plain);
+    return plain;
+  }
+
+  private requireCfg() { if (!this.cfg) throw new Error("api client not configured"); return this.cfg; }
 }
 
-export function decryptMessage(
-  encrypted: string,
-  nonce: string,
-  theirPublicKey: Uint8Array,
-  mySecretKey: Uint8Array
-): string {
-  const decrypted = nacl.box.open(
-    decodeBase64(encrypted),
-    decodeBase64(nonce),
-    theirPublicKey,
-    mySecretKey
-  );
-  if (!decrypted) throw new Error("Decryption failed");
-  return new TextDecoder().decode(decrypted);
-}
+export const apiClient = new ApiClient();
 ```
 
-### Integration with API Layer
-
-The `lib/api.ts` module wraps all HTTP requests and PocketBase SSE traffic with NaCl encryption:
-
-- **Outgoing REST requests:** Request body is encrypted with `encryptMessage()` before sending. The `Content-Type` header is set to `application/x-nacl-box`.
-- **Incoming REST responses:** Response body is decrypted with `decryptMessage()`.
-- **SSE events:** Each SSE event payload is NaCl-encrypted by the server. The PocketBase subscription handler decrypts before passing to the zustand store.
-- **WebView traffic:** The WebView loads content over TLS from the relay. The JS bridge injects the NaCl keys so the agent-built frontend can also encrypt/decrypt API calls to PocketBase. Alternatively, the native shell can proxy PocketBase requests through the bridge with encryption handled natively.
+PocketBase SSE events carry the same envelope format; a wrapper around `pb.collection(x).subscribe` decrypts the payload before passing it to the store's `_applyServerRecord`.
 
 ---
 
-## 8. Push Notifications
+## 11. PocketBase Realtime SSE Integration
 
-### Setup
+```typescript
+// lib/pocketbase.ts
+import PocketBase, { RecordSubscription } from "pocketbase";
+import { decryptJSON, Envelope } from "./crypto";
+import { loadPairingKeys } from "./crypto-storage";
 
-Push notifications use Expo's push notification service (Expo Push). The server sends notifications through Expo's push API.
+let pb: PocketBase | null = null;
+let serverId: string;
 
-**Registration flow:**
-1. On first connection, the app requests push notification permissions.
-2. If granted, the app gets an Expo push token via `Notifications.getExpoPushTokenAsync()`.
-3. The app sends this token to the user's server: POST `/api/device/register` with `{ pushToken, platform }`.
-4. The server stores it and uses it to send notifications via the Expo Push API.
+export function initPocketBase(relayUrl: string, pbAuthToken: string, sid: string) {
+  pb = new PocketBase(`${relayUrl}/pb`);
+  pb.authStore.save(pbAuthToken, null);
+  serverId = sid;
+}
+
+export function getPocketBase(): PocketBase {
+  if (!pb) throw new Error("PocketBase not initialized");
+  return pb;
+}
+
+export function subscribeToTask(taskId: string, onUpdate: (rec: any) => void) {
+  const handler = async (e: RecordSubscription<Envelope>) => {
+    const keys = await loadPairingKeys(serverId);
+    const record = decryptJSON(e.record as unknown as Envelope, keys.serverPublicKey, keys.clientSecretKey);
+    onUpdate(record);
+  };
+  pb!.collection("_tasks").subscribe(taskId, handler);
+  return () => pb!.collection("_tasks").unsubscribe(taskId);
+}
+
+export function subscribeToAgentMessages(onMessage: (rec: any) => void) {
+  pb!.collection("_agent_messages").subscribe("*", async (e) => {
+    const keys = await loadPairingKeys(serverId);
+    const rec = decryptJSON(e.record as unknown as Envelope, keys.serverPublicKey, keys.clientSecretKey);
+    onMessage(rec);
+  });
+  return () => pb!.collection("_agent_messages").unsubscribe("*");
+}
+
+export function subscribeToDeployments(onDeploy: () => void) {
+  pb!.collection("_deployments").subscribe("*", (e) => {
+    if (e.action === "create") onDeploy();
+  });
+  return () => pb!.collection("_deployments").unsubscribe("*");
+}
+```
+
+The PocketBase JS SDK auto-reconnects on SSE drop. After reconnect, the task store refetches the active `_tasks` record via REST to catch any missed updates, then resumes streaming.
+
+---
+
+## 12. Push Notifications
+
+### Registration
 
 ```typescript
 // lib/notifications.ts
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
-import Constants from "expo-constants";
 import { Platform } from "react-native";
+import Constants from "expo-constants";
+import { apiClient } from "./api";
 
-// Configure how notifications appear when app is in foreground
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
+  handleNotification: async () => ({ shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: true }),
 });
 
 export async function registerForPushNotifications(): Promise<string | null> {
-  if (!Device.isDevice) {
-    // Push notifications don't work on simulators
-    return null;
-  }
+  if (!Device.isDevice) return null;
+  const { status: existing } = await Notifications.getPermissionsAsync();
+  let status = existing;
+  if (existing !== "granted") status = (await Notifications.requestPermissionsAsync()).status;
+  if (status !== "granted") return null;
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-
-  if (existingStatus !== "granted") {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-
-  if (finalStatus !== "granted") {
-    return null;
-  }
-
-  // Android requires a notification channel
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("default", {
       name: "AnyClaw",
@@ -1313,145 +1121,148 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId;
   const token = await Notifications.getExpoPushTokenAsync({ projectId });
+  await apiClient.post("/api/device/register", { pushToken: token.data, platform: Platform.OS });
   return token.data;
 }
 ```
 
-### Notification Types
+### Notification types and deep links
 
-The server sends push notifications for three events:
-
-| Event | Title | Body | Deep Link |
-|-------|-------|------|-----------|
-| Task needs clarification | "Question from your agent" | The agent's question (truncated) | `anyclaw://task/{taskId}` |
-| Task completed | "New version deployed" | Version description (truncated) | `anyclaw://versions` |
-| Task failed | "Task failed" | Error summary (truncated) | `anyclaw://task/{taskId}` |
-
-### Deep Linking
-
-Tapping a notification opens the app to the relevant screen via expo-router deep links:
+| Event | Title | Body | Data | Deep link |
+|-------|-------|------|------|-----------|
+| Agent asks question | "Question from your agent" | Truncated question | `{ screen: "task", taskId }` | `anyclaw://task/{id}` |
+| Task completed | "New version deployed" | Truncated version description | `{ screen: "versions" }` | `anyclaw://versions` |
+| Task failed | "Task failed" | Truncated error | `{ screen: "task", taskId }` | `anyclaw://task/{id}` |
 
 ```typescript
-// In app/_layout.tsx
-import * as Notifications from "expo-notifications";
-import { useRouter } from "expo-router";
-import { useEffect } from "react";
-
-function useNotificationDeepLink() {
+// Deep-link handling (called from app/_layout.tsx)
+export function useNotificationDeepLinks() {
   const router = useRouter();
-
   useEffect(() => {
-    // Handle notification tapped while app was in background
-    const subscription = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
-        const data = response.notification.request.content.data;
-        if (data?.screen === "task" && data?.taskId) {
-          router.push(`/(main)/task/${data.taskId}`);
-        } else if (data?.screen === "versions") {
-          router.push("/(main)/versions");
-        }
-      }
-    );
-    return () => subscription.remove();
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as any;
+      if (data?.screen === "task" && data?.taskId) router.push(`/(main)/task/${data.taskId}`);
+      else if (data?.screen === "versions") router.push("/(main)/versions");
+    });
+    return () => sub.remove();
   }, [router]);
 }
 ```
 
-### Server-Side Push (Node.js Logic Service)
+The server dispatches notifications via the Expo Push API from the dispatch/MCP server (not from agent code) so that notifications still fire even if the logic service is crashed.
 
-The server uses the Expo Push API to send notifications. This runs inside the `sendNotification` primitive defined in Plan 1:
+---
+
+## 13. Settings Screen
+
+```
++----------------------------------------+
+|  Settings                               |
++----------------------------------------+
+|  Account                                |
+|    Signed in as alice@example.com  [>]  |
+|    Sign out                        [>]  |
++----------------------------------------+
+|  Agent behavior                         |
+|    Clarification mode                   |
+|      ( ) Best judgment (default)        |
+|      (*) Pause and wait                 |
+|    Clarification timeout      [ 5 min v]|
++----------------------------------------+
+|  Connection                             |
+|    Server: Home Server (online)   [>]   |
+|    Re-pair this device            [>]   |
++----------------------------------------+
+|  Keys & secrets                         |
+|    LLM API keys                   [>]   |
+|    Master encryption key          [info]|
++----------------------------------------+
+|  Advanced                               |
+|    Debug encrypted traffic        [ ]   |
+|    View logs                      [>]   |
++----------------------------------------+
+```
+
+**Sections:**
+
+1. **Account** — Shows OAuth identity; sign out clears `expo-secure-store`.
+2. **Clarification timeout mode** — Per spec decision #2. Two modes: `best-judgment` (default) — agent proceeds with best guess after `N` minutes; `pause-indefinitely` — task waits forever. Both are mirrored to the dispatch server via `PATCH /api/settings`.
+3. **Clarification timeout duration** — Minutes dropdown (1 / 5 / 15 / 30 / 60). Only shown when mode is `best-judgment`.
+4. **API key management** — List/add/remove LLM provider keys. Per spec decision #21, keys are encrypted server-side in PocketBase; the UI posts plaintext over the NaCl-encrypted API channel and the server encrypts on write.
+5. **Connection / server management** — Shows the active server; "Change server" returns to server-list. "Re-pair this device" generates a new NaCl keypair, revokes the old one at the broker, and runs the pairing flow again — the recovery path for device loss or key compromise.
+6. **Debug mode for encrypted traffic** — Per spec decision #34. Toggle enables plaintext logging in `apiClient` and `subscribeTo*` locally only; never reports to broker. Includes a "clear logs" button.
+7. **View logs** — Displays locally captured logs (rolling ring buffer of last 500 lines).
+
+Settings store:
 
 ```typescript
-// packages/logic/src/primitives/send-notification.ts
-import { Expo, ExpoPushMessage } from "expo-server-sdk";
+// stores/settings.ts
+import { create } from "zustand";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const expo = new Expo();
-
-export async function sendNotification(
-  pushTokens: string[],
-  title: string,
-  body: string,
-  data?: Record<string, string>
-) {
-  const messages: ExpoPushMessage[] = pushTokens
-    .filter((token) => Expo.isExpoPushToken(token))
-    .map((token) => ({
-      to: token,
-      sound: "default",
-      title,
-      body,
-      data,
-    }));
-
-  const chunks = expo.chunkPushNotifications(messages);
-  for (const chunk of chunks) {
-    await expo.sendPushNotificationsAsync(chunk);
-  }
+interface SettingsStore {
+  clarificationMode: "best-judgment" | "pause-indefinitely";
+  clarificationTimeoutMinutes: number;
+  debugEncryptedTraffic: boolean;
+  hydrate: () => Promise<void>;
+  update: (patch: Partial<SettingsStore>) => Promise<void>;
 }
+
+export const useSettingsStore = create<SettingsStore>((set, get) => ({
+  clarificationMode: "best-judgment",
+  clarificationTimeoutMinutes: 5,
+  debugEncryptedTraffic: false,
+  hydrate: async () => {
+    const raw = await AsyncStorage.getItem("anyclaw_settings");
+    if (raw) set(JSON.parse(raw));
+  },
+  update: async (patch) => {
+    set(patch as any);
+    await AsyncStorage.setItem("anyclaw_settings", JSON.stringify(get()));
+    // Mirror to server for agent-relevant settings
+    if ("clarificationMode" in patch || "clarificationTimeoutMinutes" in patch) {
+      const { clarificationMode, clarificationTimeoutMinutes } = get();
+      try { await apiClient.post("/api/settings", { clarificationMode, clarificationTimeoutMinutes }); } catch {}
+    }
+  },
+}));
 ```
 
 ---
 
-## 9. Technical Decisions (Resolved)
+## 14. Testing Strategy
 
-All open questions from the original design have been resolved by the locked decisions in the main spec.
+### Unit tests (`jest-expo`)
 
-| # | Question | Resolution | Reference |
-|---|----------|------------|-----------|
-| 8.1 | Tab bar vs FAB for task dispatch | **Dedicated "Request" tab + full-screen modal/bottom sheet.** Clear, discoverable, avoids WebView z-index conflicts. Not FAB. | Spec decision #9 |
-| 8.2 | Minimum Android API level | **API 28 (Android 9.0).** Drops ~5% of devices. Better WebView, dark mode, biometric API. | Spec decision #10 |
-| 8.3 | Offline native shell behavior | **Cache-nothing for MVP.** Server down = reconnect screen. No offline cache. | Spec decision #11 |
-| 8.4 | Concurrent tasks | **Single active task + queue.** Design with task isolation for future parallelization. | Spec decision #1 |
-| 8.5 | WebView auth token model | **JS bridge injection after page load.** Most secure -- token never in URL or logs. Frontend waits for bridge `session-token` message before making API calls. | Spec decision #12 |
+- `lib/crypto.ts` — round-trip encrypt/decrypt, BIP39 verification-code determinism, rejection of tampered ciphertext.
+- `lib/bridge.ts` — `parseBridgeMessage` accepts valid JSON, rejects malformed payloads.
+- `stores/task.ts` — state transitions (submit → working → done), idempotency-key handling, resume-active-task restoration, retry flow.
+- `stores/connection.ts` — restoreSession happy path, reconnect backoff ordering.
+- `stores/versions.ts` — fetchVersions success/error, rollback triggers refetch.
 
----
+### Integration tests (with mocked PocketBase + dispatch server)
 
-## New Gaps
+- Submit a task; simulate an SSE update with `state: "clarifying"`; verify the Request tab badge appears.
+- Answer a clarification; verify optimistic transition to `working` followed by reconcile on next SSE event.
+- Kill the mock dispatch server mid-task; verify reconnect backoff and resume of the active task on recovery.
+- Trigger a `_deployments` SSE event; verify `WebView.reload()` is called and `versionStore.fetchVersions` runs.
+- Pair flow: generate keypair, exchange via mock broker, assert BIP39 codes match on both sides.
 
-Technical decisions that emerged from applying the locked decisions to this design. These need resolution before implementation.
+### Manual test plan
 
-**Resolved by the supervised-process architecture:**
-- ~~Control plane vs app server URL routing~~ — path-based routing through a single tunnel: `/pb/*` → PocketBase, `/api/*` → dispatch/MCP server, `/app/*` → prod static server. Availability across crashes comes from independent process supervision, not from separate subdomains.
-- ~~Task state ownership~~ — PocketBase is the single source of truth. The dispatch/MCP server writes `_tasks` records directly; there is no second task store. PocketBase runs as its own supervised process, so task state stays available even when the logic service is crashed.
-
-### 1. NaCl encryption for WebView traffic
-
-The locked decision requires NaCl E2E encryption on all traffic through the broker relay. For native REST/SSE calls, this is straightforward (encrypt in `lib/crypto.ts`). But the WebView loads HTML/CSS/JS assets and makes its own PocketBase API calls. **Options:**
-
-- **(a) Proxy all WebView API calls through the native shell via JS bridge.** The agent-built frontend calls `window.AnyClaw.fetch()` instead of `fetch()`. The native shell encrypts, sends, receives, decrypts, and returns the result. Assets are fetched natively and injected. High complexity, but true E2E for everything.
-- **(b) NaCl encrypt only the relay tunnel at the transport layer.** The broker relay decrypts TLS, then re-encrypts with NaCl for the hop to the server (or vice versa). Simpler, but the broker momentarily sees plaintext.
-- **(c) Inject NaCl keys into the WebView and let the frontend encrypt its own PocketBase calls.** Less secure (keys in JS memory) but simpler. Asset loading remains unencrypted through the relay.
-- **(d) Accept that WebView asset traffic goes through TLS-only relay, and only NaCl-encrypt sensitive API payloads (task data, user content).** Pragmatic middle ground.
-
-**Decision needed:** Which approach for WebView traffic encryption?
-
-### 2. NaCl key rotation and revocation
-
-The current design generates a keypair on first connection and caches it. **Questions:**
-
-- How often should keys rotate? On every new relay session? Periodically? Never (until server reinstall)?
-- If a user loses their phone, how do they revoke the old keypair? Does the broker need a key revocation endpoint?
-- Should there be a "re-pair" flow in the app settings for manually triggering key exchange?
-
-**Decision needed:** Key rotation policy and revocation mechanism.
-
-### 3. OAuth token storage and refresh
-
-With OAuth (Google/Apple/GitHub) replacing email/password, the auth flow changes. **Questions:**
-
-- Does the broker issue its own JWT after OAuth validation, or does the app store the OAuth provider's tokens directly?
-- If the broker issues its own JWT, what is the refresh token strategy? The broker needs its own refresh endpoint.
-- Apple Sign In requires handling the "user info only provided on first login" quirk -- the broker must persist user details from the first OAuth callback.
-
-**Decision needed:** Broker JWT strategy and OAuth token lifecycle.
-
-### 4. Full-screen modal/bottom sheet interaction for task dispatch
-
-The locked decision says "dedicated Request tab + full-screen modal/bottom sheet" but the current code shows the task card inline in the tab. **Questions:**
-
-- Is the modal/bottom sheet triggered by a "New Request" button on the Task tab, opening over the tab content?
-- Or does the Task tab itself present as a bottom sheet overlaying the Home tab (WebView)?
-- For the clarification Q&A flow, does each round stay within the same modal, or does the modal dismiss and re-present?
-- On small screens, should the modal be a full-screen modal (iOS style) or a draggable bottom sheet (Material style)?
-
-**Decision needed:** Exact modal/bottom sheet UX for the task dispatch flow.
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | Fresh install → OAuth with Google | Lands on server-list |
+| 2 | Pair with new server | BIP39 code shown; matches server terminal output |
+| 3 | Submit task, answer clarification | Task moves clarifying → working → done; WebView reloads |
+| 4 | Kill the logic service mid-session | WebView shows "app broken" error screen; Versions tab still works; `/api/rollback` restores prior version |
+| 5 | Kill the dispatch server | Header badge turns red; Versions tab becomes read-only; auto-recover on restart |
+| 6 | Close app during clarification, reopen | Pending question is restored via `resumeActiveTask` |
+| 7 | Receive push notification while backgrounded | Tap opens the relevant tab via deep link |
+| 8 | Rollback with DB snapshot | Sheet shows DB-restore copy; rollback succeeds; WebView reloads |
+| 9 | Rollback without DB snapshot | Sheet shows code-only copy |
+| 10 | Toggle debug traffic mode, submit a task | Plaintext appears in local log only; never sent to broker |
+| 11 | Re-pair flow from Settings | New keypair generated; old one revoked; connection re-established |
+| 12 | Airplane mode toggle | `reconnecting` state, exponential backoff, recovery on network return |
+| 13 | Android API 28 device (Android 9.0) | WebView renders, SSE stable, biometric unlock works |
+| 14 | iOS 15.1 device | Same as above, WKWebView bridge works |
