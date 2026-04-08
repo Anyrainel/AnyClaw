@@ -38,3 +38,25 @@ This document accumulates technical decisions and observations made during imple
 ### Q1.7 — Docker build not attempted on Windows
 **Observation:** Plan 1's Dockerfile was written verbatim but not built (no Docker on the dev host). The Dockerfile will need to be tested in CI or on a Linux host before we can deliver a real container.
 **Action needed:** Run `docker build -f anyclaw-server/infra/Dockerfile anyclaw-server/` on a machine with Docker before relying on the image. Probably best done as part of Plan 6's CI/CD.
+
+## Plan 2: MCP Server (in progress)
+
+### Q2.1 — Tests directory: `test/` not `src/__tests__/`
+**Subagent deviation:** Plan 2 spec says `src/__tests__/`. Subagent moved to `test/` to match the root vitest config (`packages/*/test/**/*.test.ts`) and other packages.
+**Action needed:** None — consistent with rest of monorepo.
+
+### Q2.2 — `require()` shim in ESM modules
+**Subagent decision:** Plan 2 uses bare `require("@anyclaw/shared")` for lazy loading in some tools. Since mcp-server is `"type": "module"` with NodeNext, bare `require` isn't available. Subagent used `createRequire(import.meta.url)`.
+**Action needed:** Review whether `await import()` would be cleaner. Currently the lazy loader is never exercised in tests (factories are injected).
+
+### Q2.3 — Test reset helpers exported from production code
+**Subagent observation:** `__resetTokenRegistryForTests` and `__resetPbClientForTests` are exported from production modules (per plan verbatim). Could be gated behind `NODE_ENV === "test"` for stricter isolation.
+**Action needed:** None unless we want stricter prod hygiene.
+
+## Process: Parallel Subagent Dispatch
+
+### Q-PROCESS — Cross-contamination from `git add -A`
+**Issue:** Two subagents working in different subdirectories of the same git repo (anyclaw-server/ and broker/) collided when one ran `git add -A` and swept up uncommitted files from the other's working tree into a wrong-named commit.
+**Resolution:** Going forward, dispatching subagents serially (one at a time) to avoid the issue. The slight loss of parallelism is worth the safety. Alternative would be git worktrees per subagent, but that adds setup overhead.
+**Recovery:** The cross-contaminated commit was apparently rewritten to drop the foreign files; create-collection.ts ended up untracked locally and was committed properly under the correct Plan 2 Task 9 message.
+**Action needed:** Consider git worktrees if parallelism becomes important later.
