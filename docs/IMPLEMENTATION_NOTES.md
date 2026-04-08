@@ -60,3 +60,29 @@ This document accumulates technical decisions and observations made during imple
 **Resolution:** Going forward, dispatching subagents serially (one at a time) to avoid the issue. The slight loss of parallelism is worth the safety. Alternative would be git worktrees per subagent, but that adds setup overhead.
 **Recovery:** The cross-contaminated commit was apparently rewritten to drop the foreign files; create-collection.ts ended up untracked locally and was committed properly under the correct Plan 2 Task 9 message.
 **Action needed:** Consider git worktrees if parallelism becomes important later.
+
+### Q2.4 — anyclaw_ask_user clarification timeout mode
+**Subagent observation:** Plan 2 spec only implements simple `timeoutMs` reject behavior. The Product Principles specify user-configurable "best judgment after 5min OR pause indefinitely" via `_user_preferences`. The plan didn't extend Task 10 to read from `_user_preferences`, so the simple timeout was implemented per-spec.
+**Action needed:** Either extend `anyclaw_ask_user` later (small follow-up) to read `_user_preferences.clarification_timeout_mode`, OR have Plan 3's REST API mediate by passing the resolved timeout to the agent via the MCP context. The latter is probably cleaner. Address before launch.
+
+## Plan 4: Connection Broker (in progress)
+
+### Q4.1 — Tasks 8/9 OAuth tests skip session DB
+**State:** Lucia session CRUD module exists but its tests are skipped (Docker/testcontainers needed). OAuth provider modules (Google/Apple/GitHub) have nock-based unit tests that pass without a DB.
+**Action needed:** Re-run `vitest run` on a machine with Docker to validate the 5 currently-skipped tests.
+
+### Q4.2 — Task 10 auth routes use stub DB
+**Decision made:** Task 10 auth routes (`src/auth/routes.ts`) tests use a stub DB object. This verifies routing shape, state TTL, and validation errors without real Postgres. Full end-to-end OAuth→session→JWT tests are deferred.
+**Action needed:** Write DB-backed E2E tests once testcontainers are available. The routes file itself exercises real SQL, so it needs Docker to validate the upsertUser and session queries at runtime.
+
+### Q4.3 — Factory injection for McpContext (Plan 2 fix)
+**Decision made:** Extended `McpContext` in mcp-server to carry optional `deployManagerFactory`, `rollbackManagerFactory`, `snapshotManagerFactory`. `mountMcp` threads these through `registerAllTools` to the individual tool register functions. Replaces the broken default `require(@anyclaw/shared).deployManager` pattern (ESM namespaces are immutable so the test's module-mutation approach failed).
+**Impact:** Clean DI — Plan 3's dispatch server will wire real managers via these factories at startup. Tests inject mocks the same way.
+**Action needed:** None — cleaner than the original design.
+
+## Process: API Overload
+
+### Q-PROCESS-2 — Repeated 529 errors on subagent dispatch
+**Issue:** From Plan 4 Batch 3 onwards, the Agent tool started failing with `529 overloaded_error` repeatedly (4+ consecutive failures). Some subagents completed significant work before failing (e.g., Plan 4 Batch 3 created the OAuth modules and tests before the API failed on Task 10). The uncommitted work was recovered by direct inspection.
+**Resolution:** Wrote Plan 4 Task 10 (auth routes + middleware) directly without a subagent when repeated retries failed. This is less efficient than delegation but made forward progress.
+**Action needed:** When API is healthier, resume subagent dispatch for remaining batches (Plan 4 Batches 4-5, Plan 3, Plan 5, Plan 6). OR continue writing code directly at slower pace.
