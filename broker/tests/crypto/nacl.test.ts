@@ -50,7 +50,7 @@ describe('nacl', () => {
     const a = generateKeypair();
     const b = generateKeypair();
     const { nonce, ciphertext } = box(Buffer.from('x'), b.pk, a.sk);
-    ciphertext[0] ^= 0xff;
+    ciphertext[0] = (ciphertext[0] ?? 0) ^ 0xff;
     expect(() => unbox(ciphertext, nonce, a.pk, b.sk)).toThrow();
   });
 });
