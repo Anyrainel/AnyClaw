@@ -74,7 +74,13 @@ export function makeDeployHandler(
   );
 }
 
-export function registerDeploy(server: any, ctx: { taskId: string }) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function registerDeploy(
+  server: any,
+  ctx: { taskId: string },
+  factory: () => DeployManagerLike = defaultMgr,
+) {
+  const handler = makeDeployHandler(factory);
   server.registerTool(
     "anyclaw_deploy",
     {
@@ -85,6 +91,7 @@ export function registerDeploy(server: any, ctx: { taskId: string }) {
       outputSchema: deployOutput,
       annotations: { destructiveHint: true, idempotentHint: false },
     },
-    (input: any) => makeDeployHandler()(input, ctx),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (input: any) => handler(input, ctx),
   );
 }

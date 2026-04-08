@@ -13,9 +13,21 @@ const INSTRUCTIONS = [
   "A version description of at least 10 characters is required for every deployment.",
 ].join(" ");
 
-export type McpContext = Record<string, never>;
+import type { DeployManagerLike } from "./tools/deploy.js";
+import type { RollbackManagerLike } from "./tools/rollback.js";
+import type { SnapshotManagerLike } from "./tools/snapshot-db.js";
 
-export function mountMcp(app: Express, _ctx: McpContext = {}): void {
+/**
+ * Optional factory overrides injected at mount time. Plan 3's dispatch
+ * server wires real managers via these. Tests inject mocks.
+ */
+export interface McpContext {
+  deployManagerFactory?: () => DeployManagerLike;
+  rollbackManagerFactory?: () => RollbackManagerLike;
+  snapshotManagerFactory?: () => SnapshotManagerLike;
+}
+
+export function mountMcp(app: Express, ctx: McpContext = {}): void {
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   app.post("/mcp", requireBearerToken, async (req: Request, res: Response) => {
@@ -40,7 +52,7 @@ export function mountMcp(app: Express, _ctx: McpContext = {}): void {
           { name: "anyclaw", version: "1.0.0" },
           { instructions: INSTRUCTIONS },
         );
-        registerAllTools(server, { taskId });
+        registerAllTools(server, { taskId, ...ctx });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await server.connect(transport as any);
       } else {

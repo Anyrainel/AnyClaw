@@ -45,7 +45,12 @@ export function makeRollbackHandler(
   );
 }
 
-export function registerRollback(server: any) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function registerRollback(
+  server: any,
+  factory: () => RollbackManagerLike = defaultMgr,
+) {
+  const handler = makeRollbackHandler(factory);
   server.registerTool(
     "anyclaw_rollback",
     {
@@ -56,6 +61,7 @@ export function registerRollback(server: any) {
       outputSchema: rollbackOutput,
       annotations: { destructiveHint: true },
     },
-    (input: any) => makeRollbackHandler()(input),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (input: any) => handler(input),
   );
 }

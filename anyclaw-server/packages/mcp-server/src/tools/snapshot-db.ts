@@ -32,7 +32,12 @@ export function makeSnapshotDbHandler(factory: () => SnapshotManagerLike = defau
   });
 }
 
-export function registerSnapshotDb(server: any) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function registerSnapshotDb(
+  server: any,
+  factory: () => SnapshotManagerLike = defaultMgr,
+) {
+  const handler = makeSnapshotDbHandler(factory);
   server.registerTool(
     "anyclaw_snapshot_db",
     {
@@ -41,6 +46,7 @@ export function registerSnapshotDb(server: any) {
       inputSchema: snapshotDbInput,
       outputSchema: snapshotDbOutput,
     },
-    (input: any) => makeSnapshotDbHandler()(input),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (input: any) => handler(input),
   );
 }
