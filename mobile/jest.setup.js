@@ -40,6 +40,7 @@ jest.mock("react-native", () => {
       );
     }),
     ActivityIndicator: createMockComponent("ActivityIndicator"),
+    Switch: createMockComponent("Switch"),
     Alert: {
       alert: jest.fn(),
     },
