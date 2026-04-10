@@ -42,7 +42,7 @@ const ACCENT_COLORS = [
   { label: "Amber", value: "#f59e0b", style: { backgroundColor: "#f59e0b" } },
   { label: "Rose", value: "#f43f5e", style: { backgroundColor: "#f43f5e" } },
   { label: "Violet", value: "#8b5cf6", style: { backgroundColor: "#8b5cf6" } },
-] as const;
+] as const satisfies ReadonlyArray<{ label: string; value: string; style: import("react-native").ViewStyle }>;
 
 const CLARIFICATION_MODE_OPTIONS: { label: string; value: ClarificationMode }[] = [
   { label: "Auto-timeout", value: "auto-timeout" },
