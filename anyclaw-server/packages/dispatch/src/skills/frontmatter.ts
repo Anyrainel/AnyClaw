@@ -37,7 +37,7 @@ export function parseSkillFile(raw: string): ParsedSkill {
   const pairs: Record<string, string> = {};
   for (const line of yamlBlock.split("\n")) {
     const match = line.match(/^(\w+)\s*:\s*"?([^"]*)"?\s*$/);
-    if (match) {
+    if (match && match[1] && match[2]) {
       pairs[match[1]] = match[2];
     }
   }
