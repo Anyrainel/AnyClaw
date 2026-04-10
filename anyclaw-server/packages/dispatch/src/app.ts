@@ -8,6 +8,7 @@ import { emergencyRouter, type EmergencyRouterDeps } from "./rest/emergency.js";
 import { adapterConfigRouter, type AdapterConfigRouterDeps } from "./rest/adapter.js";
 import { webhookCallbackRouter, type WebhookCallbackRouterDeps } from "./rest/webhook-callback.js";
 import { internalApiKeysRouter, type InternalApiKeysDeps } from "./rest/internal-api-keys.js";
+import { versionRouter, type VersionRouterDeps } from "./rest/version.js";
 import type { TasksRepo } from "./persistence/tasks-repo.js";
 import type { PocketBaseLike } from "./persistence/tasks-repo.js";
 import type { AdapterManager } from "./adapters/manager.js";
@@ -26,6 +27,7 @@ export interface BuildAppDeps {
     maxBudgetUsd?: number;
   };
   version?: string;
+  minSkillVersion?: string;
   masterKeyPath?: string;
   authVerify?: AuthDeps["verify"];
   rollbackManager?: EmergencyRouterDeps["rollbackManager"];
@@ -47,6 +49,8 @@ export function buildApp(app: Express, deps: BuildAppDeps): void {
     verify: deps.authVerify ?? (async () => "anonymous"),
   });
 
+  const minSkillVersion = deps.minSkillVersion ?? "1.0.0";
+
   // Health is public (no auth)
   app.use(
     "/api/health",
@@ -55,6 +59,15 @@ export function buildApp(app: Express, deps: BuildAppDeps): void {
       startedAt,
       adapter: deps.adapter,
     } satisfies HealthRouterDeps),
+  );
+
+  // Version / compatibility info is public (no auth)
+  app.use(
+    "/api/version",
+    versionRouter({
+      serverVersion: version,
+      minSkillVersion,
+    } satisfies VersionRouterDeps),
   );
 
   // Webhook callback is called by adapters -- no user auth

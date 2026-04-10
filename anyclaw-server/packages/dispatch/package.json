@@ -12,12 +12,14 @@
     "@anyclaw/mcp-server": "*",
     "@anyclaw/shared": "*",
     "express": "^4.19.2",
+    "semver": "^7.7.4",
     "simple-git": "^3.25.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "@types/semver": "^7.7.1",
     "@types/supertest": "^6.0.2",
     "@types/ws": "^8.5.12",
     "supertest": "^7.0.0"

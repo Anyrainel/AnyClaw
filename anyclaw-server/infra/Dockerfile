@@ -73,6 +73,14 @@ COPY infra/scripts/ /anyclaw/scripts/
 RUN chmod +x /anyclaw/scripts/*.sh
 COPY infra/supervisord.conf /etc/supervisor/conf.d/anyclaw.conf
 
+# Skills bundle (Plan 6)
+COPY skills/raw/ /.anyclaw/skills/raw/
+COPY scripts/package-skills.sh /.anyclaw/scripts/package-skills.sh
+RUN chmod +x /.anyclaw/scripts/package-skills.sh \
+ && bash /.anyclaw/scripts/package-skills.sh generic \
+      --source /.anyclaw/skills/raw \
+      --out /.anyclaw/skills/system-prompt.txt
+
 # Initialize the dev git repo at image-build time so the container is ready
 RUN bash /anyclaw/scripts/init-data-layout.sh \
  && chown -R anyclaw-agent:anyclaw-agent /data/dev
