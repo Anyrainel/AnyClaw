@@ -103,6 +103,26 @@ export class TasksRepo {
     return rows[0]!;
   }
 
+  /** List all _tasks rows in a given state. */
+  async listByState(state: TaskState): Promise<TaskRow[]> {
+    return (await this.col().getFullList({
+      filter: `state = "${state}"`,
+    })) as TaskRow[];
+  }
+
+  /**
+   * Check if a task has any pending (unanswered) clarification.
+   * Returns true if there is at least one row with status = "pending".
+   */
+  async hasPendingClarification(taskId: string): Promise<boolean> {
+    const rows = (await this.pb
+      .collection("_task_clarifications")
+      .getFullList({
+        filter: `taskId = "${taskId}" && status = "pending"`,
+      })) as unknown[];
+    return rows.length > 0;
+  }
+
   /**
    * On server startup, sweep tasks stuck in working/deploying
    * (crash recovery per Decision #40).

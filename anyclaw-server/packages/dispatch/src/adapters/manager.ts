@@ -38,7 +38,22 @@ export class AdapterManager {
         // best effort
       }
     }
-    // resume of clarifying tasks — see Task 12.
+    // Resume clarifying tasks whose clarification has been answered
+    const clarifying = await this.deps.repo.listByState("clarifying");
+    for (const row of clarifying) {
+      const hasPending = await this.deps.repo.hasPendingClarification(
+        row.taskId,
+      );
+      if (hasPending) continue; // still waiting for user answer
+      if (this.deps.adapter.resumeTask) {
+        await this.deps.adapter.resumeTask(row.taskId);
+      } else {
+        // Adapter does not support resume — mark failed
+        await this.deps.repo.applyTransition(row.taskId, "validation_fail", {
+          error: "Adapter does not support resume",
+        });
+      }
+    }
   }
 
   async processQueue(): Promise<void> {

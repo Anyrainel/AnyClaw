@@ -47,7 +47,29 @@ class FakeCollection {
   getFullList(opts?: { filter?: string }): Row[] {
     if (!opts?.filter) return [...this.rows];
     // Support basic OR filters: state = "a" || state = "b"
-    const parts = opts.filter.split("||").map((p) => p.trim());
+    // Support basic AND filters: key = "a" && key = "b"
+    if (opts.filter.includes("||")) {
+      const parts = opts.filter.split("||").map((p) => p.trim());
+      return this.rows.filter((r) =>
+        parts.some((part) => {
+          const m = /(\w+)\s*=\s*"([^"]*)"/.exec(part);
+          if (!m) return false;
+          return r[m[1]!] === m[2];
+        }),
+      );
+    }
+    if (opts.filter.includes("&&")) {
+      const parts = opts.filter.split("&&").map((p) => p.trim());
+      return this.rows.filter((r) =>
+        parts.every((part) => {
+          const m = /(\w+)\s*=\s*"([^"]*)"/.exec(part);
+          if (!m) return false;
+          return r[m[1]!] === m[2];
+        }),
+      );
+    }
+    // Single condition
+    const parts = [opts.filter.trim()];
     return this.rows.filter((r) =>
       parts.some((part) => {
         const m = /(\w+)\s*=\s*"([^"]*)"/.exec(part);
