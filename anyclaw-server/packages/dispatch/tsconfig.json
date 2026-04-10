@@ -5,7 +5,8 @@
     "outDir": "dist"
   },
   "references": [
-    { "path": "../shared" }
+    { "path": "../shared" },
+    { "path": "../mcp-server" }
   ],
   "include": ["src/**/*"]
 }
