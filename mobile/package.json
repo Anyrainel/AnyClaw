@@ -12,15 +12,26 @@
     "typecheck": "tsc --noEmit"
   },
   "jest": {
+    "globals": {
+      "__DEV__": true
+    },
+    "setupFiles": ["./jest.setup.js"],
     "testMatch": [
       "<rootDir>/lib/**/__tests__/**/*.test.ts",
       "<rootDir>/app/**/__tests__/**/*.test.ts",
       "<rootDir>/app/**/__tests__/**/*.test.tsx"
     ],
     "transform": {
-      "\\.[jt]sx?$": ["babel-jest", {
-        "caller": { "name": "metro", "bundler": "metro", "platform": "ios" }
-      }]
+      "\\.[jt]sx?$": [
+        "babel-jest",
+        {
+          "caller": {
+            "name": "metro",
+            "bundler": "metro",
+            "platform": "ios"
+          }
+        }
+      ]
     },
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native|native-base|react-native-svg|pocketbase|libsodium-wrappers|libsodium|zustand|date-fns)"
@@ -63,6 +74,7 @@
     "babel-preset-expo": "^55.0.16",
     "jest": "^30.3.0",
     "jest-expo": "^55.0.15",
+    "react-test-renderer": "^19.1.0",
     "typescript": "~5.9.2"
   },
   "private": true
