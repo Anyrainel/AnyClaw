@@ -26,6 +26,7 @@ export interface AdapterManagerDeps {
 export class AdapterManager {
   private running: string | null = null;
   private controllers = new Map<string, AbortController>();
+  private cancelPromises = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: AdapterManagerDeps) {}
 
@@ -88,6 +89,9 @@ export class AdapterManager {
     } finally {
       this.controllers.delete(next.taskId);
       this.running = null;
+      // If cancel() is in progress, wait for its state transition to land
+      const pending = this.cancelPromises.get(next.taskId);
+      if (pending) await pending;
       const final = await this.deps.repo.getByTaskId(next.taskId);
       if (final.state === "done") {
         await this.deps.worktrees.mergeAndRemove(next.taskId);
@@ -102,11 +106,16 @@ export class AdapterManager {
     status: TaskStatus,
   ): Promise<void> {
     switch (status.state) {
-      case "working":
-        await this.deps.repo.applyTransition(taskId, "progress", {
+      case "working": {
+        // If current state is "clarifying", use "answer" event to transition
+        // back to working; otherwise use "progress" to stay in working.
+        const current = await this.deps.repo.getByTaskId(taskId);
+        const event = current.state === "clarifying" ? "answer" : "progress";
+        await this.deps.repo.applyTransition(taskId, event, {
           progressSummary: status.progressSummary,
         });
         break;
+      }
       case "clarifying":
         await this.deps.repo.applyTransition(taskId, "ask_user", {
           question: status.question,
@@ -131,7 +140,15 @@ export class AdapterManager {
 
   async cancel(taskId: string): Promise<void> {
     this.controllers.get(taskId)?.abort();
-    await this.deps.adapter.cancel(taskId);
-    await this.deps.repo.applyTransition(taskId, "cancel", {});
+    const p = (async () => {
+      await this.deps.adapter.cancel(taskId);
+      await this.deps.repo.applyTransition(taskId, "cancel", {});
+    })();
+    this.cancelPromises.set(taskId, p);
+    try {
+      await p;
+    } finally {
+      this.cancelPromises.delete(taskId);
+    }
   }
 }
