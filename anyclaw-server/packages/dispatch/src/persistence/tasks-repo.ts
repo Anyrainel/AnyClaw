@@ -66,6 +66,37 @@ export class TasksRepo {
     return row as TaskRow;
   }
 
+  /** Read a single _tasks row by taskId, or null if not found. */
+  async tryGet(taskId: string): Promise<TaskRow | null> {
+    try {
+      const row = await this.col().getFirstListItem(`taskId = "${taskId}"`);
+      return row as TaskRow;
+    } catch (e: any) {
+      if (e?.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Mark a task as enqueued. For now this is a no-op since createIfAbsent
+   * already sets state = "queued". Kept as a hook for future queue logic.
+   */
+  async enqueue(_taskId: string): Promise<void> {
+    // state is already "queued" from createIfAbsent
+  }
+
+  /** Write a clarification answer to _task_clarifications. */
+  async writeClarificationAnswer(clarificationId: string, answer: string): Promise<void> {
+    const col = this.pb.collection("_task_clarifications") as any;
+    const row = await col.getFirstListItem(`clarificationId = "${clarificationId}"`);
+    await col.update(row.id, { answer, status: "answered" });
+  }
+
+  /** List all tasks. */
+  async listAll(): Promise<TaskRow[]> {
+    return (await this.col().getFullList()) as TaskRow[];
+  }
+
   /** Read a single _tasks row by taskId. Throws if missing. */
   async getByTaskId(taskId: string): Promise<TaskRow> {
     const row = await this.col().getFirstListItem(`taskId = "${taskId}"`);
