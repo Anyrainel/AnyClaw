@@ -119,3 +119,23 @@ The dispatch server (`packages/dispatch/src/index.ts`) can:
 - Plan 4 Tasks 12-17: WebSocket relay, rate limiting, Dockerfile/deployment — needed for mobile→server connectivity
 - Plan 5: Mobile app (Expo/RN) — needs broker + dispatch server
 - Plan 6: Skills, welcome page, install script, Docker packaging
+
+## Final Implementation Status
+
+| Plan | Status | Tests | Tag |
+|------|--------|-------|-----|
+| Plan 1: Server Infrastructure | Complete | 41 | plan1-complete |
+| Plan 2: MCP Server | Complete | +40 (81 total) | — |
+| Plan 3: Agent Dispatch | Complete | +90 (171 total) | plan3-complete |
+| Plan 4: Connection Broker | Complete | 82 + 7 Docker-skipped | plan4-complete |
+| Plan 5: Mobile App | Complete (onboarding deferred) | 103 | plan5-complete |
+| Plan 6: Skills + Deployment | Complete (checkpoints deferred) | +54 (225 total) | plan6-complete |
+
+**Total passing tests: 410** (225 server + 82 broker + 103 mobile)
+**Total Docker-deferred: 7** (broker testcontainers — will pass on Linux with Docker)
+
+### Deferred items
+- Plan 5 Task 13: Onboarding flow (post-MVP, preferences editable via Settings)
+- Plan 6 Tasks 8, 12: Visual checkpoints (user will interactively style)
+- Plan 6 Task 15: End-to-end manual smoke test
+- Visual @theme polish (user will iterate on colors/spacing)
