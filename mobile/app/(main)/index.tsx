@@ -15,7 +15,6 @@ import {
   parseBridgeMessage,
   buildResolvedPreferencesPayload,
   inject,
-  type BridgeMessage,
 } from "@/lib/bridge";
 import { subscribeToDeployments } from "@/lib/pocketbase";
 import { refreshBrokerJwt } from "@/lib/broker";

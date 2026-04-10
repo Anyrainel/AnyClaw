@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { View, ScrollView, StyleSheet } from "react-native";
+import { ScrollView, StyleSheet } from "react-native";
 import { useTaskStore } from "@/lib/tasks/store";
 import { TaskInput } from "@/components/TaskInput";
 import { TaskCard } from "@/components/TaskCard";
