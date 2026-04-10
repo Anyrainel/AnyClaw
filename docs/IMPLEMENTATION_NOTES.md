@@ -86,3 +86,36 @@ This document accumulates technical decisions and observations made during imple
 **Issue:** From Plan 4 Batch 3 onwards, the Agent tool started failing with `529 overloaded_error` repeatedly (4+ consecutive failures). Some subagents completed significant work before failing (e.g., Plan 4 Batch 3 created the OAuth modules and tests before the API failed on Task 10). The uncommitted work was recovered by direct inspection.
 **Resolution:** Wrote Plan 4 Task 10 (auth routes + middleware) directly without a subagent when repeated retries failed. This is less efficient than delegation but made forward progress.
 **Action needed:** When API is healthier, resume subagent dispatch for remaining batches (Plan 4 Batches 4-5, Plan 3, Plan 5, Plan 6). OR continue writing code directly at slower pace.
+
+## Progress Snapshot (after Plans 1-3 + Plan 4 partial)
+
+| Plan | Status | Tests | Tag |
+|------|--------|-------|-----|
+| Plan 1: Server Infrastructure | Complete | 41 | plan1-complete |
+| Plan 2: MCP Server | Complete | +40 (81 total) | — |
+| Plan 3: Agent Dispatch | Complete | +90 (171 total) | plan3-complete |
+| Plan 4: Broker (Tasks 1-11) | Partial | 58 + 5 skipped | — |
+| Plan 4: Broker (Tasks 12-17) | Deferred | — | — |
+| Plan 5: Mobile App | Not started | — | — |
+| Plan 6: Skills + Deployment | Not started | — | — |
+
+**anyclaw-server monorepo:** 171 tests across 54 files. tsc clean.
+**broker monorepo:** 58 tests + 5 Docker-skipped across 13 files. tsc clean.
+**Total passing tests:** 229 (+ 5 deferred)
+
+### What works now
+The dispatch server (`packages/dispatch/src/index.ts`) can:
+- Start on port 4100
+- Serve /api/health, /api/tasks, /api/settings, /api/device/register, /api/versions
+- Accept task submissions, queue them, dispatch to OpenClaw/ClaudeCode/webhook adapters
+- Handle clarification Q&A with configurable timeout
+- Emergency rollback and app restart
+- MCP HTTP/SSE endpoint with all 7 tools (deploy, rollback, snapshot, create_collection, list_versions, ask_user, update_progress)
+- Task state persistence + crash recovery sweep on startup
+- Per-task git worktree isolation
+- AES-256-GCM encrypted API key storage
+
+### What's next
+- Plan 4 Tasks 12-17: WebSocket relay, rate limiting, Dockerfile/deployment — needed for mobile→server connectivity
+- Plan 5: Mobile app (Expo/RN) — needs broker + dispatch server
+- Plan 6: Skills, welcome page, install script, Docker packaging
