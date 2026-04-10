@@ -12,23 +12,22 @@
     "typecheck": "tsc --noEmit"
   },
   "jest": {
-    "projects": [
-      {
-        "displayName": "lib",
-        "preset": "jest-expo/node",
-        "testMatch": [
-          "<rootDir>/lib/**/__tests__/**/*.test.ts"
-        ]
-      },
-      {
-        "displayName": "app",
-        "preset": "jest-expo",
-        "testMatch": [
-          "<rootDir>/app/**/__tests__/**/*.test.ts",
-          "<rootDir>/app/**/__tests__/**/*.test.tsx"
-        ]
-      }
-    ]
+    "testMatch": [
+      "<rootDir>/lib/**/__tests__/**/*.test.ts",
+      "<rootDir>/app/**/__tests__/**/*.test.ts",
+      "<rootDir>/app/**/__tests__/**/*.test.tsx"
+    ],
+    "transform": {
+      "\\.[jt]sx?$": ["babel-jest", {
+        "caller": { "name": "metro", "bundler": "metro", "platform": "ios" }
+      }]
+    },
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native|native-base|react-native-svg|pocketbase|libsodium-wrappers|libsodium|zustand|date-fns)"
+    ],
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/./$1"
+    }
   },
   "dependencies": {
     "date-fns": "^4.1.0",
