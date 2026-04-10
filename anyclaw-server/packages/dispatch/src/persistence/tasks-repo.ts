@@ -92,6 +92,18 @@ export class TasksRepo {
   }
 
   /**
+   * Return the oldest _tasks row in state = "queued", or null.
+   */
+  async popNextQueued(): Promise<TaskRow | null> {
+    const rows = (await this.col().getFullList({
+      filter: 'state = "queued"',
+    })) as TaskRow[];
+    if (rows.length === 0) return null;
+    // Return the first (oldest) queued row
+    return rows[0]!;
+  }
+
+  /**
    * On server startup, sweep tasks stuck in working/deploying
    * (crash recovery per Decision #40).
    */
