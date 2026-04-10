@@ -1,0 +1,1 @@
+Read-only reference files for the agent. Do not modify.

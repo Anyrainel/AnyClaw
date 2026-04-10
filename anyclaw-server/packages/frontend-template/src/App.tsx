@@ -1,13 +1,10 @@
 import { Routes, Route } from "react-router-dom";
-
-function Home() {
-  return <main className="p-8">AnyClaw template</main>;
-}
+import { Welcome } from "./pages/Welcome.js";
 
 export function App() {
   return (
     <Routes>
-      <Route path="/" element={<Home />} />
+      <Route path="/" element={<Welcome />} />
     </Routes>
   );
 }
