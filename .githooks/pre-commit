@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Runs fast checks (typecheck + tests) scoped to what's staged.
+# broker tests are excluded (testcontainers/Docker too slow for pre-commit).
+set -euo pipefail
+
+STAGED=$(git diff --cached --name-only)
+
+changed_in() { echo "$STAGED" | grep -q "^$1"; }
+
+SERVER_CHANGED=false
+BROKER_CHANGED=false
+MOBILE_CHANGED=false
+
+changed_in "anyclaw-server/" && SERVER_CHANGED=true
+changed_in "broker/"         && BROKER_CHANGED=true
+changed_in "mobile/"         && MOBILE_CHANGED=true
+
+if ! $SERVER_CHANGED && ! $BROKER_CHANGED && ! $MOBILE_CHANGED; then
+  exit 0
+fi
+
+PASS=true
+
+if $SERVER_CHANGED; then
+  echo "[pre-commit] anyclaw-server: typecheck + test"
+  (cd anyclaw-server && npm run typecheck && npm test) || PASS=false
+fi
+
+if $BROKER_CHANGED; then
+  echo "[pre-commit] broker: typecheck"
+  (cd broker && npm run typecheck) || PASS=false
+fi
+
+if $MOBILE_CHANGED; then
+  echo "[pre-commit] mobile: typecheck"
+  (cd mobile && npm run typecheck) || PASS=false
+fi
+
+if ! $PASS; then
+  echo ""
+  echo "pre-commit checks failed. Fix errors above or use --no-verify to skip."
+  exit 1
+fi

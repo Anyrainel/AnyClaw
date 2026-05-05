@@ -139,3 +139,39 @@ The dispatch server (`packages/dispatch/src/index.ts`) can:
 - Plan 6 Tasks 8, 12: Visual checkpoints (user will interactively style)
 - Plan 6 Task 15: End-to-end manual smoke test
 - Visual @theme polish (user will iterate on colors/spacing)
+
+## Session: Documentation & CI Setup (2026-05-05)
+
+Work done in this session to prepare the repo for GitHub publication and machine transition.
+
+### Published to GitHub
+Repo pushed to GitHub as Anyrainel/AnyClaw (public). No CI existed before this session.
+
+### New file: `mobile/lib/pocketbase/sse.ts`
+Added PocketBase SSE subscription module: `initPocketBase`, `subscribeToTask`, `subscribeToAgentMessages`, `subscribeToDeployments`. All subscriptions decrypt NaCl-boxed envelopes via pairing keys from `loadPairingKeys`.
+
+### Docs restructured
+- `docs/superpowers/specs/2026-04-04-anyclaw-design.md` → `docs/design.md`
+- `docs/superpowers/plans/plan1–6` → `docs/tasks/plan1–6` (completed task checklists, preserved for reference)
+- Created `docs/plan1-server-infrastructure-design.md` (was missing — restored from implementation)
+- `docs/superpowers/` namespace removed
+
+### READMEs added
+Root `README.md` plus per-module READMEs for: broker, mobile, anyclaw-server, shared, dispatch, mcp-server, tunnel-manager, logic-runner, prod-static, frontend-template.
+
+### CLAUDE.md added
+Project-level agent guidance: repo layout, test commands, TypeScript strictness conventions, key patterns (ANYCLAW_DATA_ROOT, libsodium pin, deploy flow, MCP token lifecycle), commit conventions, WIP status.
+
+### CI pipeline added
+`.github/workflows/ci.yml` — three parallel jobs (anyclaw-server / broker / mobile), each runs typecheck then tests. Broker job uses ubuntu-latest (Docker available for testcontainers).
+
+### Git hooks added
+- `.githooks/pre-commit` — typecheck + tests scoped to staged modules; broker gets typecheck-only (testcontainers too slow)
+- `.githooks/pre-push` — full suite across all three modules
+- `scripts/setup-hooks.sh` — one-time setup (`git config core.hooksPath .githooks`)
+
+### Critical remaining items (for next machine / session)
+1. **Tunnel integration** — `tunnel-manager` has reconnect stub only. Real WSS handshake with broker (frame relay, service routing per plan4 design) must be implemented and validated with both sides running. Requires Docker environment.
+2. **Docker build** — `infra/Dockerfile` has never been built on Linux. First task on new machine: `docker build -f anyclaw-server/infra/Dockerfile anyclaw-server/` and validate all 5 supervisord processes boot.
+3. **Broker E2E tests** — 7 testcontainers-based broker tests are currently skipped on Windows. Run `cd broker && npm test` on Linux with Docker to confirm green.
+4. **End-to-end smoke test** — No test exercises the full path: mobile → broker → tunnel → dispatch → agent → deploy → version in mobile. Write after tunnel integration is complete.

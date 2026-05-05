@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Runs the full test suite across all modules before push.
+# broker tests require Docker (testcontainers); skip with --no-verify if unavailable.
+set -euo pipefail
+
+PASS=true
+
+echo "[pre-push] anyclaw-server: typecheck + test"
+(cd anyclaw-server && npm run typecheck && npm test) || PASS=false
+
+echo "[pre-push] broker: typecheck + test"
+(cd broker && npm run typecheck && npm test) || PASS=false
+
+echo "[pre-push] mobile: typecheck + test"
+(cd mobile && npm run typecheck && npm test) || PASS=false
+
+if ! $PASS; then
+  echo ""
+  echo "pre-push checks failed. Fix errors above or use --no-verify to skip."
+  exit 1
+fi

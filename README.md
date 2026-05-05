@@ -74,6 +74,16 @@ AnyClaw/
 - **Git-backed versioning.** Every deploy is a git commit. Rollback reverts both code and the SQLite snapshot taken before deployment.
 - **User cannot see the code.** The only control surface is the mobile app. Errors must be explicit, versions must be descriptive, and every deploy must pass the full test cycle before promoting.
 
+## Development Setup
+
+After cloning, configure the git hooks:
+
+```bash
+bash scripts/setup-hooks.sh
+```
+
+Pre-commit runs typecheck + tests scoped to changed modules. Pre-push runs the full suite. Both can be skipped with `--no-verify` when Docker is unavailable (broker tests require Docker for testcontainers).
+
 ## Documentation
 
 Start with [docs/design.md](docs/design.md) for product principles and design language, then the numbered plan docs for each subsystem's architecture.
