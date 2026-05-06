@@ -6,7 +6,10 @@ let container: StartedPostgreSqlContainer | null = null;
 let url: string | null = null;
 
 export async function startPg(): Promise<string> {
-  if (url) return url;
+  if (container) {
+    // Reuse existing container
+    return url!;
+  }
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   url = container.getConnectionUri();
   await runMigrations(url);

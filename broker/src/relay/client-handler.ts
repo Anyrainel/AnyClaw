@@ -53,13 +53,23 @@ export function registerClientRelay(
     connMap.addClient({ ws, userId, serverId, clientId });
 
     // Notify the host.
-    srv.ws.send(
-      encodeFrame({
-        type: 'connection_request',
-        client_id: clientId,
-        session_id: sessionId,
-      } as Envelope),
-    );
+    try {
+      srv.ws.send(
+        encodeFrame({
+          type: 'connection_request',
+          client_id: clientId,
+          session_id: sessionId,
+        } as Envelope),
+      );
+    } catch {
+      // Host disconnected between check and send; clean up.
+      connMap.removeClient(clientId);
+      ws.close(4004, 'server_offline');
+      return;
+    }
+
+    // Capture srv reference in closure — it won't change, but the connMap might.
+    const hostWs = srv.ws;
 
     ws.on('message', (raw: Buffer) => {
       // Byte-for-byte forward to the paired host. Peek client_id only to
@@ -72,17 +82,25 @@ export function registerClientRelay(
       } catch {
         return;
       }
-      srv.ws.send(raw);
+      try {
+        hostWs.send(raw);
+      } catch {
+        // Host gone; nothing to do.
+      }
     });
 
     ws.on('close', () => {
       connMap.removeClient(clientId);
-      srv.ws.send(
-        encodeFrame({
-          type: 'stream_close',
-          client_id: clientId,
-        } as Envelope),
-      );
+      try {
+        hostWs.send(
+          encodeFrame({
+            type: 'stream_close',
+            client_id: clientId,
+          } as Envelope),
+        );
+      } catch {
+        // Host gone; nothing to do.
+      }
     });
   });
 }

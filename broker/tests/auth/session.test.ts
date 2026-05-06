@@ -24,7 +24,9 @@ d('auth/session', () => {
     sql = postgres(url, { max: 2 }) as unknown as DB;
   });
   afterAll(async () => {
-    await (sql as unknown as { end: () => Promise<void> }).end();
+    if (sql) {
+      await (sql as unknown as { end: () => Promise<void> }).end();
+    }
     await stopPg();
   });
   beforeEach(async () => {

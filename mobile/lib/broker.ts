@@ -27,7 +27,7 @@ export async function loginWithProvider(
     throw new Error("OAuth cancelled");
   }
 
-  const code = (result as { type: "success"; params: { code: string } }).params.code;
+  const code = (result as unknown as { type: "success"; params: { code: string } }).params.code;
 
   const response = await fetch(`${BROKER_BASE}/auth/exchange`, {
     method: "POST",
