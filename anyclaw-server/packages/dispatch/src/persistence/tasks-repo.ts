@@ -154,6 +154,18 @@ export class TasksRepo {
     return rows.length > 0;
   }
 
+  /** Update the session ID for a task (used by Claude Code adapter). */
+  async updateSessionId(taskId: string, sessionId: string): Promise<void> {
+    const row = await this.getByTaskId(taskId);
+    await this.col().update(row.id, { sessionId });
+  }
+
+  /** Read session ID for a task (used for resume). */
+  async getSessionId(taskId: string): Promise<string | undefined> {
+    const row = await this.getByTaskId(taskId);
+    return row.sessionId as string | undefined;
+  }
+
   /**
    * On server startup, sweep tasks stuck in working/deploying
    * (crash recovery per Decision #40).
