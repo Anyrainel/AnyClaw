@@ -31,12 +31,26 @@ export class OpenClawAdapter implements AgentAdapter {
   constructor(private readonly opts: OpenClawOptions) {}
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string | undefined }> {
-    try {
-      await this.ensureConnected();
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, detail: e.message };
-    }
+    // Quick check: try to open a WebSocket with short timeout
+    return new Promise((resolve) => {
+      const ws = new WebSocket(this.opts.gatewayUrl, {
+        headers: { authorization: `Bearer ${this.opts.token}` },
+        handshakeTimeout: 3000,
+      });
+      const timer = setTimeout(() => {
+        ws.terminate();
+        resolve({ ok: false, detail: "Gateway connection timeout" });
+      }, 3000);
+      ws.on("open", () => {
+        clearTimeout(timer);
+        ws.close();
+        resolve({ ok: true });
+      });
+      ws.on("error", (err) => {
+        clearTimeout(timer);
+        resolve({ ok: false, detail: err.message });
+      });
+    });
   }
 
   private async ensureConnected(): Promise<void> {

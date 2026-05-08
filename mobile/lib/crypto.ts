@@ -89,5 +89,8 @@ export function decryptJSON<T>(
     theirPk,
     mySk
   );
+  if (plaintext === false) {
+    throw new Error("Decryption failed");
+  }
   return JSON.parse(sodium.to_string(plaintext)) as T;
 }

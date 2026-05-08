@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
+import { writeFile } from "fs/promises";
 import { createInterface } from "readline";
 import { AsyncQueue } from "../util/async-queue.js";
 import {
@@ -51,6 +52,23 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     ctx: SystemContext,
     signal: AbortSignal,
   ): Promise<TaskHandle> {
+    // Write MCP config before spawning the child process
+    await writeFile(
+      ctx.mcpConfigPath,
+      JSON.stringify({
+        mcpServers: {
+          anyclaw: {
+            url: ctx.mcpEndpointUrl,
+            headers: {
+              authorization: `Bearer ${ctx.mcpBearerToken}`,
+              "x-anyclaw-task-id": taskId,
+            },
+          },
+        },
+      }, null, 2),
+      "utf8",
+    );
+
     // Build args for headless mode with streaming I/O
     const args = [
       ...(this.opts.executableArgs ?? []),
