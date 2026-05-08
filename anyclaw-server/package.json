@@ -11,8 +11,8 @@
     "lint": "echo \"(lint wired in later plans)\""
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "typescript": "^5.4.5",
-    "vitest": "^4.0.0"
+    "@types/node": "^22.15.14",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.5"
   }
 }

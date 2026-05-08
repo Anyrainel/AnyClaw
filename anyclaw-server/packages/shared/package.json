@@ -16,6 +16,5 @@
     "simple-git": "^3.36.0"
   },
   "devDependencies": {
-    "@types/libsodium-wrappers": "^0.7.14"
   }
 }

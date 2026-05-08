@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import http from "http";
+import { mkdtemp } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import { buildServer } from "../../src/index.js";
 import { makeFakePb, seedTask } from "../unit/helpers/fake-pb.js";
 import type { DispatchConfig } from "../../src/adapters/types.js";
@@ -13,6 +16,7 @@ const TEST_CONFIG: DispatchConfig = {
 };
 
 let server: http.Server | undefined;
+let tmpDir: string | undefined;
 
 afterEach(async () => {
   if (server) {
@@ -21,10 +25,15 @@ afterEach(async () => {
   }
 });
 
+async function buildTestServer(pb?: ReturnType<typeof makeFakePb>) {
+  tmpDir = await mkdtemp(join(tmpdir(), "anyclaw-boot-"));
+  return buildServer({ config: TEST_CONFIG, pb, dataRoot: tmpDir });
+}
+
 describe("buildServer", () => {
   it("returns an http.Server that responds to GET /api/health", async () => {
     const pb = makeFakePb();
-    const result = await buildServer({ config: TEST_CONFIG, pb });
+    const result = await buildTestServer(pb);
     server = result.server;
     await new Promise<void>((r) => server!.listen(0, "127.0.0.1", r));
     const addr = server.address() as { port: number };
@@ -36,7 +45,7 @@ describe("buildServer", () => {
 
   it("mounts the MCP route from @anyclaw/mcp-server", async () => {
     const pb = makeFakePb();
-    const result = await buildServer({ config: TEST_CONFIG, pb });
+    const result = await buildTestServer(pb);
     server = result.server;
     await new Promise<void>((r) => server!.listen(0, "127.0.0.1", r));
     const addr = server.address() as { port: number };
@@ -53,7 +62,7 @@ describe("buildServer", () => {
   it("runs AdapterManager.onStartup (sweep) before accepting traffic", async () => {
     const pb = makeFakePb();
     seedTask(pb, "stranded", "working");
-    await buildServer({ config: TEST_CONFIG, pb });
+    await buildTestServer(pb);
     const row = pb
       .collection("_tasks")
       .getFirstListItem('taskId = "stranded"');

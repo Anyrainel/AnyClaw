@@ -1,4 +1,5 @@
 import { simpleGit, type SimpleGit } from "simple-git";
+import { mkdirSync } from "node:fs";
 
 export interface Version {
   sha: string;
@@ -16,6 +17,7 @@ export class VersionStore {
   private git: SimpleGit;
 
   constructor(public readonly repoDir: string) {
+    mkdirSync(repoDir, { recursive: true });
     this.git = simpleGit(repoDir);
   }
 
