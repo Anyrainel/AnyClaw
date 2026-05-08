@@ -12,15 +12,14 @@ import { versionRouter, type VersionRouterDeps } from "./rest/version.js";
 import type { TasksRepo } from "./persistence/tasks-repo.js";
 import type { PocketBaseLike } from "./persistence/tasks-repo.js";
 import type { AdapterManager } from "./adapters/manager.js";
+import type { AgentAdapter } from "./adapters/types.js";
 
 export interface BuildAppDeps {
   pb: PocketBaseLike;
   repo: TasksRepo;
   manager: AdapterManager;
   worktrees: { create(taskId: string): Promise<string> };
-  adapter: {
-    healthCheck(): Promise<{ ok: boolean; detail?: string | undefined }>;
-  };
+  adapter: AgentAdapter;
   config: {
     clarificationTimeoutMode?: string;
     clarificationTimeoutMs?: number;
@@ -86,6 +85,7 @@ export function buildApp(app: Express, deps: BuildAppDeps): void {
     tasksRouter({
       repo: deps.repo,
       manager: deps.manager,
+      adapter: deps.adapter,
       buildSystemContext: deps.buildSystemContext ?? (async () => ({})),
       worktrees: deps.worktrees,
     } satisfies TasksRouterDeps),

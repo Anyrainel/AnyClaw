@@ -64,6 +64,7 @@ export interface AgentAdapter {
   subscribe(taskId: string, signal: AbortSignal): AsyncIterable<TaskStatus>;
   answerQuestion(taskId: string, clarificationId: string, answer: string): Promise<void>;
   cancel(taskId: string): Promise<void>;
+  sendMessage?(taskId: string, message: string): Promise<void>;
   resumeTask?(taskId: string): Promise<void>;
   dispose(): Promise<void>;
 }

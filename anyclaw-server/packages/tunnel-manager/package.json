@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@anyclaw/shared": "*",
-    "ws": "^8.17.0"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/ws": "^8.5.10"

@@ -59,12 +59,10 @@ function makeAdapter(config: DispatchConfig, repo: TasksRepo, _paths: AnyClawPat
       return new WebhookAdapter({
         dispatchUrl,
         callbackBaseUrl,
-        tasksRepo: repo,
       });
     }
     default: {
-      // Exhaustive check — if TypeScript narrows correctly this is unreachable.
-      // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
+      // Exhaustive check
       throw new Error(`Unknown adapter: ${config.adapter}`);
     }
   }

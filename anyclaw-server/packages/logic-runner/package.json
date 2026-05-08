@@ -10,12 +10,12 @@
   },
   "dependencies": {
     "@anyclaw/shared": "*",
-    "chokidar": "^3.6.0",
-    "express": "^4.19.2"
+    "chokidar": "^4.0.3",
+    "express": "^5.2.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
-    "supertest": "^7.0.0",
-    "@types/supertest": "^6.0.2"
+    "@types/supertest": "^6.0.2",
+    "supertest": "^7.0.0"
   }
 }

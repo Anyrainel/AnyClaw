@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { TasksRepo } from "../persistence/tasks-repo.js";
 import type { AdapterManager } from "../adapters/manager.js";
+import type { AgentAdapter } from "../adapters/types.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SubmitBody = z.object({
@@ -16,6 +17,7 @@ const AnswerBody = z.object({
 export interface TasksRouterDeps {
   repo: TasksRepo;
   manager: Pick<AdapterManager, "cancel" | "processQueue">;
+  adapter: Pick<AgentAdapter, "sendMessage">;
   buildSystemContext: (taskId: string) => Promise<unknown>;
   worktrees: { create(taskId: string): Promise<string> };
 }
@@ -90,6 +92,26 @@ export function tasksRouter(deps: TasksRouterDeps): Router {
   r.get("/", async (_req, res, next) => {
     try {
       res.json(await deps.repo.listAll());
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  r.post("/:taskId/message", async (req, res, next) => {
+    try {
+      const { message } = z.object({ message: z.string().min(1).max(8000) }).parse(req.body);
+      const taskId = req.params.taskId;
+      const row = await deps.repo.getByTaskId(taskId);
+      if (!row) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      if (!deps.adapter.sendMessage) {
+        res.status(501).json({ error: "not_implemented", detail: "Adapter does not support messaging" });
+        return;
+      }
+      await deps.adapter.sendMessage(taskId, message);
+      res.status(204).end();
     } catch (e) {
       next(e);
     }

@@ -9,12 +9,6 @@ import {
 export interface WebhookOptions {
   dispatchUrl: string;
   callbackBaseUrl: string;
-  tasksRepo: {
-    streamStatus(
-      taskId: string,
-      signal: AbortSignal,
-    ): AsyncIterable<TaskStatus>;
-  };
 }
 
 export class WebhookAdapter implements AgentAdapter {
@@ -59,7 +53,14 @@ export class WebhookAdapter implements AgentAdapter {
   }
 
   subscribe(taskId: string, signal: AbortSignal): AsyncIterable<TaskStatus> {
-    return this.opts.tasksRepo.streamStatus(taskId, signal);
+    // Webhook adapter relies on external provider pushing status updates.
+    // Return an empty async iterable since updates come via REST callbacks.
+    return (async function* () {
+      while (!signal.aborted) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (signal.aborted) break;
+      }
+    })();
   }
 
   async answerQuestion(
