@@ -3,39 +3,75 @@
 ## Goal
 Enable native mobile apps (iOS/Android) to connect directly to user's self-hosted server via WireGuard VPN tunnel. Eliminate broker traffic relay to save costs. Broker only handles OAuth, server registry, and initial pairing.
 
-## Architecture Overview
+## Connection Methods (Prioritized)
+
+The app tries multiple connection methods in order:
+
+### 1. Direct Public IP (fastest, no tunnel overhead)
+- For: VPS, cloud servers, port-forwarded home networks
+- Server exposes ports directly: `:4100` (API), `:5173` (frontend), `:8090` (PocketBase)
+- Client connects via HTTPS/TLS (if user has cert) or HTTP (local/debug)
+- No WireGuard needed, no broker relay
+
+### 2. WireGuard Tunnel (for home/self-hosted behind NAT)
+- For: Home servers, Raspberry Pi, any device behind router
+- Automatic NAT traversal via UDP hole punching
+- Encrypted tunnel, stable internal IPs
+- Requires WireGuard on both sides
+
+### 3. Broker Relay (emergency fallback, disabled by default)
+- Only if both above fail
+- Requires explicit user opt-in
+- Metered/bandwidth-limited
+
+## Server Configuration
+
+```typescript
+interface ServerConnectionConfig {
+  // Method 1: Direct public IP
+  publicEndpoint?: {
+    host: string;      // "203.0.113.42" or "myserver.example.com"
+    apiPort: number;   // 4100
+    appPort: number;   // 5173
+    pbPort: number;    // 8090
+    useTls: boolean;   // true if user has cert
+  };
+  
+  // Method 2: WireGuard tunnel
+  wireguard?: {
+    serverPublicKey: string;
+    endpoint: string;  // "auto" or "192.168.1.100:51820" for local
+    port: number;      // 51820
+    tunnelIp: string;  // "10.64.0.1"
+    clientTunnelIp: string; // "10.64.0.2"
+  };
+  
+  // Preferred method
+  preferredMethod: 'direct' | 'wireguard';
+}
+```
+
+## Connection Flow (Updated)
 
 ```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│   Mobile App    │         │     Broker      │         │  User's Server  │
-│ (iOS/Android)   │         │  (your cloud)   │         │  (self-hosted)  │
-└────────┬────────┘         └────────┬────────┘         └────────┬────────┘
-         │                           │                           │
-         │  1. OAuth → JWT           │                           │
-         │  2. GET /servers          │                           │
-         │  (list my servers)        │                           │
-         │                           │                           │
-         │  3. Select server         │                           │
-         │  4. Get connection info   │                           │
-         │     (WireGuard pubkey,    │                           │
-         │      endpoint, tunnel IP)  │                           │
-         │                           │                           │
-         │◀═════════════════════════════════════════════════════│
-         │  5. Establish WireGuard tunnel                        │
-         │     (direct UDP, NAT traversal)                      │
-         │                           │                           │
-         │◀═════════════════════════════════════════════════════│
-         │  6. All API calls direct  │                           │
-         │     HTTP over tunnel      │                           │
-         │     to server:4100, :5173 │                           │
-         │                           │                           │
-         │                           │                           │
-         │  ... server IP changes ...│                           │
-         │                           │                           │
-         │  7. Connection drops      │                           │
-         │  8. Query broker for      │                           │
-         │     updated endpoint      │                           │
-         │  9. Re-establish tunnel   │                           │
+Client selects server from list
+↓
+Get server connection config from broker
+↓
+IF server has publicEndpoint AND preferredMethod === 'direct':
+  Try direct connection to https://host:port
+  IF success → use direct (skip WireGuard)
+  IF fail → try WireGuard fallback
+↓
+IF server has wireguard config OR direct failed:
+  Configure WireGuard tunnel
+  Connect via tunnel IP (10.64.0.1:4100)
+↓
+IF both fail:
+  Show error, suggest:
+  - Check if server is online
+  - Enable port forwarding for direct access
+  - Or use WireGuard (works through NAT)
 ```
 
 ## Components to Modify
@@ -186,7 +222,13 @@ Client scans:
 
 ## Implementation Phases
 
-### Phase 1: Server WireGuard Setup
+### Phase 0: Direct Public IP (simplest, for VPS users)
+1. Server detects if it has public IP on boot
+2. If yes, report public endpoint to broker
+3. Client tries direct connection first
+4. Works immediately for VPS/cloud users
+
+### Phase 1: Server WireGuard Setup (for home users)
 1. Add `wireguard-tools` or `wireguard-go` to Docker image
 2. Generate server keys on first boot
 3. Configure WireGuard interface (`wg0`)
@@ -194,21 +236,21 @@ Client scans:
 5. Report WireGuard info to broker on registration
 
 ### Phase 2: Broker Minimal Mode
-1. Add WireGuard columns to database
+1. Add connection columns to database (publicEndpoint + wireguard)
 2. Add `/servers/:id/connection` endpoint
 3. Remove WebSocket relay routes (or make optional)
 4. Update server heartbeat to accept endpoint info
 
-### Phase 3: Mobile WireGuard Integration
-1. Add `react-native-wireguard-vpn` dependency
-2. Configure Expo plugin
-3. Implement new connection flow
-4. Replace broker relay API client with direct HTTP
+### Phase 3: Mobile Multi-Method Connection
+1. Implement direct connection attempt (public IP)
+2. Add WireGuard fallback (NAT traversal)
+3. Replace broker relay API client with direct HTTP
 
 ### Phase 4: Testing
-1. Local testing: server + mobile on same network
-2. NAT testing: server behind router, mobile on cellular
-3. End-to-end: full agent task execution
+1. VPS direct connection test
+2. Local testing: server + mobile on same network
+3. NAT testing: server behind router, mobile on cellular
+4. End-to-end: full agent task execution
 
 ## Security Considerations
 
@@ -231,6 +273,7 @@ Client scans:
 ### New Files
 - `anyclaw-server/packages/wireguard/src/index.ts`
 - `anyclaw-server/packages/wireguard/src/config.ts`
+- `anyclaw-server/packages/direct-connect/src/index.ts` (public IP detection)
 - `mobile/lib/wireguard.ts`
 - `mobile/lib/direct-api.ts`
 
@@ -247,8 +290,8 @@ Client scans:
 
 ## Next Steps
 
-1. Decide on kernel vs userspace WireGuard
-2. Implement server-side WireGuard setup
-3. Update broker database schema
-4. Test WireGuard library in mobile app
-5. Integrate with existing connection flow
+1. **Start with Phase 0**: Direct public IP connection (works for VPS users immediately)
+2. Server auto-detects public IP on boot
+3. Client tries direct first, falls back to WireGuard
+4. Test with your existing VPS setup
+5. Then add WireGuard for home users
