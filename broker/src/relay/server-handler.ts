@@ -32,17 +32,43 @@ export function registerServerRelay(
         const version = String(env.version ?? '');
         const serverPk = Buffer.from(String(env.server_pk), 'base64url');
         const caps = (env.capabilities as string[]) ?? [];
+        const connMode = String(env.connection_mode ?? 'broker_relay');
+        const publicHost = env.public_host ? String(env.public_host) : null;
+        const publicApiPort = env.public_api_port ? Number(env.public_api_port) : null;
+        const publicAppPort = env.public_app_port ? Number(env.public_app_port) : null;
+        const publicPbPort = env.public_pb_port ? Number(env.public_pb_port) : null;
+        const publicUseTls = env.public_use_tls !== undefined ? Boolean(env.public_use_tls) : null;
+        const wgPublicKey = env.wg_public_key ? String(env.wg_public_key) : null;
+        const wgEndpoint = env.wg_endpoint ? String(env.wg_endpoint) : null;
+        const wgTunnelIp = env.wg_tunnel_ip ? String(env.wg_tunnel_ip) : null;
+        const wgPort = env.wg_port ? Number(env.wg_port) : null;
         let claimedId = row.server_id as string | null;
 
         if (!claimedId) {
           const [s] = await db`
-            INSERT INTO servers (user_id, name, version, server_pk, capabilities, status, last_heartbeat)
-            VALUES (${row.user_id}, ${name}, ${version}, ${serverPk}, ${caps}, 'online', now())
+            INSERT INTO servers (
+              user_id, name, version, server_pk, capabilities, status,
+              last_heartbeat, connection_mode, public_host, public_api_port,
+              public_app_port, public_pb_port, public_use_tls, wg_public_key,
+              wg_endpoint, wg_tunnel_ip, wg_port
+            )
+            VALUES (
+              ${row.user_id}, ${name}, ${version}, ${serverPk}, ${caps}, 'online',
+              now(), ${connMode}, ${publicHost}, ${publicApiPort},
+              ${publicAppPort}, ${publicPbPort}, ${publicUseTls}, ${wgPublicKey},
+              ${wgEndpoint}, ${wgTunnelIp}, ${wgPort}
+            )
             RETURNING id`;
           claimedId = s!.id as string;
           await db`UPDATE server_tokens SET claimed = true, server_id = ${claimedId} WHERE token = ${token}`;
         } else {
-          await db`UPDATE servers SET status = 'online', last_heartbeat = now(), version = ${version} WHERE id = ${claimedId}`;
+          await db`UPDATE servers SET status = 'online', last_heartbeat = now(), version = ${version},
+            connection_mode = ${connMode}, public_host = ${publicHost},
+            public_api_port = ${publicApiPort}, public_app_port = ${publicAppPort},
+            public_pb_port = ${publicPbPort}, public_use_tls = ${publicUseTls},
+            wg_public_key = ${wgPublicKey}, wg_endpoint = ${wgEndpoint},
+            wg_tunnel_ip = ${wgTunnelIp}, wg_port = ${wgPort}
+            WHERE id = ${claimedId}`;
         }
 
         serverId = claimedId;
@@ -59,7 +85,29 @@ export function registerServerRelay(
       }
 
       if (env.type === 'heartbeat' && serverId) {
-        await db`UPDATE servers SET status = 'online', last_heartbeat = now() WHERE id = ${serverId}`;
+        const connMode = env.connection_mode ? String(env.connection_mode) : undefined;
+        const publicHost = env.public_host ? String(env.public_host) : undefined;
+        const publicApiPort = env.public_api_port ? Number(env.public_api_port) : undefined;
+        const publicAppPort = env.public_app_port ? Number(env.public_app_port) : undefined;
+        const publicPbPort = env.public_pb_port ? Number(env.public_pb_port) : undefined;
+        const publicUseTls = env.public_use_tls !== undefined ? Boolean(env.public_use_tls) : undefined;
+        const wgPublicKey = env.wg_public_key ? String(env.wg_public_key) : undefined;
+        const wgEndpoint = env.wg_endpoint ? String(env.wg_endpoint) : undefined;
+        const wgTunnelIp = env.wg_tunnel_ip ? String(env.wg_tunnel_ip) : undefined;
+        const wgPort = env.wg_port ? Number(env.wg_port) : undefined;
+
+        await db`UPDATE servers SET status = 'online', last_heartbeat = now()
+          ${connMode ? db`, connection_mode = ${connMode}` : db``}
+          ${publicHost !== undefined ? db`, public_host = ${publicHost}` : db``}
+          ${publicApiPort !== undefined ? db`, public_api_port = ${publicApiPort}` : db``}
+          ${publicAppPort !== undefined ? db`, public_app_port = ${publicAppPort}` : db``}
+          ${publicPbPort !== undefined ? db`, public_pb_port = ${publicPbPort}` : db``}
+          ${publicUseTls !== undefined ? db`, public_use_tls = ${publicUseTls}` : db``}
+          ${wgPublicKey !== undefined ? db`, wg_public_key = ${wgPublicKey}` : db``}
+          ${wgEndpoint !== undefined ? db`, wg_endpoint = ${wgEndpoint}` : db``}
+          ${wgTunnelIp !== undefined ? db`, wg_tunnel_ip = ${wgTunnelIp}` : db``}
+          ${wgPort !== undefined ? db`, wg_port = ${wgPort}` : db``}
+          WHERE id = ${serverId}`;
         ws.send(
           encodeFrame({
             type: 'heartbeat_ack',

@@ -10,6 +10,8 @@ export type ConnectionState =
   | "connected"
   | "reconnecting";
 
+export type ConnectionMode = "public_ip" | "wireguard" | "public_tunnel" | "broker_relay";
+
 const BACKOFF_SCHEDULE = [1000, 2000, 4000, 8000, 16000, 30000];
 
 function getBackoffDelay(attempt: number): number {
@@ -26,6 +28,7 @@ interface ConnectionStore {
   sessionToken: string | null;
   pbAuthToken: string | null;
   connectionState: ConnectionState;
+  connectionMode: ConnectionMode;
   _backoffAttempt: number;
 
   restoreSession: () => Promise<void>;
@@ -43,6 +46,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   sessionToken: null,
   pbAuthToken: null,
   connectionState: "disconnected",
+  connectionMode: "broker",
   _backoffAttempt: 0,
 
   restoreSession: async () => {
@@ -51,9 +55,10 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
 
     const sessionToken = await SecureStore.getItemAsync("session_token");
     const serverUrl = await SecureStore.getItemAsync("server_url");
+    const connectionMode = (await SecureStore.getItemAsync("connection_mode")) as ConnectionMode ?? "broker_relay";
 
     if (!sessionToken || !serverUrl) {
-      set({ isAuthenticated: true });
+      set({ isAuthenticated: true, connectionMode });
       return;
     }
 
@@ -61,6 +66,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       isAuthenticated: true,
       serverUrl,
       sessionToken,
+      connectionMode,
       connectionState: "connecting",
     });
 
@@ -86,10 +92,11 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
 
   reconnect: async (delayFn = defaultDelay) => {
     let attempt = 0;
+    const { connectionMode } = get();
 
     while (true) {
-      // On first attempt, refresh broker JWT
-      if (attempt === 0) {
+      // On first attempt, refresh broker JWT only in broker_relay mode
+      if (attempt === 0 && connectionMode === "broker_relay") {
         try {
           await refreshBrokerJwt();
         } catch {
@@ -119,6 +126,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     await SecureStore.deleteItemAsync("broker_jwt");
     await SecureStore.deleteItemAsync("session_token");
     await SecureStore.deleteItemAsync("server_url");
+    await SecureStore.deleteItemAsync("connection_mode");
 
     set({
       isAuthenticated: false,
@@ -127,6 +135,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       sessionToken: null,
       pbAuthToken: null,
       connectionState: "disconnected",
+      connectionMode: "broker_relay",
       _backoffAttempt: 0,
     });
   },

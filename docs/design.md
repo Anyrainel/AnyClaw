@@ -88,52 +88,66 @@ When the user replaces it with their first real feature, the welcome page is pre
 - **Self-hosted (plugin):** User already has a coding agent (OpenClaw, Claude Code, etc.). Installs AnyClaw MCP server + skills + infrastructure alongside it. Free. User provides their own LLM API keys.
 - **Self-hosted (standalone):** A single install script sets up everything from scratch — a default agent (OpenClaw) + AnyClaw infrastructure. Free. User provides their own LLM API keys.
 - **Cloud-hosted:** Monthly subscription. AnyClaw hosts the full stack (one container per subscriber) on Hetzner. LLM tokens bundled or BYOK.
-- **Connection broker:** A lightweight cloud service run by AnyClaw that authenticates users and brokers connections between the mobile app and the server. Handles NAT traversal. Content flows end-to-end encrypted — the broker only relays opaque bytes.
+
+## Connection Options
+
+The mobile app can connect to the user's server through multiple paths:
+
+1. **Broker relay (legacy):** A lightweight cloud service run by AnyClaw that authenticates users and brokers connections between the mobile app and the server. Content flows end-to-end encrypted — the broker only relays opaque bytes. **Note: Broker relay is being phased out.**
+2. **Direct tunnel (recommended):** User provides their own tunnel URL (Cloudflare Tunnel, ngrok, or any WSS-capable reverse proxy). The mobile app connects directly to this endpoint. No broker involvement, no bandwidth limits, full user control.
+3. **Local network:** When mobile and server are on the same network, direct HTTP/WebSocket connection without tunneling.
+
+**Default:** Direct tunnel mode. The user provides a tunnel URL during setup or in settings.
 
 ## Architecture
 
 ### System Diagram
 
 ```
-+---------------------+         +-------------------+         +-----------------------+
-|   Mobile App        |         |  Connection       |         |  User's Host          |
-|   (Expo/RN)         | <-----> |  Broker           | <-----> |  (one Docker          |
-|                     |  auth   |  (Cloud)          |  signal |   container or        |
-|  +---------------+  |         +-------------------+         |   native install)     |
-|  | Native Shell  |  |                                       |                       |
-|  | - Task Card   |  |       NaCl-encrypted relay (E2E)      |  ┌── supervisord ───┐ |
-|  | - Versions    |  | <-----------------------------------> |  │                  │ |
-|  | - Settings    |  |                                       |  │  Tunnel Manager  │ |
-|  +---------------+  |                                       |  │  PocketBase      │ |
-|  +---------------+  |                                       |  │  Dispatch/MCP    │ |
-|  | WebView       |  |                                       |  │  Logic Service   │ |
-|  | (agent-built  |  |                                       |  │  Prod Static     │ |
-|  |  React app)   |  |                                       |  └──────────────────┘ |
-|  +---------------+  |                                       |                       |
-+---------------------+                                       |  Transient (per task) |
-                                                              |  ┌─ cgroup limits ──┐ |
-                                                              |  │                  │ |
-                                                              |  │  Coding Agent    │ |
-                                                              |  │  (Claude Code    │ |
-                                                              |  │   or OpenClaw)   │ |
-                                                              |  │        │         │ |
-                                                              |  │        ▼  uses   │ |
-                                                              |  │  AnyClaw MCP     │ |
-                                                              |  │  (HTTP/SSE)      │ |
-                                                              |  │        │         │ |
-                                                              |  │        ▼         │ |
-                                                              |  │  Vite Dev        │ |
-                                                              |  │  (for testing)   │ |
-                                                              |  └──────────────────┘ |
-                                                              |                       |
-                                                              |  Filesystem:          |
-                                                              |  - dev/ (agent rw,    |
-                                                              |    worktree per task) |
-                                                              |  - prod/ (deployed)   |
-                                                              |  - .anyclaw/ (infra,  |
-                                                              |    agent read-only)   |
-                                                              +-----------------------+
++---------------------+         +-----------------------+
+|   Mobile App        |         |  User's Host          |
+|   (Expo/RN)         | <-----> |  (one Docker          |
+|                     |  WSS    |   container or        |
+|  +---------------+  |  tunnel |   native install)     |
+|  | Native Shell  |  |         |                       |
+|  | - Task Card   |  |         |  ┌── supervisord ───┐ |
+|  | - Versions    |  |         |  │                  │ |
+|  | - Settings    |  |         |  │  Tunnel Manager  │ |
+|  +---------------+  |         |  │  PocketBase      │ |
+|  +---------------+  |         |  │  Dispatch/MCP    │ |
+|  | WebView       |  |         |  │  Logic Service   │ |
+|  | (agent-built  |  |         |  │  Prod Static     │ |
+|  |  React app)   |  |         |  └──────────────────┘ |
+|  +---------------+  |         |                       |
++---------------------+         |  Transient (per task) |
+                                |  ┌─ cgroup limits ──┐ |
+                                |  │                  │ |
+                                |  │  Coding Agent    │ |
+                                |  │  (Claude Code    │ |
+                                |  │   or OpenClaw)   │ |
+                                |  │        │         │ |
+                                |  │        ▼  uses   │ |
+                                |  │  AnyClaw MCP     │ |
+                                |  │  (HTTP/SSE)      │ |
+                                |  │        │         │ |
+                                |  │        ▼         │ |
+                                |  │  Vite Dev        │ |
+                                |  │  (for testing)   │ |
+                                |  └──────────────────┘ |
+                                |                       |
+                                |  Filesystem:          |
+                                |  - dev/ (agent rw,    |
+                                |    worktree per task) |
+                                |  - prod/ (deployed)   |
+                                |  - .anyclaw/ (infra,  |
+                                |    agent read-only)   |
+                                +-----------------------+
 ```
+
+**Connection paths:**
+1. **Direct tunnel (default):** Mobile app connects directly to a user-provided WSS URL (Cloudflare Tunnel, ngrok, etc.). The tunnel manager on the host accepts this connection.
+2. **Broker relay (legacy):** Mobile app connects to `broker.anyclawapp.com`, which relays to the host. Still supported but not the default.
+3. **Local network:** Direct HTTP connection when both devices are on the same network.
 
 ### Layer 1: Mobile App (Client)
 
@@ -550,10 +564,10 @@ All decisions below are binding for implementation.
 | Agent dispatch | Pluggable adapters (OpenClaw gateway, Claude Code `-p`, generic webhook) |
 | Process supervision | systemd --user (primary), supervisord (fallback) |
 | Containerization | Docker / docker-compose (one container per user) |
-| Tunnel (phased) | WSS relay → WebRTC P2P → Cloudflare fallback |
+| Tunnel (phased) | WSS relay → WebRTC P2P → ~~Cloudflare fallback~~ → **User-provided tunnel (Cloudflare/ngrok/etc.)** |
 | E2E encryption | NaCl (libsodium-wrappers) on top of TLS |
 | Secret encryption | AES-256-GCM in dispatch server |
-| Broker | Node.js or Go API server, Hetzner (US East) |
+| Broker | Node.js or Go API server, Hetzner (US East) | **Deprecated** — broker relay being phased out in favor of user-provided tunnels |
 
 ## Pricing
 

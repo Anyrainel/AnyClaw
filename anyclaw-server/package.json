@@ -7,7 +7,7 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/shared packages/dispatch packages/tunnel-manager packages/logic-runner packages/prod-static packages/frontend-template",
+    "typecheck": "tsc -b packages/shared packages/dispatch packages/tunnel-manager packages/logic-runner packages/prod-static packages/frontend-template packages/direct-connect packages/wireguard",
     "test:ci": "npm run build && npm run typecheck && npm test",
     "lint": "echo \"(lint wired in later plans)\""
   },

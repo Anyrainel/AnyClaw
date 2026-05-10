@@ -201,6 +201,102 @@ describe('server relay handler', () => {
     ws.close();
   });
 
+  it('registers a new server with connection fields', async () => {
+    db.__script([
+      // SELECT from server_tokens — valid, not yet claimed
+      [{
+        token: TOKEN,
+        user_id: USER_ID,
+        mobile_pk: Buffer.alloc(32),
+        expires_at: new Date(Date.now() + 300_000),
+        claimed: false,
+        server_id: null,
+      }],
+      // INSERT INTO servers RETURNING id
+      [{ id: SERVER_ID }],
+      // UPDATE server_tokens SET claimed
+      [],
+    ]);
+    app = await buildApp(db, connMap);
+    await app.listen({ port: 0, host: '127.0.0.1' });
+
+    const ws = await openWs(wsUrl(app, TOKEN));
+    const msgPromise = waitForMessage(ws);
+
+    const registerFrame = encodeFrame({
+      type: 'register',
+      client_id: '',
+      server_pk: Buffer.alloc(32, 1).toString('base64url'),
+      server_name: 'test-server',
+      version: '0.1.0',
+      capabilities: ['pb'],
+      connection_mode: 'public_ip',
+      public_host: '203.0.113.42',
+      public_api_port: 4100,
+      public_app_port: 5173,
+      public_pb_port: 8090,
+      public_use_tls: true,
+      wg_public_key: 'wg-pub-key',
+      wg_endpoint: '203.0.113.42:51820',
+      wg_tunnel_ip: '10.64.0.1',
+      wg_port: 51820,
+    } as Envelope);
+    ws.send(registerFrame);
+
+    const raw = await msgPromise;
+    const { env } = decodeFrame(raw);
+    expect(env.type).toBe('registered');
+    expect(env.server_id).toBe(SERVER_ID);
+    expect(connMap.getServer(SERVER_ID)).toBeDefined();
+    ws.close();
+  });
+
+  it('handles heartbeat with connection field updates', async () => {
+    db.__script([
+      // SELECT from server_tokens
+      [{
+        token: TOKEN,
+        user_id: USER_ID,
+        mobile_pk: Buffer.alloc(32),
+        expires_at: new Date(Date.now() + 300_000),
+        claimed: false,
+        server_id: null,
+      }],
+      // INSERT INTO servers
+      [{ id: SERVER_ID }],
+      // UPDATE server_tokens
+      [],
+      // UPDATE servers (heartbeat with connection fields)
+      [],
+    ]);
+    app = await buildApp(db, connMap);
+    await app.listen({ port: 0, host: '127.0.0.1' });
+
+    const ws = await openWs(wsUrl(app, TOKEN));
+
+    // Register first
+    const regPromise = waitForMessage(ws);
+    ws.send(makeRegisterFrame());
+    await regPromise;
+
+    // Now send heartbeat with connection updates
+    const hbPromise = waitForMessage(ws);
+    const hbFrame = encodeFrame({
+      type: 'heartbeat',
+      client_id: '',
+      connection_mode: 'wireguard',
+      wg_public_key: 'new-wg-key',
+      wg_endpoint: '198.51.100.1:51820',
+    } as Envelope);
+    ws.send(hbFrame);
+
+    const raw = await hbPromise;
+    const { env } = decodeFrame(raw);
+    expect(env.type).toBe('heartbeat_ack');
+    expect(env.timestamp).toBeDefined();
+    ws.close();
+  });
+
   it('handles heartbeat and returns heartbeat_ack', async () => {
     db.__script([
       // SELECT from server_tokens

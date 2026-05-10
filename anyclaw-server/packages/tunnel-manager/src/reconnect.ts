@@ -1,5 +1,7 @@
 export interface ReconnectOptions {
-  brokerUrl: string;
+  mode: "broker" | "direct" | "wireguard" | "public_tunnel";
+  brokerUrl?: string;
+  tunnelUrl?: string;
   onAttempt: (attempt: number, delayMs: number) => void;
   maxDelayMs?: number;
   baseDelayMs?: number;
@@ -9,6 +11,9 @@ export interface ReconnectOptions {
 /**
  * Plan 1 stub: computes the backoff schedule and invokes onAttempt for each
  * attempt. Plan 4 replaces the body with a real WebSocket connection.
+ *
+ * In direct mode, the tunnelUrl is the user-provided Cloudflare/ngrok endpoint.
+ * The tunnel manager connects directly instead of going through the broker.
  */
 export async function reconnectLoop(opts: ReconnectOptions): Promise<void> {
   const base = opts.baseDelayMs ?? 1000;
