@@ -98,4 +98,4 @@ EXPOSE 8090 4100 5173 3000
 VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyclaw.conf"]
+CMD ["/bin/bash", "-lc", "/anyclaw/scripts/init-data-layout.sh && exec /usr/bin/supervisord -c /etc/supervisor/conf.d/anyclaw.conf"]

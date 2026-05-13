@@ -23,13 +23,17 @@ if (isMain) {
     // eslint-disable-next-line no-console
     console.log(`[tunnel-manager] mode=${cfg.mode} broker=${cfg.brokerUrl ?? "(none)"} tunnel=${cfg.tunnelUrl ?? "(none)"} routes pb=${router.portFor("pb")} api=${router.portFor("api")} app=${router.portFor("app")}`);
 
-    return reconnectLoop({
+    await reconnectLoop({
       mode: cfg.mode,
       brokerUrl: cfg.brokerUrl ?? undefined,
       tunnelUrl: cfg.tunnelUrl ?? undefined,
       onAttempt: (n, d) => console.log(`[tunnel-manager] (stub) connect attempt ${n} would wait ${d}ms`),
       stopAfter: 1,
     });
+
+    // Baseline local mode does not open a real tunnel yet, but supervisor
+    // should still see the manager as healthy instead of a short-lived task.
+    await new Promise(() => undefined);
   }).catch(err => {
     // eslint-disable-next-line no-console
     console.error(`[tunnel-manager] startup failed:`, err);
