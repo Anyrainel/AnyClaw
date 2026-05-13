@@ -1,7 +1,18 @@
 @import 'tailwindcss';
 
-/* Plan 6 fills in real color values. This is only a placeholder to prove the
-   template builds. */
 @theme {
-  --color-primary: #000000;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-surface: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-muted: #64748b;
+  --color-danger: #dc2626;
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-border: #e2e8f0;
+}
+
+body {
+  background-color: #ffffff;
+  color: var(--color-foreground);
 }

@@ -46,7 +46,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   sessionToken: null,
   pbAuthToken: null,
   connectionState: "disconnected",
-  connectionMode: "broker",
+  connectionMode: "broker_relay",
   _backoffAttempt: 0,
 
   restoreSession: async () => {

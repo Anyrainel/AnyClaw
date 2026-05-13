@@ -1,0 +1,49 @@
+services:
+  anyclaw:
+    build:
+      context: ./anyclaw-server
+      dockerfile: infra/Dockerfile
+    container_name: anyclaw
+    ports:
+      - "8090:8090"   # PocketBase
+      - "4100:4100"   # Dispatch API
+      - "5173:5173"   # Prod static frontend
+      - "3000:3000"   # Logic runner
+    environment:
+      # Adapter selection: openclaw | claude-code | webhook
+      - ADAPTER=claude-code
+      - PORT=4100
+      - ANYCLAW_DATA_ROOT=/data
+      - ANYCLAW_VERSION=0.1.0
+      # OpenClaw adapter config (uncomment if using ADAPTER=openclaw)
+      # - OPENCLAW_GATEWAY_URL=ws://host.docker.internal:18789/gateway
+      # - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      # - OPENCLAW_WORKSPACE=anyclaw-test
+      # Claude Code adapter config
+      - CLAUDE_CODE_PATH=claude
+      - MAX_TASK_DURATION_MS=600000
+      - CLARIFICATION_TIMEOUT_MS=300000
+      - CLARIFICATION_TIMEOUT_MODE=best_judgment
+      - MAX_BUDGET_USD=5
+      # Allowed MCP tools
+      - ANYCLAW_ALLOWED_TOOLS=anyclaw_ask_user,anyclaw_update_progress,anyclaw_create_collection,anyclaw_snapshot_db,anyclaw_deploy,anyclaw_rollback,anyclaw_list_versions
+      # Prod-static + logic-runner
+      - PROD_FRONTEND_DIR=/data/prod/frontend-build
+      - LOGIC_BUILD_DIR=/data/prod/logic-build
+      - POCKETBASE_URL=http://127.0.0.1:8090
+      # Tunnel-manager (disabled for baseline — stub mode)
+      - ANYCLAW_CONNECTION_MODE=direct
+    volumes:
+      - anyclaw-data:/data
+      - anyclaw-logs:/var/log/anyclaw
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4100/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  anyclaw-data:
+  anyclaw-logs:

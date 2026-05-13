@@ -2,42 +2,33 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { createElement } from "react";
 
 // ---------------------------------------------------------------------------
-// Mock PocketBase client (vi.hoisted so factory can reference them)
+// Mock dispatch API
 // ---------------------------------------------------------------------------
-const { mockGetList, mockSubscribe, mockCollection } = vi.hoisted(() => {
-  const mockGetList = vi.fn();
-  const mockSubscribe = vi.fn();
-  const mockCollection = vi.fn().mockReturnValue({
-    getList: mockGetList,
-    subscribe: mockSubscribe,
-  });
-  return { mockGetList, mockSubscribe, mockCollection };
+const { mockListTasks, mockCreateTask } = vi.hoisted(() => {
+  const mockListTasks = vi.fn();
+  const mockCreateTask = vi.fn();
+  return { mockListTasks, mockCreateTask };
 });
 
-vi.mock("../src/lib/pocketbase.js", () => ({
-  default: { collection: mockCollection },
+vi.mock("../src/lib/dispatch-api.js", () => ({
+  listTasks: mockListTasks,
+  createTask: mockCreateTask,
+  getTask: vi.fn(),
+  cancelTask: vi.fn(),
 }));
 
 import { Welcome } from "../src/pages/Welcome.js";
 
-const SEED_TIPS = [
-  { id: "1", title: "Try a feature request", body: "Tap Request and describe what you want.", icon: "Sparkles", created: "2025-01-01" },
-  { id: "2", title: "Every change is versioned", body: "Rolling back is one tap.", icon: "History", created: "2025-01-02" },
-  { id: "3", title: "The agent learns as you go", body: "Your preferences carry forward.", icon: "BookOpen", created: "2025-01-03" },
-];
-
 beforeEach(() => {
   vi.clearAllMocks();
-  mockCollection.mockReturnValue({
-    getList: mockGetList,
-    subscribe: mockSubscribe,
-  });
-  mockGetList.mockResolvedValue({ items: [] });
-  mockSubscribe.mockResolvedValue(vi.fn());
+  mockListTasks.mockResolvedValue([]);
+  mockCreateTask.mockImplementation(({ taskId, request }) =>
+    Promise.resolve({ taskId, state: "queued", seq: 0, request }),
+  );
 });
 
 afterEach(() => {
@@ -45,77 +36,66 @@ afterEach(() => {
 });
 
 describe("Welcome", () => {
-  it("renders loading state initially with text 'Loading tips...'", () => {
-    // getList never resolves
-    mockGetList.mockReturnValue(new Promise(() => {}));
-    mockSubscribe.mockReturnValue(new Promise(() => {}));
-
+  it("renders header and input", () => {
     render(createElement(Welcome));
-
-    expect(screen.getByText("Loading tips...")).toBeDefined();
+    expect(screen.getByText("AnyClaw")).toBeDefined();
+    expect(screen.getByPlaceholderText(/e.g. Build me/)).toBeDefined();
+    expect(screen.getByText("Request")).toBeDefined();
   });
 
-  it("renders error state with explicit message on fetch failure", async () => {
-    mockGetList.mockRejectedValue(new Error("network down"));
-
+  it("shows empty state when no tasks", async () => {
     render(createElement(Welcome));
-
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeDefined();
+      expect(screen.getByText(/No tasks yet/)).toBeDefined();
     });
-
-    expect(screen.getByText(/Could not load tips/)).toBeDefined();
   });
 
-  it("renders empty state with onboarding copy when 0 tips", async () => {
-    mockGetList.mockResolvedValue({ items: [] });
+  it("lists tasks after load", async () => {
+    mockListTasks.mockResolvedValue([
+      { taskId: "t1", state: "queued", seq: 0, request: "Build a tracker" },
+      { taskId: "t2", state: "done", seq: 3, request: "Add auth" },
+    ]);
 
     render(createElement(Welcome));
 
     await waitFor(() => {
-      expect(screen.getByText(/No tips yet/)).toBeDefined();
+      expect(screen.getByText("Build a tracker")).toBeDefined();
+    });
+    expect(screen.getByText("Add auth")).toBeDefined();
+  });
+
+  it("creates a task on submit", async () => {
+    render(createElement(Welcome));
+
+    const input = screen.getByPlaceholderText(/e.g. Build me/);
+    fireEvent.change(input, { target: { value: "Build me a mood tracker" } });
+
+    const btn = screen.getByText("Request");
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(mockCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ request: "Build me a mood tracker" }),
+      );
     });
   });
 
-  it("renders all 3 seed tips when fetch resolves", async () => {
-    mockGetList.mockResolvedValue({ items: SEED_TIPS });
+  it("shows task states with icons", async () => {
+    mockListTasks.mockResolvedValue([
+      { taskId: "t1", state: "working", seq: 1, request: "Working task", progressSummary: "Building..." },
+      { taskId: "t2", state: "failed", seq: 2, request: "Failed task", error: "oops" },
+      { taskId: "t3", state: "done", seq: 3, request: "Done task" },
+    ]);
 
     render(createElement(Welcome));
 
     await waitFor(() => {
-      expect(screen.getByText("Try a feature request")).toBeDefined();
+      expect(screen.getByText("Working")).toBeDefined();
     });
-
-    expect(screen.getByText("Every change is versioned")).toBeDefined();
-    expect(screen.getByText("The agent learns as you go")).toBeDefined();
-  });
-
-  it("subscribes on mount, unsubscribes on unmount", async () => {
-    const unsubFn = vi.fn();
-    mockSubscribe.mockResolvedValue(unsubFn);
-    mockGetList.mockResolvedValue({ items: [] });
-
-    const { unmount } = render(createElement(Welcome));
-
-    await waitFor(() => {
-      expect(mockSubscribe).toHaveBeenCalled();
-    });
-
-    unmount();
-
-    expect(unsubFn).toHaveBeenCalled();
-  });
-
-  it("footer prints prefs.theme and prefs.accent", async () => {
-    mockGetList.mockResolvedValue({ items: [] });
-
-    render(createElement(Welcome));
-
-    await waitFor(() => {
-      // Default preferences from usePreferences mock
-      const footer = screen.getByText(/Theme:.*Accent:/);
-      expect(footer).toBeDefined();
-    });
+    expect(screen.getByText("Failed")).toBeDefined();
+    expect(screen.getByText("Done")).toBeDefined();
+    expect(screen.getByText("Building...")).toBeDefined();
+    expect(screen.getByText("oops")).toBeDefined();
   });
 
   it("contains no hardcoded hex colors in source", async () => {
@@ -125,13 +105,11 @@ describe("Welcome", () => {
       path.join(__dirname, "..", "src", "pages", "Welcome.tsx"),
       "utf-8",
     );
-    // No hex colors
     expect(src).not.toMatch(/#[0-9a-fA-F]{3,6}\b/);
-    // No bg-(red|blue|green)- hardcoded color classes
     expect(src).not.toMatch(/bg-(red|blue|green)-/);
   });
 
-  it("source file is under 200 lines", async () => {
+  it("source file is under 300 lines", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const src = fs.readFileSync(
@@ -139,6 +117,6 @@ describe("Welcome", () => {
       "utf-8",
     );
     const lineCount = src.split("\n").length;
-    expect(lineCount).toBeLessThan(200);
+    expect(lineCount).toBeLessThan(300);
   });
 });

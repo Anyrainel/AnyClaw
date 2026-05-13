@@ -1,44 +1,33 @@
-import { useState, useEffect, useRef } from "react";
-import { Sparkles, History, BookOpen, AlertCircle, Loader2 } from "lucide-react";
-import type { UnsubscribeFunc } from "pocketbase";
-import pb from "../lib/pocketbase.js";
-import { usePreferences } from "../hooks/usePreferences.js";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Sparkles, Send, Loader2, AlertCircle, CheckCircle, XCircle, RefreshCw } from "lucide-react";
+import { createTask, listTasks, getTask, cancelTask, type TaskSummary } from "../lib/dispatch-api.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-interface Tip {
-  id: string;
-  title: string;
-  body: string;
-  icon: string;
-  created: string;
+interface TaskView extends TaskSummary {
+  isLoading?: boolean;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Constants                                                          */
-/* ------------------------------------------------------------------ */
-
-const EXAMPLE_PROMPTS = [
-  "Build me a daily mood tracker",
-  "Set up a news feed for...",
-  "Create a simple habit tracker",
-] as const;
-
-const ICON_MAP: Record<string, React.ElementType> = {
-  Sparkles,
-  History,
-  BookOpen,
-};
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function TipIcon({ name }: { name: string }) {
-  const Icon = ICON_MAP[name] ?? Sparkles;
-  return <Icon className="size-5 shrink-0 text-primary" aria-hidden />;
+function stateIcon(state: string) {
+  switch (state) {
+    case "done": return <CheckCircle className="size-4 text-success" aria-hidden />;
+    case "failed": return <XCircle className="size-4 text-danger" aria-hidden />;
+    case "cancelled": return <XCircle className="size-4 text-muted" aria-hidden />;
+    case "working": return <Loader2 className="size-4 animate-spin text-primary" aria-hidden />;
+    case "clarifying": return <AlertCircle className="size-4 text-warning" aria-hidden />;
+    case "deploying": return <Loader2 className="size-4 animate-spin text-primary" aria-hidden />;
+    default: return <Sparkles className="size-4 text-muted" aria-hidden />;
+  }
+}
+
+function stateLabel(state: string): string {
+  return state.charAt(0).toUpperCase() + state.slice(1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -46,132 +35,207 @@ function TipIcon({ name }: { name: string }) {
 /* ------------------------------------------------------------------ */
 
 export function Welcome() {
-  const [tips, setTips] = useState<Tip[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [prompt, setPrompt] = useState("");
+  const [tasks, setTasks] = useState<TaskView[]>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const unsubRef = useRef<UnsubscribeFunc | null>(null);
-  const prefs = usePreferences();
+  const [submitting, setSubmitting] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Load tasks on mount
   useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        const res = await pb.collection("tips").getList<Tip>(1, 50);
-        if (!cancelled) {
-          setTips(res.items);
-          setLoading(false);
-        }
-      } catch {
-        if (!cancelled) {
-          setError("Could not load tips. PocketBase may be starting up.");
-          setLoading(false);
-        }
-      }
-
-      try {
-        const unsub = await pb.collection("tips").subscribe<Tip>("*", (e) => {
-          if (cancelled) return;
-          if (e.action === "create") setTips((t) => [...t, e.record]);
-          if (e.action === "update")
-            setTips((t) => t.map((r) => (r.id === e.record.id ? e.record : r)));
-          if (e.action === "delete")
-            setTips((t) => t.filter((r) => r.id !== e.record.id));
-        });
-        if (cancelled) unsub();
-        else unsubRef.current = unsub;
-      } catch {
-        /* SSE unavailable — initial fetch is enough */
-      }
-    }
-
-    load();
+    loadTasks();
     return () => {
-      cancelled = true;
-      unsubRef.current?.();
+      if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
 
+  // Poll active tasks every 3s
+  useEffect(() => {
+    const active = tasks.filter(t => t.state === "queued" || t.state === "working" || t.state === "clarifying" || t.state === "deploying");
+    if (active.length > 0 && !pollRef.current) {
+      pollRef.current = setInterval(() => {
+        refreshActiveTasks();
+      }, 3000);
+    } else if (active.length === 0 && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current && active.length === 0) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [tasks]);
+
+  const loadTasks = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listTasks();
+      setTasks(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshActiveTasks = async () => {
+    setTasks(prev =>
+      prev.map(t =>
+        t.state === "queued" || t.state === "working" || t.state === "clarifying" || t.state === "deploying"
+          ? { ...t, isLoading: true }
+          : t
+      )
+    );
+    try {
+      const data = await listTasks();
+      setTasks(data);
+    } catch {
+      // silently fail on poll
+    }
+  };
+
+  const handleSubmit = useCallback(async () => {
+    if (!prompt.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const taskId = crypto.randomUUID();
+      await createTask({ taskId, request: prompt.trim() });
+      setPrompt("");
+      await loadTasks();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [prompt]);
+
+  const handleCancel = async (taskId: string) => {
+    try {
+      await cancelTask(taskId);
+      await loadTasks();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
+    <main className="mx-auto max-w-2xl px-4 py-8">
       {/* Header */}
-      <header className="mb-10 text-center">
+      <header className="mb-8 text-center">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">
-          Welcome to AnyClaw
+          AnyClaw
         </h1>
-        <p className="mt-3 text-base text-muted">
-          Tap <strong>Request</strong> and describe what you want in plain
-          words. The agent will build it for you.
+        <p className="mt-2 text-base text-muted">
+          Describe what you want and the agent will build it.
         </p>
       </header>
 
-      {/* Example prompts */}
-      <section className="mb-10" aria-label="Example prompts">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">
-          Try something like...
-        </h2>
-        <ul className="space-y-2">
-          {EXAMPLE_PROMPTS.map((prompt) => (
+      {/* Task input */}
+      <section className="mb-8" aria-label="New task">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+            placeholder="e.g. Build me a daily mood tracker"
+            className="flex-1 rounded-lg border border-border bg-white px-4 py-3 text-sm text-foreground shadow-sm outline-none focus:ring-2 focus:ring-primary"
+            disabled={submitting}
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !prompt.trim()}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <Send className="size-4" aria-hidden />
+            )}
+            {submitting ? "Sending..." : "Request"}
+          </button>
+        </div>
+      </section>
+
+      {/* Error */}
+      {error && (
+        <div className="mb-6 flex items-center gap-2 rounded-lg bg-surface px-4 py-3 text-sm text-danger" role="alert">
+          <AlertCircle className="size-4 shrink-0" aria-hidden />
+          {error}
+        </div>
+      )}
+
+      {/* Task list */}
+      <section aria-label="Tasks">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+            Tasks
+          </h2>
+          <button
+            onClick={loadTasks}
+            disabled={loading}
+            className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+          >
+            <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} aria-hidden />
+            Refresh
+          </button>
+        </div>
+
+        {tasks.length === 0 && !loading && (
+          <p className="text-sm text-muted">
+            No tasks yet. Type something above and hit Request.
+          </p>
+        )}
+
+        <ul className="space-y-3">
+          {tasks.map((task) => (
             <li
-              key={prompt}
-              className="rounded-lg bg-surface px-4 py-3 text-sm text-foreground shadow-sm"
+              key={task.taskId}
+              className="rounded-lg border border-border bg-surface px-4 py-3 shadow-sm"
             >
-              &ldquo;{prompt}&rdquo;
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    {stateIcon(task.state)}
+                    <span className="text-xs font-medium uppercase tracking-wide text-muted">
+                      {stateLabel(task.state)}
+                    </span>
+                    {task.isLoading && (
+                      <Loader2 className="size-3 animate-spin text-muted" aria-hidden />
+                    )}
+                  </div>
+                  <p className="mt-1 truncate text-sm text-foreground">
+                    {task.request || task.taskId}
+                  </p>
+                  {task.progressSummary && (
+                    <p className="mt-1 text-xs text-muted line-clamp-2">
+                      {task.progressSummary}
+                    </p>
+                  )}
+                  {task.error && (
+                    <p className="mt-1 text-xs text-danger line-clamp-2">
+                      {task.error}
+                    </p>
+                  )}
+                </div>
+                {(task.state === "queued" || task.state === "working" || task.state === "clarifying") && (
+                  <button
+                    onClick={() => handleCancel(task.taskId)}
+                    className="shrink-0 rounded-md px-2 py-1 text-xs text-danger hover:bg-surface"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       </section>
-
-      {/* Tips (data-fetching demo) */}
-      <section aria-label="Things to know">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">
-          Things to know
-        </h2>
-
-        {loading && (
-          <div className="flex items-center gap-2 text-sm text-muted" role="status">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-            Loading tips...
-          </div>
-        )}
-
-        {error && (
-          <div className="flex items-center gap-2 rounded-lg bg-surface px-4 py-3 text-sm text-danger" role="alert">
-            <AlertCircle className="size-4 shrink-0" aria-hidden />
-            {error}
-          </div>
-        )}
-
-        {!loading && !error && tips.length === 0 && (
-          <p className="text-sm text-muted">
-            No tips yet. The agent will populate this section as you use AnyClaw.
-          </p>
-        )}
-
-        {!loading && !error && tips.length > 0 && (
-          <ul className="space-y-3">
-            {tips.map((tip) => (
-              <li
-                key={tip.id}
-                className="flex items-start gap-3 rounded-lg bg-surface px-4 py-3 shadow-sm"
-              >
-                <TipIcon name={tip.icon} />
-                <div>
-                  <p className="text-sm font-medium text-foreground">
-                    {tip.title}
-                  </p>
-                  <p className="mt-0.5 text-sm text-muted">{tip.body}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Footer */}
-      <footer className="mt-12 text-center text-xs text-muted">
-        Theme: {prefs.theme} &middot; Accent: {prefs.accent}
-      </footer>
     </main>
   );
 }

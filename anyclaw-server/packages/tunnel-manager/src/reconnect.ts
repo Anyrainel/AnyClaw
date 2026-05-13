@@ -1,11 +1,11 @@
 export interface ReconnectOptions {
   mode: "broker" | "direct" | "wireguard" | "public_tunnel";
-  brokerUrl?: string;
-  tunnelUrl?: string;
+  brokerUrl?: string | undefined;
+  tunnelUrl?: string | undefined;
   onAttempt: (attempt: number, delayMs: number) => void;
-  maxDelayMs?: number;
-  baseDelayMs?: number;
-  stopAfter?: number; // test hook
+  maxDelayMs?: number | undefined;
+  baseDelayMs?: number | undefined;
+  stopAfter?: number | undefined; // test hook
 }
 
 /**

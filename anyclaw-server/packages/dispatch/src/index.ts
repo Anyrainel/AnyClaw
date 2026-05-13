@@ -308,6 +308,7 @@ const isMain =
 
 if (isMain) {
   const port = Number(process.env.PORT ?? 4100);
+  const host = process.env.HOST ?? "127.0.0.1";
   const config: DispatchConfig = {
     adapter: (process.env.ADAPTER as DispatchConfig["adapter"]) ?? "openclaw",
     maxTaskDurationMs: Number(process.env.MAX_TASK_DURATION_MS ?? 600_000),
@@ -318,9 +319,9 @@ if (isMain) {
   };
   buildServer({ config })
     .then(({ server }) => {
-      server.listen(port, "127.0.0.1", () => {
+      server.listen(port, host, () => {
         // eslint-disable-next-line no-console
-        console.log(`[dispatch] listening on 127.0.0.1:${port}`);
+        console.log(`[dispatch] listening on ${host}:${port}`);
       });
     })
     .catch((err) => {

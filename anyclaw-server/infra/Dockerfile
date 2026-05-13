@@ -34,13 +34,17 @@ RUN groupadd --system anyclaw-infra \
  && groupadd --system anyclaw-agent \
  && useradd  --system --gid anyclaw-agent --home /data/dev --shell /bin/bash anyclaw-agent
 
-# Bundle all 5 supervised packages + shared (runtime artifacts only)
+# Bundle all supervised packages + shared (runtime artifacts only)
 RUN mkdir -p /anyclaw/dispatch /anyclaw/shared /anyclaw/tunnel-manager \
-             /anyclaw/logic-runner /anyclaw/prod-static /anyclaw/frontend-template
+             /anyclaw/logic-runner /anyclaw/prod-static /anyclaw/frontend-template \
+             /anyclaw/mcp-server
 COPY --from=builder /build/packages/dispatch/dist             /anyclaw/dispatch/dist
 COPY --from=builder /build/packages/dispatch/package.json     /anyclaw/dispatch/package.json
 COPY --from=builder /build/packages/shared/dist               /anyclaw/shared/dist
 COPY --from=builder /build/packages/shared/package.json       /anyclaw/shared/package.json
+COPY --from=builder /build/packages/shared/node_modules       /anyclaw/shared/node_modules
+COPY --from=builder /build/packages/mcp-server/dist           /anyclaw/mcp-server/dist
+COPY --from=builder /build/packages/mcp-server/package.json   /anyclaw/mcp-server/package.json
 COPY --from=builder /build/packages/tunnel-manager/dist       /anyclaw/tunnel-manager/dist
 COPY --from=builder /build/packages/tunnel-manager/package.json /anyclaw/tunnel-manager/package.json
 COPY --from=builder /build/packages/logic-runner/dist         /anyclaw/logic-runner/dist
@@ -53,6 +57,11 @@ COPY --from=builder /build/packages/frontend-template         /anyclaw/frontend-
 COPY --from=builder /build/node_modules                       /anyclaw/node_modules
 RUN rm -rf /anyclaw/frontend-template/node_modules /anyclaw/frontend-template/dist \
  && chown -R anyclaw-infra:anyclaw-infra /anyclaw
+# Fix workspace symlinks — they point to ../../packages/* from builder stage
+RUN for pkg in dispatch shared mcp-server tunnel-manager logic-runner prod-static frontend-template direct-connect wireguard; do \
+      rm -f /anyclaw/node_modules/@anyclaw/$pkg \
+      && ln -s /anyclaw/$pkg /anyclaw/node_modules/@anyclaw/$pkg; \
+    done
 
 # Data directories
 RUN mkdir -p /data/pocketbase/pb_data \

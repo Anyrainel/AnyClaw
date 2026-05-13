@@ -31,6 +31,7 @@ if [ ! -d "$DATA_ROOT/dev/.git" ]; then
 
   ( cd "$DATA_ROOT/dev" \
     && git init --initial-branch=main \
+    && git config --global --add safe.directory "$DATA_ROOT/dev" \
     && git config user.email "anyclaw@local" \
     && git config user.name  "AnyClaw" \
     && git config commit.gpgsign false \
