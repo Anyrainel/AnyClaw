@@ -9,7 +9,7 @@ type Field = {
 type CollSpec = {
   name: string;
   type?: "base" | "auth";
-  schema: Field[];
+  fields: Field[];
   listRule?: string | null;
   viewRule?: string | null;
   createRule?: string | null;
@@ -28,7 +28,7 @@ const ADMIN_ONLY = {
 
 const TASKS: CollSpec = {
   name: "_tasks",
-  schema: [
+  fields: [
     { name: "taskId", type: "text", required: true, options: { max: 64 } },
     { name: "request", type: "text", required: true },
     {
@@ -40,10 +40,17 @@ const TASKS: CollSpec = {
         values: ["queued", "clarifying", "working", "deploying", "done", "failed", "cancelled"],
       },
     },
-    { name: "agentType", type: "text", required: true },
+    { name: "seq", type: "number" },
+    { name: "adapterType", type: "text", required: true },
+    { name: "systemContext", type: "json" },
     { name: "checkpoint", type: "json" },
     { name: "error", type: "text" },
     { name: "worktreePath", type: "text" },
+    { name: "progressSummary", type: "text" },
+    { name: "question", type: "text" },
+    { name: "clarificationId", type: "text" },
+    { name: "versionDescription", type: "text" },
+    { name: "sessionId", type: "text" },
     { name: "startedAt", type: "date" },
     { name: "finishedAt", type: "date" },
   ],
@@ -53,7 +60,7 @@ const TASKS: CollSpec = {
 
 const AGENT_MESSAGES: CollSpec = {
   name: "_agent_messages",
-  schema: [
+  fields: [
     { name: "taskId", type: "text", required: true },
     {
       name: "direction",
@@ -84,7 +91,7 @@ const AGENT_MESSAGES: CollSpec = {
 
 const VERSIONS: CollSpec = {
   name: "_versions",
-  schema: [
+  fields: [
     { name: "version", type: "text", required: true, options: { max: 32 } },
     { name: "description", type: "text", required: true, options: { min: 10 } },
     { name: "gitCommit", type: "text", required: true, options: { max: 64 } },
@@ -99,7 +106,7 @@ const VERSIONS: CollSpec = {
 
 const USER_PREFS: CollSpec = {
   name: "_user_preferences",
-  schema: [
+  fields: [
     { name: "key", type: "text", required: true },
     { name: "value", type: "json" },
   ],
@@ -109,7 +116,7 @@ const USER_PREFS: CollSpec = {
 
 const API_KEYS: CollSpec = {
   name: "_api_keys",
-  schema: [
+  fields: [
     { name: "name", type: "text", required: true },
     { name: "ciphertext", type: "text", required: true },
     { name: "nonce", type: "text", required: true },
@@ -121,27 +128,56 @@ const API_KEYS: CollSpec = {
 
 const DEPLOYMENTS: CollSpec = {
   name: "_deployments",
-  schema: [
-    { name: "version_tag", type: "text", required: true, options: { max: 64 } },
-    { name: "description", type: "text", required: true },
-    { name: "created_at", type: "autodate" },
+  fields: [
+    { name: "taskId", type: "text" },
+    { name: "versionId", type: "text" },
+    { name: "version_tag", type: "text", options: { max: 64 } },
+    {
+      name: "state",
+      type: "select",
+      options: { maxSelect: 1, values: ["deploying", "deployed", "failed", "rolled_back"] },
+    },
+    { name: "description", type: "text" },
+    { name: "error", type: "text" },
+    { name: "created_at", type: "autodate", options: { onCreate: true, onUpdate: false } },
     { name: "git_sha", type: "text" },
     { name: "db_snapshot_id", type: "text" },
   ],
-  indexes: ["CREATE INDEX idx_deployments_created ON _deployments (created_at)"],
+  indexes: [
+    "CREATE INDEX idx_deploy_task ON _deployments (taskId)",
+    "CREATE INDEX idx_deployments_created ON _deployments (created_at)",
+  ],
   ...ADMIN_ONLY,
 };
 
 const ALL: CollSpec[] = [TASKS, AGENT_MESSAGES, VERSIONS, USER_PREFS, API_KEYS, DEPLOYMENTS];
 
+function toPocketBaseField(field: Field): Record<string, unknown> {
+  return {
+    ...field.options,
+    name: field.name,
+    type: field.type,
+    required: field.required ?? false,
+  };
+}
+
+function toPocketBaseCollection(spec: CollSpec): Record<string, unknown> {
+  return {
+    ...spec,
+    fields: spec.fields.map(toPocketBaseField),
+  };
+}
+
 export async function ensureInternalCollections(pb: PocketBase): Promise<void> {
   for (const spec of ALL) {
+    const collection = toPocketBaseCollection(spec);
     try {
-      await pb.collections.getOne(spec.name);
+      const existing = await pb.collections.getOne(spec.name);
+      await pb.collections.update(existing.id, collection as never);
     } catch (e: unknown) {
       const status = (e as { status?: number } | null)?.status;
       if (status !== 404) throw e;
-      await pb.collections.create(spec as never);
+      await pb.collections.create(collection as never);
     }
   }
 }

@@ -199,7 +199,7 @@ wait_for_pocketbase() {
 bootstrap_pocketbase() {
   info "  Bootstrapping PocketBase superuser ..."
 
-  local admin_email="admin@local"
+  local admin_email="admin@anyclaw.local"
   local admin_password
   admin_password="$(openssl rand -base64 24)"
 

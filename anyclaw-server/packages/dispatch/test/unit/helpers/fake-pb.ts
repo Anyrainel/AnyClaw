@@ -5,7 +5,7 @@
  */
 
 interface Schema { name: string; type: string; required?: boolean; options?: Record<string, unknown> }
-interface CollectionDef { name: string; type: string; schema: Schema[]; indexes?: string[] }
+interface CollectionDef { id?: string; name: string; type: string; fields: Schema[]; indexes?: string[] }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>;
 
@@ -88,14 +88,36 @@ class FakeCollection {
 
 class FakeCollections {
   private defs: CollectionDef[] = [];
+  private autoId = 0;
 
   create(spec: CollectionDef): CollectionDef {
-    this.defs.push(spec);
-    return spec;
+    const def = { id: `col_${++this.autoId}`, ...spec };
+    this.defs.push(def);
+    return def;
+  }
+
+  getOne(name: string): CollectionDef {
+    const found = this.defs.find((def) => def.name === name);
+    if (found) return found;
+    const err = new Error("not found") as Error & { status: number };
+    err.status = 404;
+    throw err;
   }
 
   getFullList(): CollectionDef[] {
     return [...this.defs];
+  }
+
+  update(id: string, spec: CollectionDef): CollectionDef {
+    const idx = this.defs.findIndex((def) => def.id === id);
+    if (idx === -1) {
+      const err = new Error("not found") as Error & { status: number };
+      err.status = 404;
+      throw err;
+    }
+    const def = { ...spec, id };
+    this.defs[idx] = def;
+    return def;
   }
 }
 

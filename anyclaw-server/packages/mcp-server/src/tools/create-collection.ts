@@ -33,6 +33,15 @@ const requireShared = createRequire(import.meta.url);
 const defaultSnap: () => SnapshotManagerLike = () =>
   (requireShared("@anyclaw/shared") as any).snapshotManager;
 
+function toPocketBaseField(field: z.infer<typeof createCollectionInput>["fields"][number]) {
+  return {
+    ...field.options,
+    name: field.name,
+    type: field.type,
+    required: field.required,
+  };
+}
+
 export function makeCreateCollectionHandler(
   snapFactory: () => SnapshotManagerLike = defaultSnap,
   pbFactory: () => PocketBase = getPocketBaseAdmin,
@@ -45,9 +54,7 @@ export function makeCreateCollectionHandler(
     const created = await pbFactory().collections.create({
       name: input.name,
       type: input.type,
-      schema: input.fields.map(f => ({
-        name: f.name, type: f.type, required: f.required, options: f.options ?? {},
-      })),
+      fields: input.fields.map(toPocketBaseField),
       listRule:   input.listRule   ?? null,
       viewRule:   input.viewRule   ?? null,
       createRule: input.createRule ?? null,

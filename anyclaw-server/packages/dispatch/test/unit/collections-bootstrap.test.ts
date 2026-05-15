@@ -19,18 +19,18 @@ describe("ensureDispatchCollections", () => {
     expect((await pb.collections.getFullList()).length).toBe(3);
   });
 
-  it("_devices schema includes user_token, expo_push_token, platform, created_at", async () => {
+  it("_devices schema includes userToken, expoPushToken, platform, created_at", async () => {
     const pb = makeFakePb();
     await ensureDispatchCollections(pb as any);
     const d = (await pb.collections.getFullList()).find(
       (c: any) => c.name === "_devices",
     );
-    const fields = (d as any).schema.map((f: any) => f.name).sort();
+    const fields = (d as any).fields.map((f: any) => f.name).sort();
     expect(fields).toEqual([
       "created_at",
-      "expo_push_token",
+      "expoPushToken",
       "platform",
-      "user_token",
+      "userToken",
     ]);
   });
 });

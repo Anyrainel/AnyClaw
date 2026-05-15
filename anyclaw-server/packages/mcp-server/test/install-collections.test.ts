@@ -14,6 +14,10 @@ function makePbMock() {
         existing.set(spec.name, { id: `id-${spec.name}`, ...spec });
         return { id: `id-${spec.name}`, ...spec };
       }),
+      update: vi.fn(async (id: string, spec: any) => {
+        existing.set(spec.name, { id, ...spec });
+        return { id, ...spec };
+      }),
     },
   };
 }
@@ -37,21 +41,29 @@ describe("ensureInternalCollections", () => {
     await ensureInternalCollections(pb as any);
     await ensureInternalCollections(pb as any);
     expect(pb.collections.create).toHaveBeenCalledTimes(6);
+    expect(pb.collections.update).toHaveBeenCalledTimes(6);
   });
   it("_tasks has expected fields", async () => {
     const pb = makePbMock();
     await ensureInternalCollections(pb as any);
     const tasks = pb.existing.get("_tasks");
-    const fieldNames = tasks.schema.map((f: any) => f.name).sort();
+    const fieldNames = tasks.fields.map((f: any) => f.name).sort();
     expect(fieldNames).toEqual([
-      "agentType",
+      "adapterType",
       "checkpoint",
+      "clarificationId",
       "error",
       "finishedAt",
+      "progressSummary",
+      "question",
       "request",
+      "seq",
+      "sessionId",
       "startedAt",
       "state",
+      "systemContext",
       "taskId",
+      "versionDescription",
       "worktreePath",
     ]);
   });

@@ -1,8 +1,15 @@
 import http from "http";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import express from "express";
-import { mountMcp, registerTaskToken, revokeTaskToken } from "@anyclaw/mcp-server";
+import PocketBase from "pocketbase";
+import {
+  ensureInternalCollections,
+  mountMcp,
+  registerTaskToken,
+  revokeTaskToken,
+} from "@anyclaw/mcp-server";
 import {
   WorktreeManager,
   AnyClawPaths,
@@ -30,6 +37,19 @@ export interface BuildServerOptions {
 
 function makePaths(dataRoot: string) {
   return new AnyClawPaths(dataRoot);
+}
+
+function getPocketBaseAdmin(dataRoot: string): PocketBase {
+  const envToken =
+    process.env.PB_ADMIN_TOKEN ??
+    process.env.POCKETBASE_ADMIN_TOKEN ??
+    process.env.ANYCLAW_PB_TOKEN;
+  const token =
+    envToken ??
+    readFileSync(path.join(dataRoot, ".anyclaw", "pb-token"), "utf8").trim();
+  const pb = new PocketBase(process.env.POCKETBASE_URL ?? "http://127.0.0.1:8090");
+  pb.authStore.save(token, null);
+  return pb;
 }
 
 function makeAdapter(config: DispatchConfig, repo: TasksRepo, _paths: AnyClawPaths): AgentAdapter {
@@ -185,7 +205,8 @@ export async function buildServer(opts: BuildServerOptions) {
   const port = opts.port ?? Number(process.env.PORT ?? 4100);
   const paths = makePaths(dataRoot);
 
-  const pb = opts.pb ?? makeFallbackPb();
+  const pb = opts.pb ?? getPocketBaseAdmin(dataRoot);
+  await ensureInternalCollections(pb as never);
   await ensureDispatchCollections(pb as never);
 
   const repo = new TasksRepo(pb);
@@ -276,28 +297,6 @@ export async function buildServer(opts: BuildServerOptions) {
 
   const server = http.createServer(app);
   return { server, pb, repo, manager, adapter };
-}
-
-/** Fallback PB-like object -- only used if no PB is injected. */
-function makeFallbackPb(): PocketBaseLike {
-  const cols = new Map<string, ReturnType<PocketBaseLike["collection"]>>();
-  return {
-    collection(name: string) {
-      if (!cols.has(name)) {
-        cols.set(name, {
-          create: () => ({}),
-          getFirstListItem: () => { throw Object.assign(new Error("not found"), { status: 404 }); },
-          update: () => ({}),
-          getFullList: () => [],
-        });
-      }
-      return cols.get(name)!;
-    },
-    collections: {
-      getFullList: () => [],
-      create: () => ({}),
-    },
-  } as unknown as PocketBaseLike;
 }
 
 // Entrypoint for `node dist/index.js`

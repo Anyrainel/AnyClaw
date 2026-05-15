@@ -88,3 +88,4 @@ export function mountMcp(app: Express, ctx: McpContext = {}): void {
 }
 
 export { registerTaskToken, revokeTaskToken } from "./auth.js";
+export { ensureInternalCollections } from "./install-collections.js";

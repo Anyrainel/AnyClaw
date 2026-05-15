@@ -12,6 +12,7 @@
     "@anyclaw/mcp-server": "*",
     "@anyclaw/shared": "*",
     "express": "^5.2.1",
+    "pocketbase": "^0.26.8",
     "semver": "^7.7.4",
     "simple-git": "^3.36.0",
     "ws": "^8.20.0",
