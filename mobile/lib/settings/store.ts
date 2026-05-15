@@ -77,10 +77,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
     if (Object.keys(networkPatch).length > 0) {
       try {
-        await (apiClient as unknown as { patch: (path: string, body: unknown) => Promise<unknown> }).patch(
-          "/api/settings",
-          networkPatch
-        );
+        await apiClient.patch("/api/settings", networkPatch);
       } catch {
         // Best-effort — network failure is non-fatal
       }

@@ -26,11 +26,13 @@ jest.mock("../crypto-storage", () => ({
 const mockSubscribe = jest.fn();
 const mockUnsubscribe = jest.fn();
 const mockGetOne = jest.fn();
+const mockGetFirstListItem = jest.fn();
 
 const mockCollection = jest.fn(() => ({
   subscribe: mockSubscribe,
   unsubscribe: mockUnsubscribe,
   getOne: mockGetOne,
+  getFirstListItem: mockGetFirstListItem,
 }));
 
 jest.mock("pocketbase", () => {
@@ -93,7 +95,7 @@ describe("PocketBase SSE wrapper", () => {
 
   test("unsubscribe function calls pb.collection.unsubscribe", async () => {
     initPocketBase("https://relay.example.com", "pb-token-123", "srv-1");
-    mockSubscribe.mockResolvedValue(undefined);
+    mockSubscribe.mockResolvedValue(mockUnsubscribe);
 
     const unsub = await subscribeToTask("task-1", jest.fn(), "srv-1");
     await unsub();
@@ -135,7 +137,7 @@ describe("PocketBase SSE wrapper", () => {
 
     const decryptedRecord = { id: "task-1", state: "working" };
     mockDecryptJSONImpl = () => decryptedRecord;
-    mockGetOne.mockResolvedValue({ ciphertext: "abc", nonce: "def" });
+    mockGetFirstListItem.mockResolvedValue({ ciphertext: "abc", nonce: "def" });
 
     let errorCallback: ((err: unknown) => void) | null = null;
     mockSubscribe.mockImplementation(
@@ -158,7 +160,7 @@ describe("PocketBase SSE wrapper", () => {
       new Error("connection lost")
     );
 
-    expect(mockGetOne).toHaveBeenCalledWith("task-1");
+    expect(mockGetFirstListItem).toHaveBeenCalledWith('taskId="task-1"');
     expect(onUpdate).toHaveBeenCalledWith(decryptedRecord);
   });
 });

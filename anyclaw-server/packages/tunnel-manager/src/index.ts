@@ -33,7 +33,15 @@ if (isMain) {
 
     // Baseline local mode does not open a real tunnel yet, but supervisor
     // should still see the manager as healthy instead of a short-lived task.
-    await new Promise(() => undefined);
+    await new Promise<void>((resolve) => {
+      const keepAlive = setInterval(() => undefined, 1 << 30);
+      const stop = () => {
+        clearInterval(keepAlive);
+        resolve();
+      };
+      process.once("SIGTERM", stop);
+      process.once("SIGINT", stop);
+    });
   }).catch(err => {
     // eslint-disable-next-line no-console
     console.error(`[tunnel-manager] startup failed:`, err);

@@ -5,6 +5,7 @@ import { subscribeToTask } from "../pocketbase";
 export type TaskState =
   | "idle"
   | "input"
+  | "queued"
   | "clarifying"
   | "working"
   | "deploying"
@@ -21,13 +22,25 @@ export interface ActiveTask {
   state: TaskState;
   request: string;
   idempotencyKey: string;
+  clarificationId?: string | null;
   qaHistory: QAEntry[];
   question: string | null;
   error: string | null;
 }
 
-function generateIdempotencyKey(): string {
-  return `idem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+function generateTaskId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === "function") {
+    return randomUUID.call(globalThis.crypto);
+  }
+
+  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) => {
+    const value = Number(c);
+    return (
+      value ^
+      (Math.floor(Math.random() * 256) & (15 >> (value / 4)))
+    ).toString(16);
+  });
 }
 
 interface TaskStore {
@@ -50,15 +63,16 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   _unsubscribe: null,
 
   submitTask: async (request: string, serverId: string) => {
-    const idempotencyKey = generateIdempotencyKey();
+    const taskId = generateTaskId();
 
     // Optimistic: create active task in input state
     set({
       activeTask: {
-        id: null,
+        id: taskId,
         state: "input",
         request,
-        idempotencyKey,
+        idempotencyKey: taskId,
+        clarificationId: null,
         qaHistory: [],
         question: null,
         error: null,
@@ -67,13 +81,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
     try {
       const result = (await apiClient.post("/api/tasks", {
+        taskId,
         request,
-        idempotencyKey,
-      })) as { id: string; state: string };
+      })) as { taskId: string; state: string; seq: number };
 
       // Subscribe to SSE for this task
       const unsub = await subscribeToTask(
-        result.id,
+        result.taskId,
         (record) => {
           get()._applyServerRecord(record as Record<string, unknown>);
         },
@@ -82,10 +96,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
       set({
         activeTask: {
-          id: result.id,
-          state: "working",
+          id: result.taskId,
+          state: result.state as TaskState,
           request,
-          idempotencyKey,
+          idempotencyKey: result.taskId,
+          clarificationId: null,
           qaHistory: [],
           question: null,
           error: null,
@@ -95,10 +110,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     } catch (err) {
       set({
         activeTask: {
-          id: null,
+          id: taskId,
           state: "failed",
           request,
-          idempotencyKey,
+          idempotencyKey: taskId,
+          clarificationId: null,
           qaHistory: get().activeTask?.qaHistory ?? [],
           question: null,
           error: err instanceof Error ? err.message : "Unknown error",
@@ -109,7 +125,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
   answerQuestion: async (answer: string, serverId: string) => {
     const { activeTask } = get();
-    if (!activeTask || activeTask.state !== "clarifying") return;
+    if (
+      !activeTask ||
+      activeTask.state !== "clarifying" ||
+      !activeTask.clarificationId
+    ) {
+      return;
+    }
 
     const qa: QAEntry = {
       question: activeTask.question ?? "",
@@ -126,7 +148,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       },
     });
 
-    await apiClient.post(`/api/tasks/${activeTask.id}/answer`, { answer });
+    await apiClient.post(`/api/tasks/${activeTask.id}/answer`, {
+      clarificationId: activeTask.clarificationId,
+      answer,
+    });
   },
 
   cancelTask: async (serverId: string) => {
@@ -179,15 +204,17 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     try {
       const result = (await apiClient.get("/api/tasks/active")) as {
         id: string;
+        taskId?: string;
         state: string;
         request: string;
         question: string | null;
+        clarificationId?: string | null;
       } | null;
 
       if (!result) return;
 
       const unsub = await subscribeToTask(
-        result.id,
+        result.taskId ?? result.id,
         (record) => {
           get()._applyServerRecord(record as Record<string, unknown>);
         },
@@ -196,10 +223,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
       set({
         activeTask: {
-          id: result.id,
+          id: result.taskId ?? result.id,
           state: result.state as TaskState,
           request: result.request,
-          idempotencyKey: generateIdempotencyKey(),
+          idempotencyKey: result.taskId ?? result.id,
+          clarificationId: result.clarificationId ?? null,
           qaHistory: [],
           question: result.question ?? null,
           error: null,
@@ -223,6 +251,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         }),
         ...(record.question !== undefined && {
           question: record.question as string | null,
+        }),
+        ...(record.clarificationId !== undefined && {
+          clarificationId: record.clarificationId as string | null,
         }),
         ...(record.error !== undefined && {
           error: record.error as string | null,

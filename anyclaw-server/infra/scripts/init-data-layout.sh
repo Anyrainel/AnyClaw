@@ -57,11 +57,7 @@ fi
 mkdir -p "$DATA_ROOT/dev/.worktrees"
 
 if id anyclaw-infra >/dev/null 2>&1; then
-  chown -R anyclaw-infra:anyclaw-infra "$DATA_ROOT/pocketbase" "$DATA_ROOT/prod" "$DATA_ROOT/snapshots" "$DATA_ROOT/.anyclaw" || true
-fi
-
-if id anyclaw-agent >/dev/null 2>&1; then
-  chown -R anyclaw-agent:anyclaw-agent "$DATA_ROOT/dev" || true
+  chown -R anyclaw-infra:anyclaw-infra "$DATA_ROOT/pocketbase" "$DATA_ROOT/prod" "$DATA_ROOT/snapshots" "$DATA_ROOT/.anyclaw" "$DATA_ROOT/dev" || true
 fi
 
 echo "AnyClaw data layout ready at $DATA_ROOT"

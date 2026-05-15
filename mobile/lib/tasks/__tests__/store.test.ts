@@ -63,23 +63,32 @@ beforeEach(() => {
 });
 
 describe("Task store", () => {
-  test("submitTask success: optimistic input -> working, subscription installed, idempotency key sent", async () => {
+  test("submitTask success: optimistic input -> queued, subscription installed, taskId sent", async () => {
     const mockUnsub = jest.fn();
     mockSubscribeToTaskImpl = async (_id, _onUpdate, _serverId) => {
       return async () => { mockUnsub(); };
     };
 
     mockPostImpl = async (_path, body) => {
-      // Verify idempotency key is sent
-      expect((body as Record<string, unknown>).idempotencyKey).toBeDefined();
-      return { id: "task-1", state: "working" };
+      expect((body as Record<string, unknown>).taskId).toEqual(
+        expect.stringMatching(/^[0-9a-f-]{36}$/)
+      );
+      expect((body as Record<string, unknown>).request).toBe(
+        "Build a landing page"
+      );
+      expect((body as Record<string, unknown>).idempotencyKey).toBeUndefined();
+      return {
+        taskId: (body as Record<string, unknown>).taskId,
+        state: "queued",
+        seq: 0,
+      };
     };
 
     await useTaskStore.getState().submitTask("Build a landing page", "srv-1");
 
     const state = useTaskStore.getState();
     expect(state.activeTask).not.toBeNull();
-    expect(state.activeTask!.state).toBe("working");
+    expect(state.activeTask!.state).toBe("queued");
     expect(state.activeTask!.request).toBe("Build a landing page");
     expect(state.activeTask!.idempotencyKey).toBeDefined();
     // Subscription should be installed (unsub function stored)
@@ -134,6 +143,7 @@ describe("Task store", () => {
         state: "clarifying",
         request: "test",
         idempotencyKey: "key-1",
+        clarificationId: "clarification-1",
         qaHistory: [],
         question: "What color?",
         error: null,
@@ -153,7 +163,7 @@ describe("Task store", () => {
     const { apiClient } = require("../../api");
     expect(apiClient.post).toHaveBeenCalledWith(
       "/api/tasks/task-1/answer",
-      { answer: "Blue" }
+      { clarificationId: "clarification-1", answer: "Blue" }
     );
   });
 
@@ -236,7 +246,11 @@ describe("Task store", () => {
   });
 
   test("retryTask only runs from failed, reuses original request", async () => {
-    mockPostImpl = async () => ({ id: "task-2", state: "working" });
+    mockPostImpl = async (_path, body) => ({
+      taskId: (body as Record<string, unknown>).taskId,
+      state: "queued",
+      seq: 0,
+    });
     mockSubscribeToTaskImpl = async () => async () => {};
 
     useTaskStore.setState({
@@ -254,7 +268,7 @@ describe("Task store", () => {
     await useTaskStore.getState().retryTask("srv-1");
 
     const state = useTaskStore.getState();
-    expect(state.activeTask!.state).toBe("working");
+    expect(state.activeTask!.state).toBe("queued");
     expect(state.activeTask!.request).toBe("Build a dashboard");
     // New idempotency key
     expect(state.activeTask!.idempotencyKey).not.toBe("key-1");
@@ -286,9 +300,11 @@ describe("Task store", () => {
       if (path === "/api/tasks/active") {
         return {
           id: "task-99",
+          taskId: "task-99",
           state: "working",
           request: "Existing task",
           question: null,
+          clarificationId: null,
         };
       }
       return {};

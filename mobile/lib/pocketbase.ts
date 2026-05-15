@@ -47,9 +47,9 @@ export async function subscribeToTask(
   const keys = await loadPairingKeys(serverId);
   if (!keys) throw new Error("No pairing keys for server");
 
-  const topic = taskId;
+  const topic = "*";
 
-  await instance.collection("_tasks").subscribe(
+  const unsubscribe = await instance.collection("_tasks").subscribe(
     topic,
     (data: { action: string; record: unknown }) => {
       const decrypted = decryptJSON(
@@ -60,11 +60,13 @@ export async function subscribeToTask(
       onUpdate(decrypted);
     },
     {
-      filter: `id="${taskId}"`,
+      filter: `taskId="${taskId}"`,
       onerror: async (err: unknown) => {
         // Reconnect policy: refetch via REST and deliver to callback
         try {
-          const record = await instance.collection("_tasks").getOne(taskId);
+          const record = await instance
+            .collection("_tasks")
+            .getFirstListItem(`taskId="${taskId}"`);
           const decrypted = decryptJSON(
             record as unknown as Envelope,
             keys.serverPublicKey,
@@ -79,7 +81,7 @@ export async function subscribeToTask(
   );
 
   return async () => {
-    await instance.collection("_tasks").unsubscribe(topic);
+    unsubscribe();
   };
 }
 

@@ -34,13 +34,20 @@ export function TaskCard({
         </View>
       )}
 
-      {/* Working state */}
-      {task.state === "working" && (
-        <View style={styles.stateContainer} testID="task-working">
+      {/* Queued / working state */}
+      {(task.state === "queued" || task.state === "working") && (
+        <View
+          style={styles.stateContainer}
+          testID={task.state === "queued" ? "task-queued" : "task-working"}
+        >
           <ActivityIndicator size="large" color="#6366f1" />
-          <Text style={styles.stateTitle}>Working...</Text>
+          <Text style={styles.stateTitle}>
+            {task.state === "queued" ? "Queued..." : "Working..."}
+          </Text>
           <Text style={styles.stateDescription}>
-            The agent is working on your request.
+            {task.state === "queued"
+              ? "Your request is waiting for the agent."
+              : "The agent is working on your request."}
           </Text>
           <ActivityLog qaHistory={task.qaHistory} request={task.request} />
           <TouchableOpacity

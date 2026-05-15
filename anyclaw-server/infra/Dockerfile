@@ -74,7 +74,7 @@ RUN mkdir -p /data/pocketbase/pb_data \
              /var/run \
  && chown -R anyclaw-infra:anyclaw-infra /data/pocketbase /data/prod /data/snapshots \
                                           /data/.anyclaw  /var/log/anyclaw \
- && chown -R anyclaw-agent:anyclaw-agent /data/dev \
+ && chown -R anyclaw-infra:anyclaw-infra /data/dev \
  && chmod 0750 /data/.anyclaw
 
 # Infra scripts + supervisord config
@@ -92,7 +92,7 @@ RUN chmod +x /.anyclaw/scripts/package-skills.sh \
 
 # Initialize the dev git repo at image-build time so the container is ready
 RUN bash /anyclaw/scripts/init-data-layout.sh \
- && chown -R anyclaw-agent:anyclaw-agent /data/dev
+ && chown -R anyclaw-infra:anyclaw-infra /data/dev
 
 EXPOSE 8090 4100 5173 3000
 VOLUME ["/data"]

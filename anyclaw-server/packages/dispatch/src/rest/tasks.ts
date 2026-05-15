@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { TasksRepo } from "../persistence/tasks-repo.js";
 import type { AdapterManager } from "../adapters/manager.js";
-import type { AgentAdapter } from "../adapters/types.js";
+import { isTerminal, type AgentAdapter } from "../adapters/types.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SubmitBody = z.object({
@@ -76,6 +76,22 @@ export function tasksRouter(deps: TasksRouterDeps): Router {
       await deps.manager.cancel(req.params.taskId);
       const row = await deps.repo.getByTaskId(req.params.taskId);
       res.json({ taskId: row.taskId, state: row.state, seq: row.seq });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  r.get("/active", async (_req, res, next) => {
+    try {
+      const tasks = await deps.repo.listAll();
+      const active = tasks
+        .filter((task) => !isTerminal(task.state))
+        .sort((a, b) =>
+          String(b.updated ?? b.created ?? "").localeCompare(
+            String(a.updated ?? a.created ?? ""),
+          ),
+        )[0];
+      res.json(active ?? null);
     } catch (e) {
       next(e);
     }
