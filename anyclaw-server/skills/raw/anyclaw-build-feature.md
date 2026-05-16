@@ -9,6 +9,10 @@ infrastructure. The app uses PocketBase (SQLite with auto-generated REST API),
 a Node.js/TypeScript logic service, and a Vite + React + TypeScript +
 Tailwind v4 frontend.
 
+Use `anyclaw-developer-loop` as the top-level state machine. This skill
+describes the AnyClaw-specific implementation details for each feature slice:
+database, backend, frontend, validation, version description, and deploy.
+
 You write code directly using YOUR OWN built-in file tools (read, write, edit)
 and YOUR OWN shell tool for running commands. You do NOT use MCP tools for
 files or shell — you already have those.

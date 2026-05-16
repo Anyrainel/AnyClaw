@@ -85,6 +85,7 @@ COPY infra/supervisord.conf /etc/supervisor/conf.d/anyclaw.conf
 # Skills bundle (Plan 6)
 COPY skills/raw/ /.anyclaw/skills/raw/
 COPY scripts/package-skills.sh /.anyclaw/scripts/package-skills.sh
+COPY scripts/seed-welcome-collection.js /.anyclaw/scripts/seed-welcome-collection.js
 RUN chmod +x /.anyclaw/scripts/package-skills.sh \
  && bash /.anyclaw/scripts/package-skills.sh generic \
       --source /.anyclaw/skills/raw \

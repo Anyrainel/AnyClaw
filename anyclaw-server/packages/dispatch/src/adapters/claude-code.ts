@@ -20,7 +20,9 @@ export interface ClaudeCodeOptions {
 
 interface TaskRec {
   child: ChildProcess;
+  cwd: string;
   queue: AsyncQueue<TaskStatus>;
+  finished?: boolean | undefined;
   sessionId?: string | undefined;
   stdinWriter?: NodeJS.WritableStream;
 }
@@ -103,7 +105,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     signal.addEventListener("abort", onAbort, { once: true });
 
     const queue = new AsyncQueue<TaskStatus>();
-    const rec: TaskRec = { child, queue };
+    const rec: TaskRec = { child, cwd: ctx.cwd, queue };
     this.tasks.set(taskId, rec);
 
     // Store stdin writer for later sendMessage calls
@@ -116,13 +118,28 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
     // Send initial prompt
     if (child.stdin) {
-      child.stdin.write(buildInputMessage(request));
+      child.stdin.write(buildInputMessage(request), (err) => {
+        if (err) {
+          this.failTask(taskId, rec, `stdin write failed: ${err.message}`);
+        }
+      });
     }
 
     return { taskId, adapterRef: `pid:${child.pid}` };
   }
 
   private consumeOutput(taskId: string, rec: TaskRec): void {
+    rec.child.once("error", (err) => {
+      this.failTask(
+        taskId,
+        rec,
+        `failed to start ${this.opts.executablePath}: ${err.message}`,
+      );
+    });
+    rec.child.stdin?.on("error", (err: Error) => {
+      this.failTask(taskId, rec, `stdin error: ${err.message}`);
+    });
+
     if (!rec.child.stdout) return;
     const rl = createInterface({ input: rec.child.stdout });
     rl.on("line", async (line) => {
@@ -146,6 +163,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         rec.queue.push(status);
         await this.opts.persistTaskStatus?.(taskId, status);
         if (status.state === "done" || status.state === "failed") {
+          rec.finished = true;
           rec.queue.close();
         }
       }
@@ -153,16 +171,31 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
     rec.child.on("exit", (code) => {
       if (code !== 0 && code !== null) {
-        const seq = rec.queue.lastSeq + 1;
-        rec.queue.push({
-          state: "failed",
-          seq,
-          updatedAt: new Date().toISOString(),
-          error: `exit ${code}`,
-        });
+        this.failTask(taskId, rec, `exit ${code}`);
+        return;
       }
+      rec.finished = true;
       rec.queue.close();
     });
+  }
+
+  private failTask(taskId: string, rec: TaskRec, error: string): void {
+    if (rec.finished) return;
+    rec.finished = true;
+    const seq = rec.queue.lastSeq + 1;
+    rec.queue.push({
+      state: "failed",
+      seq,
+      updatedAt: new Date().toISOString(),
+      error,
+    });
+    void this.opts.persistTaskStatus?.(taskId, {
+      state: "failed",
+      seq,
+      updatedAt: new Date().toISOString(),
+      error,
+    });
+    rec.queue.close();
   }
 
   private mapEventToStatus(
@@ -262,7 +295,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     ];
 
     const child = spawn(this.opts.executablePath, args, {
-      cwd: rec.child.spawnargs[rec.child.spawnargs.length - 1],
+      cwd: rec.cwd,
       env: {
         ...process.env,
         CI: process.env.CI ?? "true",
@@ -271,10 +304,24 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    child.once("error", (err) => {
+      this.failTask(
+        taskId,
+        rec,
+        `failed to continue ${this.opts.executablePath}: ${err.message}`,
+      );
+    });
+    child.stdin?.on("error", (err: Error) => {
+      this.failTask(taskId, rec, `stdin error: ${err.message}`);
+    });
 
     // Send the follow-up message
     if (child.stdin) {
-      child.stdin.write(buildInputMessage(message));
+      child.stdin.write(buildInputMessage(message), (err) => {
+        if (err) {
+          this.failTask(taskId, rec, `stdin write failed: ${err.message}`);
+        }
+      });
       child.stdin.end();
     }
 
@@ -361,7 +408,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     ];
 
     const child = spawn(this.opts.executablePath, args, {
-      cwd: rec.child.spawnargs[rec.child.spawnargs.length - 1], // Use same cwd
+      cwd: rec.cwd,
       env: {
         ...process.env,
         CI: process.env.CI ?? "true",

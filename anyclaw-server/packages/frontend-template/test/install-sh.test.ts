@@ -96,6 +96,12 @@ describe("install.sh script validation", () => {
   it("waits for PocketBase health before bootstrap", () => {
     expect(src).toContain("/api/health");
     expect(src).toContain("wait_for_pocketbase");
+    expect(src).toContain("/anyclaw/scripts/init-data-layout.sh");
+  });
+
+  it("can sync the frontend template into the dev workspace when requested", () => {
+    expect(src).toContain("ANYCLAW_SYNC_FRONTEND_TEMPLATE");
+    expect(src).toContain("sync-frontend-template.sh --force");
   });
 
   it("seeds the welcome page tips collection", () => {

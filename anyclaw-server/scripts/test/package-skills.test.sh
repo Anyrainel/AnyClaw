@@ -67,9 +67,9 @@ echo "=== OpenClaw target tests ==="
 TMPDIR_OC=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_OC" "$TMPDIR_CC" "$TMPDIR_GEN" 2>/dev/null' EXIT
 
-# Test 1: Happy path — 5 files in, 5 files out
+# Test 1: Happy path — 6 files in, 6 files out
 bash "$PACKAGE_SKILLS" openclaw --source "$SKILLS_SRC" --dest "$TMPDIR_OC/skills"
-assert "openclaw: 5 files created" test "$(ls "$TMPDIR_OC/skills/"*.md 2>/dev/null | wc -l)" -eq 5
+assert "openclaw: 6 files created" test "$(ls "$TMPDIR_OC/skills/"*.md 2>/dev/null | wc -l)" -eq 6
 
 # Test 2: No frontmatter in output
 for f in "$TMPDIR_OC/skills/"*.md; do
@@ -105,7 +105,7 @@ TMPDIR_CC=$(mktemp -d)
 bash "$PACKAGE_SKILLS" claude-code --project-dir "$TMPDIR_CC"
 assert "claude-code: .claude/commands/ created" test -d "$TMPDIR_CC/.claude/commands"
 assert "claude-code: CLAUDE.md created" test -f "$TMPDIR_CC/CLAUDE.md"
-assert "claude-code: 5 slash commands" test "$(ls "$TMPDIR_CC/.claude/commands/"*.md 2>/dev/null | wc -l)" -eq 5
+assert "claude-code: 6 slash commands" test "$(ls "$TMPDIR_CC/.claude/commands/"*.md 2>/dev/null | wc -l)" -eq 6
 
 # Test 2: Generated slash commands have no frontmatter
 for f in "$TMPDIR_CC/.claude/commands/"*.md; do
@@ -115,6 +115,7 @@ done
 # Test 3: CLAUDE.md contains sentinel markers and all skill names
 assert_contains "claude-code: begin sentinel" "$TMPDIR_CC/CLAUDE.md" "<!-- anyclaw:begin -->"
 assert_contains "claude-code: end sentinel" "$TMPDIR_CC/CLAUDE.md" "<!-- anyclaw:end -->"
+assert_contains "claude-code: lists developer-loop" "$TMPDIR_CC/CLAUDE.md" "anyclaw-developer-loop"
 assert_contains "claude-code: lists build-feature" "$TMPDIR_CC/CLAUDE.md" "anyclaw-build-feature"
 assert_contains "claude-code: lists style-guide" "$TMPDIR_CC/CLAUDE.md" "anyclaw-style-guide"
 assert_contains "claude-code: lists canonical-example" "$TMPDIR_CC/CLAUDE.md" "anyclaw-canonical-example"
@@ -150,9 +151,10 @@ echo "=== Generic system prompt target tests ==="
 
 TMPDIR_GEN=$(mktemp -d)
 
-# Test 1: Output file exists and contains all 5 skill bodies
+# Test 1: Output file exists and contains all 6 skill bodies
 bash "$PACKAGE_SKILLS" generic --source "$SKILLS_SRC" --out "$TMPDIR_GEN/system-prompt.txt"
 assert "generic: output file exists" test -f "$TMPDIR_GEN/system-prompt.txt"
+assert_contains "generic: contains developer-loop" "$TMPDIR_GEN/system-prompt.txt" "# anyclaw-developer-loop"
 assert_contains "generic: contains build-feature" "$TMPDIR_GEN/system-prompt.txt" "# anyclaw-build-feature"
 assert_contains "generic: contains canonical-example" "$TMPDIR_GEN/system-prompt.txt" "# anyclaw-canonical-example"
 assert_contains "generic: contains style-guide" "$TMPDIR_GEN/system-prompt.txt" "# anyclaw-style-guide"
@@ -171,10 +173,10 @@ bash "$PACKAGE_SKILLS" generic --source "$SKILLS_SRC" --out "$TMPDIR_GEN/system-
 preamble_count=$(grep -c "# AnyClaw Agent System Prompt" "$TMPDIR_GEN/system-prompt.txt" || true)
 assert "generic: re-run overwrites (1 preamble)" test "$preamble_count" -eq 1
 
-# Test 5: Correct order (build-feature first, describe-version last)
+# Test 5: Correct order (developer-loop first, describe-version last)
 first_skill=$(grep "^# anyclaw-" "$TMPDIR_GEN/system-prompt.txt" | head -1)
 last_skill=$(grep "^# anyclaw-" "$TMPDIR_GEN/system-prompt.txt" | tail -1)
-assert "generic: first skill is build-feature" test "$first_skill" = "# anyclaw-build-feature"
+assert "generic: first skill is developer-loop" test "$first_skill" = "# anyclaw-developer-loop"
 assert "generic: last skill is describe-version" test "$last_skill" = "# anyclaw-describe-version"
 
 # ────────────────────────────────────────────────────────────────

@@ -171,7 +171,13 @@ pull_and_start() {
 
   # Run init-data-layout.sh inside the container (idempotent)
   info "  Running data layout init ..."
-  docker compose exec "$CONTAINER_NAME" /.anyclaw/scripts/init-data-layout.sh || true
+  docker compose exec "$CONTAINER_NAME" /anyclaw/scripts/init-data-layout.sh || true
+
+  if [ "${ANYCLAW_SYNC_FRONTEND_TEMPLATE:-0}" = "1" ]; then
+    info "  Syncing frontend template into the dev workspace ..."
+    docker compose exec "$CONTAINER_NAME" \
+      /anyclaw/scripts/sync-frontend-template.sh --force
+  fi
 
   # Wait for PocketBase health
   info "  Waiting for PocketBase to become healthy ..."

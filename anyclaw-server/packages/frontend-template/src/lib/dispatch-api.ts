@@ -37,6 +37,11 @@ export interface TaskSummary {
   progressSummary?: string;
   error?: string;
   updatedAt?: string;
+  version?: string;
+  commitSha?: string;
+  commitUrl?: string;
+  deploymentUrl?: string;
+  deployedAt?: string;
 }
 
 export interface CreateTaskInput {

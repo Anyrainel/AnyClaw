@@ -77,6 +77,32 @@ describe("ClaudeCodeAdapter", () => {
     expect(states[states.length - 1]).toBe("failed");
   });
 
+  it("emits failed when the executable is missing", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "cc-missing-"));
+    const a = new ClaudeCodeAdapter({
+      executablePath: join(tmp, "missing-claude"),
+      maxBudgetUsd: 1,
+    });
+    const ctx = {
+      cwd: tmp,
+      mcpEndpointUrl: "http://127.0.0.1:4100/mcp",
+      mcpBearerToken: "tok",
+      mcpConfigPath: join(tmp, "mcp.json"),
+      systemPrompt: "",
+      allowedTools: ["Read"],
+    };
+    await a.dispatch("t-missing", "run", ctx, AbortSignal.timeout(10_000));
+    const states: string[] = [];
+    let error = "";
+    for await (const s of a.subscribe("t-missing", AbortSignal.timeout(10_000))) {
+      states.push(s.state);
+      error = s.error ?? error;
+      if (s.state === "done" || s.state === "failed") break;
+    }
+    expect(states[states.length - 1]).toBe("failed");
+    expect(error).toContain("failed to start");
+  });
+
   it("cancel kills the subprocess", async () => {
     const slowBin = fileURLToPath(
       new URL("../fixtures/mock-claude-slow.mjs", import.meta.url),

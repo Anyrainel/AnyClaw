@@ -33,24 +33,7 @@ fi
 # On first run, seed /data/dev with the frontend template so the agent has
 # something to start with. We detect "first run" by the absence of .git.
 if [ ! -d "$DATA_ROOT/dev/.git" ]; then
-  if [ -d "$FRONTEND_TEMPLATE_SRC" ]; then
-    # Copy everything except node_modules and dist
-    ( cd "$FRONTEND_TEMPLATE_SRC" \
-      && find . -mindepth 1 \
-           -not -path "./node_modules*" \
-           -not -path "./dist*" \
-           -print0 \
-        | xargs -0 -I {} cp -r --parents {} "$DATA_ROOT/dev/" 2>/dev/null || true )
-  fi
-
-  ( cd "$DATA_ROOT/dev" \
-    && git init --initial-branch=main \
-    && git config user.email "anyclaw@local" \
-    && git config user.name  "AnyClaw" \
-    && git config commit.gpgsign false \
-    && [ -f README.md ] || : > README.md \
-    && git add -A \
-    && git commit -m "initial: frontend-template seed" )
+  /anyclaw/scripts/sync-frontend-template.sh
 fi
 
 # Always ensure the worktrees dir exists (even after first run)

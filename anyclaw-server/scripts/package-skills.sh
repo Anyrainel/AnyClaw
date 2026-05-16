@@ -9,6 +9,7 @@ set -euo pipefail
 #   package-skills.sh generic     [--source DIR] [--out FILE]
 
 EXPECTED_SKILLS=(
+  "anyclaw-developer-loop.md"
   "anyclaw-build-feature.md"
   "anyclaw-canonical-example.md"
   "anyclaw-style-guide.md"
@@ -18,6 +19,7 @@ EXPECTED_SKILLS=(
 
 # Order for generic concatenation
 GENERIC_ORDER=(
+  "anyclaw-developer-loop.md"
   "anyclaw-build-feature.md"
   "anyclaw-canonical-example.md"
   "anyclaw-style-guide.md"
@@ -121,7 +123,8 @@ cmd_claude_code() {
 
 Use these skills during every task:
 
-- `/anyclaw-build-feature` — Follow this for every user task. The complete workflow from understanding the request through deployment.
+- `/anyclaw-developer-loop` — Use this as the top-level state machine for every request: clarify only requirements, break work into commit-sized vertical slices, test each slice, publish, then report.
+- `/anyclaw-build-feature` — Use this for the concrete AnyClaw implementation steps inside each feature request.
 - `/anyclaw-style-guide` — Follow this for all frontend code. Tailwind v4 conventions, component patterns, voice and tone.
 - `/anyclaw-canonical-example` — Read `dev/_examples/welcome.tsx` before writing any new frontend code. Every task, every time.
 - `/anyclaw-refactor` — Run a cleanup pass every 5 deployments or when complexity grows.

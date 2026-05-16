@@ -1,242 +1,227 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Sparkles, Send, Loader2, AlertCircle, CheckCircle, XCircle, RefreshCw } from "lucide-react";
-import { createTask, listTasks, getTask, cancelTask, type TaskSummary } from "../lib/dispatch-api.js";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  Activity,
+  Bell,
+  ChevronRight,
+  ClipboardList,
+  Home,
+  Layers3,
+  Plus,
+  Search,
+  Settings,
+  Sparkles,
+} from "lucide-react";
+import { AssistantPanel } from "../components/AssistantPanel.js";
+import { SettingsSheet } from "../components/SettingsSheet.js";
+import { usePreferences } from "../hooks/usePreferences.js";
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
-
-interface TaskView extends TaskSummary {
-  isLoading?: boolean;
+export interface ShellPreferences {
+  theme: "system" | "light" | "dark";
+  fontSize: "small" | "medium" | "large";
+  fontFamily: "sans" | "serif";
+  density: "compact" | "comfortable" | "spacious";
+  accent: "blue" | "teal" | "green" | "amber" | "rose" | "violet";
+  language: string;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
+const LEVEL_ONE = [
+  { id: "home", label: "Home", icon: Home },
+  { id: "work", label: "Work", icon: ClipboardList },
+  { id: "activity", label: "Activity", icon: Activity },
+  { id: "library", label: "Library", icon: Layers3 },
+] as const;
 
-function stateIcon(state: string) {
-  switch (state) {
-    case "done": return <CheckCircle className="size-4 text-success" aria-hidden />;
-    case "failed": return <XCircle className="size-4 text-danger" aria-hidden />;
-    case "cancelled": return <XCircle className="size-4 text-muted" aria-hidden />;
-    case "working": return <Loader2 className="size-4 animate-spin text-primary" aria-hidden />;
-    case "clarifying": return <AlertCircle className="size-4 text-warning" aria-hidden />;
-    case "deploying": return <Loader2 className="size-4 animate-spin text-primary" aria-hidden />;
-    default: return <Sparkles className="size-4 text-muted" aria-hidden />;
+const LEVEL_TWO = [
+  { id: "overview", label: "Overview" },
+  { id: "requests", label: "Requests" },
+  { id: "versions", label: "Versions" },
+] as const;
+
+const LEVEL_THREE = ["Home", "Workspace", "Today"] as const;
+
+const SAMPLE_SECTIONS = [
+  {
+    title: "Today",
+    body: "A stable landing area for the first real feature the agent builds.",
+    meta: "Ready for content",
+  },
+  {
+    title: "Requests",
+    body: "Recent software-building tasks, clarifications, and status updates.",
+    meta: "Dispatch-aware",
+  },
+  {
+    title: "Versions",
+    body: "A future home for deployment notes, commits, and rollback controls.",
+    meta: "Version surface",
+  },
+] as const;
+
+function readStoredPreferences(base: ShellPreferences): ShellPreferences {
+  if (typeof localStorage === "undefined") return base;
+  try {
+    const raw = localStorage.getItem("anyclaw_shell_preferences");
+    return raw ? { ...base, ...JSON.parse(raw) } : base;
+  } catch {
+    return base;
   }
 }
 
-function stateLabel(state: string): string {
-  return state.charAt(0).toUpperCase() + state.slice(1);
+function toCssVars(preferences: ShellPreferences) {
+  return {
+    "--shell-accent": `var(--accent-${preferences.accent})`,
+    "--shell-font-scale": preferences.fontSize === "small" ? "0.94" : preferences.fontSize === "large" ? "1.08" : "1",
+    "--shell-density": preferences.density === "compact" ? "0.82" : preferences.density === "spacious" ? "1.18" : "1",
+    "--shell-font-family": preferences.fontFamily === "serif" ? "Georgia, Cambria, serif" : "Inter, ui-sans-serif, system-ui, sans-serif",
+  } as CSSProperties;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
-
 export function Welcome() {
-  const [prompt, setPrompt] = useState("");
-  const [tasks, setTasks] = useState<TaskView[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const serverPrefs = usePreferences();
+  const [levelOne, setLevelOne] = useState<(typeof LEVEL_ONE)[number]["id"]>("home");
+  const [levelTwo, setLevelTwo] = useState<(typeof LEVEL_TWO)[number]["id"]>("overview");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [preferences, setPreferences] = useState<ShellPreferences>(() =>
+    readStoredPreferences({
+      theme: serverPrefs.theme,
+      fontSize: serverPrefs.fontSize,
+      fontFamily: serverPrefs.fontFamily,
+      density: "comfortable",
+      accent: serverPrefs.accent,
+      language: serverPrefs.language,
+    }),
+  );
 
-  // Load tasks on mount
   useEffect(() => {
-    loadTasks();
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
-  // Poll active tasks every 3s
-  useEffect(() => {
-    const active = tasks.filter(t => t.state === "queued" || t.state === "working" || t.state === "clarifying" || t.state === "deploying");
-    if (active.length > 0 && !pollRef.current) {
-      pollRef.current = setInterval(() => {
-        refreshActiveTasks();
-      }, 3000);
-    } else if (active.length === 0 && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => {
-      if (pollRef.current && active.length === 0) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [tasks]);
-
-  const loadTasks = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listTasks();
-      setTasks(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const refreshActiveTasks = async () => {
-    setTasks(prev =>
-      prev.map(t =>
-        t.state === "queued" || t.state === "working" || t.state === "clarifying" || t.state === "deploying"
-          ? { ...t, isLoading: true }
-          : t
-      )
+    setPreferences((current) =>
+      readStoredPreferences({
+        ...current,
+        theme: serverPrefs.theme,
+        fontSize: serverPrefs.fontSize,
+        fontFamily: serverPrefs.fontFamily,
+        accent: serverPrefs.accent,
+        language: serverPrefs.language,
+      }),
     );
-    try {
-      const data = await listTasks();
-      setTasks(data);
-    } catch {
-      // silently fail on poll
-    }
-  };
+  }, [serverPrefs.accent, serverPrefs.fontFamily, serverPrefs.fontSize, serverPrefs.language, serverPrefs.theme]);
 
-  const handleSubmit = useCallback(async () => {
-    if (!prompt.trim()) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const taskId = crypto.randomUUID();
-      await createTask({ taskId, request: prompt.trim() });
-      setPrompt("");
-      await loadTasks();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  }, [prompt]);
+  useEffect(() => {
+    localStorage.setItem("anyclaw_shell_preferences", JSON.stringify(preferences));
+  }, [preferences]);
 
-  const handleCancel = async (taskId: string) => {
-    try {
-      await cancelTask(taskId);
-      await loadTasks();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
+  const activeSection = LEVEL_ONE.find((item) => item.id === levelOne) ?? LEVEL_ONE[0];
+  const cssVars = useMemo(() => toCssVars(preferences), [preferences]);
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-8">
-      {/* Header */}
-      <header className="mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">
-          AnyClaw
-        </h1>
-        <p className="mt-2 text-base text-muted">
-          Describe what you want and the agent will build it.
-        </p>
-      </header>
-
-      {/* Task input */}
-      <section className="mb-8" aria-label="New task">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            placeholder="e.g. Build me a daily mood tracker"
-            className="flex-1 rounded-lg border border-border bg-white px-4 py-3 text-sm text-foreground shadow-sm outline-none focus:ring-2 focus:ring-primary"
-            disabled={submitting}
-          />
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !prompt.trim()}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Send className="size-4" aria-hidden />
-            )}
-            {submitting ? "Sending..." : "Request"}
-          </button>
+    <div
+      className="app-shell"
+      data-theme={preferences.theme}
+      data-density={preferences.density}
+      style={cssVars}
+    >
+      <aside className="desktop-rail" aria-label="Primary">
+        <div className="brand-mark" aria-label="AnyClaw">
+          <Sparkles className="size-5" aria-hidden />
         </div>
-      </section>
+        <nav>
+          {LEVEL_ONE.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button key={item.id} type="button" data-active={levelOne === item.id} onClick={() => setLevelOne(item.id)}>
+                <Icon className="size-5" aria-hidden />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+        <button type="button" className="rail-settings" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
+          <Settings className="size-5" aria-hidden />
+        </button>
+      </aside>
 
-      {/* Error */}
-      {error && (
-        <div className="mb-6 flex items-center gap-2 rounded-lg bg-surface px-4 py-3 text-sm text-danger" role="alert">
-          <AlertCircle className="size-4 shrink-0" aria-hidden />
-          {error}
-        </div>
-      )}
+      <div className="shell-main">
+        <header className="top-bar">
+          <div className="mobile-brand" aria-label="AnyClaw">
+            <Sparkles className="size-5" aria-hidden />
+          </div>
+          <div>
+            <p className="eyebrow">AnyClaw</p>
+            <h1>{activeSection.label}</h1>
+          </div>
+          <div className="top-actions">
+            <button type="button" className="icon-button" aria-label="Search">
+              <Search className="size-5" aria-hidden />
+            </button>
+            <button type="button" className="icon-button" aria-label="Notifications">
+              <Bell className="size-5" aria-hidden />
+            </button>
+            <button type="button" className="icon-button" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
+              <Settings className="size-5" aria-hidden />
+            </button>
+          </div>
+        </header>
 
-      {/* Task list */}
-      <section aria-label="Tasks">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-            Tasks
-          </h2>
-          <button
-            onClick={loadTasks}
-            disabled={loading}
-            className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-          >
-            <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} aria-hidden />
-            Refresh
-          </button>
-        </div>
+        <main className="workspace" aria-label="Workspace">
+          <nav className="level-two-tabs" aria-label="Section">
+            {LEVEL_TWO.map((item) => (
+              <button key={item.id} type="button" data-active={levelTwo === item.id} onClick={() => setLevelTwo(item.id)}>
+                {item.label}
+              </button>
+            ))}
+          </nav>
 
-        {tasks.length === 0 && !loading && (
-          <p className="text-sm text-muted">
-            No tasks yet. Type something above and hit Request.
-          </p>
-        )}
+          <nav className="breadcrumb-nav" aria-label="Current location">
+            {LEVEL_THREE.map((item, index) => (
+              <span key={item}>
+                {index > 0 && <ChevronRight className="size-3" aria-hidden />}
+                {item}
+              </span>
+            ))}
+          </nav>
 
-        <ul className="space-y-3">
-          {tasks.map((task) => (
-            <li
-              key={task.taskId}
-              className="rounded-lg border border-border bg-surface px-4 py-3 shadow-sm"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    {stateIcon(task.state)}
-                    <span className="text-xs font-medium uppercase tracking-wide text-muted">
-                      {stateLabel(task.state)}
-                    </span>
-                    {task.isLoading && (
-                      <Loader2 className="size-3 animate-spin text-muted" aria-hidden />
-                    )}
-                  </div>
-                  <p className="mt-1 truncate text-sm text-foreground">
-                    {task.request || task.taskId}
-                  </p>
-                  {task.progressSummary && (
-                    <p className="mt-1 text-xs text-muted line-clamp-2">
-                      {task.progressSummary}
-                    </p>
-                  )}
-                  {task.error && (
-                    <p className="mt-1 text-xs text-danger line-clamp-2">
-                      {task.error}
-                    </p>
-                  )}
-                </div>
-                {(task.state === "queued" || task.state === "working" || task.state === "clarifying") && (
-                  <button
-                    onClick={() => handleCancel(task.taskId)}
-                    className="shrink-0 rounded-md px-2 py-1 text-xs text-danger hover:bg-surface"
-                  >
-                    Cancel
-                  </button>
-                )}
+          <section className="section-list" aria-label="Default sections">
+            <div className="section-list-header">
+              <div>
+                <p className="eyebrow">Starter structure</p>
+                <h2>{LEVEL_TWO.find((item) => item.id === levelTwo)?.label}</h2>
               </div>
-            </li>
-          ))}
-        </ul>
-      </section>
-    </main>
+              <button type="button" className="primary-button">
+                <Plus className="size-4" aria-hidden />
+                Add section
+              </button>
+            </div>
+
+            <div className="section-items">
+              {SAMPLE_SECTIONS.map((section) => (
+                <article className="section-item" key={section.title}>
+                  <div>
+                    <h3>{section.title}</h3>
+                    <p>{section.body}</p>
+                  </div>
+                  <span>{section.meta}</span>
+                </article>
+              ))}
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <nav className="bottom-tabs" aria-label="Primary">
+        {LEVEL_ONE.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button key={item.id} type="button" data-active={levelOne === item.id} onClick={() => setLevelOne(item.id)}>
+              <Icon className="size-5" aria-hidden />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <SettingsSheet open={settingsOpen} preferences={preferences} onChange={setPreferences} onOpenChange={setSettingsOpen} />
+      <AssistantPanel open={assistantOpen} onOpenChange={setAssistantOpen} />
+    </div>
   );
 }
 
