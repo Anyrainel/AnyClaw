@@ -5,7 +5,7 @@ min_server_version: "0.1.0"
 # anyclaw-canonical-example
 
 There is one file in this codebase that is the authoritative example of
-how AnyClaw frontend code should look: `dev/_examples/welcome.tsx`.
+how AnyRaven frontend code should look: `dev/_examples/welcome.tsx`.
 
 You MUST read it before you write any new frontend code. Every task,
 every time. It is short. It demonstrates every pattern you need:

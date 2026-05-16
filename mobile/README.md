@@ -1,6 +1,6 @@
 # mobile
 
-The AnyClaw companion app. An Expo / React Native app (iOS, Android, Web) that connects to the user's anyclaw-server, displays the agent-built WebView interface, and provides controls for task submission, version history, settings, and server pairing.
+The AnyRaven companion app. An Expo / React Native app (iOS, Android, Web) that connects to the user's anyclaw-server, displays the agent-built WebView interface, and provides controls for task submission, version history, settings, and server pairing.
 
 See [docs/plan5-mobile-app-design.md](../docs/plan5-mobile-app-design.md) for architecture details.
 

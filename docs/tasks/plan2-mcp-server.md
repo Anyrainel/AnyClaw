@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the AnyClaw MCP server package exposing 7 HTTP/SSE tools on `127.0.0.1:4100/mcp` with per-task bearer auth, backed by PocketBase and Plan 1 deploy/snapshot/version infrastructure.
+**Goal:** Implement the AnyRaven MCP server package exposing 7 HTTP/SSE tools on `127.0.0.1:4100/mcp` with per-task bearer auth, backed by PocketBase and Plan 1 deploy/snapshot/version infrastructure.
 **Architecture:** A new `packages/mcp-server/` package inside the Plan 1 monorepo. Exports `mountMcp(app, ctx)` which the Plan 1 `@anyclaw/dispatch` entrypoint mounts on its shared Express app (same app as Plan 3's REST API and Plan 1's health endpoint, port 4100). The MCP server does NOT call `app.listen` itself. Tool handlers wrap Plan 1 managers (`DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore`) from `@anyclaw/shared` and an admin `PocketBase` client. Per-task bearer tokens are registered at task spawn, captured in a closure, and looked up on every request.
 **Tech Stack:** @modelcontextprotocol/sdk ^1.12, express ^4.21, zod ^3.23, pocketbase ^0.25, vitest ^2.0, msw ^2.4, tsx, typescript ^5.6
 **Dependencies:** Plan 1 (Server Infrastructure Foundation) must be complete. This plan assumes `@anyclaw/shared` exports `DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore` with the signatures referenced below, that `/data/.anyclaw/pb-token` and `/data/.anyclaw/mcp-tokens/` exist, and that the npm workspaces monorepo already builds. The dispatch package `@anyclaw/dispatch` (scaffolded by Plan 1) will import and mount this package.
@@ -37,7 +37,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 ## Global Rules
 
 - **Rigid TDD**: every task is `write failing test → run and confirm red → write impl → run and confirm green → commit`. Never skip the red step. Never commit red.
-- All commands assume `cwd = F:/Codes/AnyClaw/anyclaw-server/packages/mcp-server` unless noted.
+- All commands assume `cwd = F:/Codes/AnyRaven/anyclaw-server/packages/mcp-server` unless noted.
 - Use Windows-friendly paths in commands (forward slashes in shell). Production paths like `/data/.anyclaw/...` appear in code but tests must use `process.env.ANYCLAW_DATA_ROOT` to override them to a tmp dir.
 - Commit messages: `plan2/<task-id>: <short summary>`.
 - After each task: `npm run -w @anyclaw/mcp-server test` must be green.
@@ -46,7 +46,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 
 ## Task 1 — Package Scaffold
 
-- [ ] **1.1 Write failing test: package exists and builds.** Create `F:/Codes/AnyClaw/anyclaw-server/packages/mcp-server/src/__tests__/smoke.test.ts`:
+- [ ] **1.1 Write failing test: package exists and builds.** Create `F:/Codes/AnyRaven/anyclaw-server/packages/mcp-server/src/__tests__/smoke.test.ts`:
   ```typescript
   import { describe, it, expect } from "vitest";
   import * as pkg from "../index.js";
@@ -985,7 +985,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   ) {
     return withErrorHandling(async (input: z.infer<typeof createCollectionInput>) => {
       if (input.name.startsWith("_")) {
-        throw new ToolError("Collection names starting with '_' are reserved for AnyClaw infrastructure");
+        throw new ToolError("Collection names starting with '_' are reserved for AnyRaven infrastructure");
       }
       const snap = await snapFactory().create(`pre-schema-${input.name}-${Date.now()}`);
       const created = await pbFactory().collections.create({
@@ -1460,8 +1460,8 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
   import { registerAllTools } from "./tools/index.js";
 
   const INSTRUCTIONS = [
-    "AnyClaw MCP server. Use your own native file and shell tools for everything in the dev worktree.",
-    "Use AnyClaw MCP tools only for production operations: anyclaw_deploy, anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection.",
+    "AnyRaven MCP server. Use your own native file and shell tools for everything in the dev worktree.",
+    "Use AnyRaven MCP tools only for production operations: anyclaw_deploy, anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection.",
     "Use anyclaw_ask_user to clarify requirements and anyclaw_update_progress to keep the user informed.",
     "A version description of at least 10 characters is required for every deployment.",
   ].join(" ");

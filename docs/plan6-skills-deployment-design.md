@@ -1,6 +1,6 @@
 # Plan 6: Skills + Deployment -- Design Document
 
-**Goal:** Define the complete agent skill suite that teaches coding agents how to build features on AnyClaw, and the deployment setup for self-hosted and cloud-hosted modes.
+**Goal:** Define the complete agent skill suite that teaches coding agents how to build features on AnyRaven, and the deployment setup for self-hosted and cloud-hosted modes.
 
 **Dependencies:** Plan 1 (Server Infrastructure), Plan 2 (MCP Server), Plan 3 (Agent Dispatch).
 
@@ -12,7 +12,7 @@
 
 ### 1. Overview of Skills
 
-Skills are Markdown prompts that teach a coding agent how to work inside AnyClaw. They are authored once in `/.anyclaw/skills/` and packaged differently per agent platform (OpenClaw skills directory, Claude Code slash commands, or a concatenated system prompt for generic agents).
+Skills are Markdown prompts that teach a coding agent how to work inside AnyRaven. They are authored once in `/.anyclaw/skills/` and packaged differently per agent platform (OpenClaw skills directory, Claude Code slash commands, or a concatenated system prompt for generic agents).
 
 The five skills:
 
@@ -24,7 +24,7 @@ The five skills:
 | `anyclaw-refactor` | Cleanup pass: extract duplication, remove dead code, tighten types | Periodic / on trigger |
 | `anyclaw-describe-version` | Non-technical version descriptions for the user's history screen | Every deploy |
 
-**Core philosophy (decisions #5 and #23):** the agent uses its own built-in file and shell tools to read, write, edit, and run commands. AnyClaw MCP tools are reserved for operations that need server-side guarantees:
+**Core philosophy (decisions #5 and #23):** the agent uses its own built-in file and shell tools to read, write, edit, and run commands. AnyRaven MCP tools are reserved for operations that need server-side guarantees:
 
 - `anyclaw_deploy`
 - `anyclaw_rollback`
@@ -51,7 +51,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-build-feature
 
-You are building a feature for a personal web application running on AnyClaw
+You are building a feature for a personal web application running on AnyRaven
 infrastructure. The app uses PocketBase (SQLite with auto-generated REST API),
 a Node.js/TypeScript logic service, and a Vite + React + TypeScript +
 Tailwind v4 frontend.
@@ -60,7 +60,7 @@ You write code directly using YOUR OWN built-in file tools (read, write, edit)
 and YOUR OWN shell tool for running commands. You do NOT use MCP tools for
 files or shell — you already have those.
 
-AnyClaw MCP tools are only for operations that require server-side guarantees:
+AnyRaven MCP tools are only for operations that require server-side guarantees:
 
 - `anyclaw_deploy` — validate, snapshot, commit, promote dev to prod atomically
 - `anyclaw_rollback` — restore a specific version (code + DB snapshot together)
@@ -95,7 +95,7 @@ preferences is what you and previous agent runs have already done and said.
    `usePreferences()` hook. You do not ask the user about visual choices.
 4. Read `dev/_examples/welcome.tsx`. This is the canonical example —
    the file structure, theme tokens, data fetching shape, error handling,
-   loading and empty states demonstrated there are how AnyClaw code should
+   loading and empty states demonstrated there are how AnyRaven code should
    look. See the `anyclaw-canonical-example` skill.
 
 ## Step 1: Understand the Request
@@ -281,7 +281,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-style-guide
 
-You are building the frontend UI for an AnyClaw personal web app. This guide
+You are building the frontend UI for an AnyRaven personal web app. This guide
 defines exact conventions for all React components, CSS, and any text the
 user will read. Consistency matters — the user sees every feature you build
 side by side, so they must look like they belong together.
@@ -679,7 +679,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-refactor
 
-You are cleaning up the codebase of an AnyClaw personal web app. This skill
+You are cleaning up the codebase of an AnyRaven personal web app. This skill
 runs either on a schedule (after every 5th deployment) or proactively when
 you notice growing complexity while building a feature.
 
@@ -743,7 +743,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-describe-version
 
-You are writing a version description for a deployment of an AnyClaw
+You are writing a version description for a deployment of an AnyRaven
 personal web app. This appears in the user's version history. The user is
 NOT a developer. Write for a normal person.
 
@@ -823,7 +823,7 @@ min_server_version: "0.1.0"
 # anyclaw-canonical-example
 
 There is one file in this codebase that is the authoritative example of
-how AnyClaw frontend code should look: `dev/_examples/welcome.tsx`.
+how AnyRaven frontend code should look: `dev/_examples/welcome.tsx`.
 
 You MUST read it before you write any new frontend code. Every task,
 every time. It is short. It demonstrates every pattern you need:
@@ -882,7 +882,7 @@ Skills are authored once in `/.anyclaw/skills/` and packaged into three formats 
 **OpenClaw:** copy `.md` files (frontmatter stripped) into `~/.openclaw/skills/`. OpenClaw loads them via its normal skill discovery (`skillsDir` in `~/.openclaw/config.json`).
 
 **Claude Code:** two mechanisms.
-1. Append an `## AnyClaw Agent Instructions` block to `CLAUDE.md` telling the agent to follow `/anyclaw-build-feature` for all feature work, `/anyclaw-style-guide` for all frontend code, `/anyclaw-refactor` every 5 deployments, and `/anyclaw-describe-version` for version descriptions. The block also lists the MCP tool set so the agent knows not to expect file/shell MCP tools.
+1. Append an `## AnyRaven Agent Instructions` block to `CLAUDE.md` telling the agent to follow `/anyclaw-build-feature` for all feature work, `/anyclaw-style-guide` for all frontend code, `/anyclaw-refactor` every 5 deployments, and `/anyclaw-describe-version` for version descriptions. The block also lists the MCP tool set so the agent knows not to expect file/shell MCP tools.
 2. Copy the `.md` files to `.claude/commands/` so they become slash commands.
 
 **Generic agents (system prompt):** the packaging script concatenates all four skill bodies into `/.anyclaw/skills/system-prompt.txt`. The generic webhook adapter passes this as the system prompt when dispatching work.
@@ -925,7 +925,7 @@ If either fails, the dispatch server rejects the task with a clear error telling
 
 Deployment is governed by decisions #8, #22, #23, #25, #27:
 
-- **Self-hosted:** one Docker container (or a native Linux install with `systemd --user`) running a supervisor that manages five persistent AnyClaw processes. A sixth, the agent subprocess, is transient — spawned per task.
+- **Self-hosted:** one Docker container (or a native Linux install with `systemd --user`) running a supervisor that manages five persistent AnyRaven processes. A sixth, the agent subprocess, is transient — spawned per task.
 - **Cloud-hosted Phase 1:** one container per user on a Hetzner VPS. Same image as self-hosted.
 - **Cloud-hosted Phase 2 (future):** E2B microVMs or Kubernetes Agent Sandbox CRD. Same container internals.
 - **Linux-first for MVP.** Windows/macOS self-hosters use WSL2 or a Linux VM.
@@ -1017,7 +1017,7 @@ Decision #25: systemd in user mode is preferred for native installs. Files live 
 **`anyclaw-pocketbase.service`:**
 ```ini
 [Unit]
-Description=AnyClaw PocketBase
+Description=AnyRaven PocketBase
 After=network.target
 
 [Service]
@@ -1035,7 +1035,7 @@ WantedBy=default.target
 **`anyclaw-tunnel.service`:**
 ```ini
 [Unit]
-Description=AnyClaw Tunnel Manager
+Description=AnyRaven Tunnel Manager
 After=network.target
 
 [Service]
@@ -1055,7 +1055,7 @@ WantedBy=default.target
 **`anyclaw-dispatch.service`:**
 ```ini
 [Unit]
-Description=AnyClaw Dispatch + MCP Server
+Description=AnyRaven Dispatch + MCP Server
 After=anyclaw-pocketbase.service
 Wants=anyclaw-pocketbase.service
 
@@ -1081,7 +1081,7 @@ WantedBy=default.target
 **`anyclaw-logic.service`** (agent-modifiable; restart on failure, not on clean exit):
 ```ini
 [Unit]
-Description=AnyClaw Logic Service (agent-built)
+Description=AnyRaven Logic Service (agent-built)
 After=anyclaw-pocketbase.service
 Wants=anyclaw-pocketbase.service
 
@@ -1105,7 +1105,7 @@ WantedBy=default.target
 **`anyclaw-prod-static.service`:**
 ```ini
 [Unit]
-Description=AnyClaw Prod Static Server
+Description=AnyRaven Prod Static Server
 After=network.target
 
 [Service]
@@ -1272,7 +1272,7 @@ services:
     volumes:
       - anyclaw_data:/data
     environment:
-      - BROKER_URL=${BROKER_URL:-https://broker.anyclawapp.com}
+      - BROKER_URL=${BROKER_URL:-https://broker.anyraven.com}
       - ANYCLAW_USER_TOKEN=${ANYCLAW_USER_TOKEN}
     deploy:
       resources:
@@ -1293,7 +1293,7 @@ One service. Supervisord inside runs the five processes. Only the tunnel manager
 
 Invocation:
 ```bash
-curl -fsSL https://get.anyclawapp.com | bash
+curl -fsSL https://get.anyraven.com | bash
 ```
 
 The install script handles prerequisites, bootstraps PocketBase with a long-lived API token, generates the master encryption key, and stores the user's LLM API key encrypted in PocketBase.
@@ -1303,13 +1303,13 @@ The install script handles prerequisites, bootstraps PocketBase with a long-live
 set -euo pipefail
 
 # ============================================================
-# AnyClaw Standalone Installer
+# AnyRaven Standalone Installer
 # ============================================================
 
 ANYCLAW_VERSION="${ANYCLAW_VERSION:-latest}"
 INSTALL_DIR="${ANYCLAW_DIR:-$HOME/.anyclaw-host}"
 
-echo "=== AnyClaw Installer ==="
+echo "=== AnyRaven Installer ==="
 
 # ----------------------------------------------------------
 # [1/6] Prerequisites
@@ -1363,9 +1363,9 @@ echo "[3/6] Setting up install directory..."
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-curl -fsSL "https://releases.anyclawapp.com/$ANYCLAW_VERSION/docker-compose.yml" \
+curl -fsSL "https://releases.anyraven.com/$ANYCLAW_VERSION/docker-compose.yml" \
   -o docker-compose.yml
-curl -fsSL "https://releases.anyclawapp.com/$ANYCLAW_VERSION/env.template" \
+curl -fsSL "https://releases.anyraven.com/$ANYCLAW_VERSION/env.template" \
   -o .env.template
 
 # ----------------------------------------------------------
@@ -1382,7 +1382,7 @@ if [ ! -f .env ]; then
   rm -f .env.bak
 
   echo
-  echo "AnyClaw needs an LLM API key for AI-powered features."
+  echo "AnyRaven needs an LLM API key for AI-powered features."
   read -rp "LLM provider (anthropic/openai) [anthropic]: " LLM_PROVIDER
   LLM_PROVIDER="${LLM_PROVIDER:-anthropic}"
   read -rsp "API key for $LLM_PROVIDER: " LLM_API_KEY
@@ -1468,12 +1468,12 @@ case "$AGENT" in
 esac
 
 echo
-echo "=== AnyClaw is running ==="
+echo "=== AnyRaven is running ==="
 echo "  Install dir: $INSTALL_DIR"
 echo "  Logs:        docker compose -f $INSTALL_DIR/docker-compose.yml logs -f"
 echo "  Stop:        docker compose -f $INSTALL_DIR/docker-compose.yml down"
 echo
-echo "Open the AnyClaw mobile app and sign in to connect."
+echo "Open the AnyRaven mobile app and sign in to connect."
 ```
 
 **`bootstrap-pocketbase.sh`** (decision #47) runs inside the container and:
@@ -1500,10 +1500,10 @@ Key properties:
 ### 15. Default Welcome Page
 
 The first time the user opens the WebView after install, they see a
-default page that ships with the AnyClaw distribution. It is not just a
+default page that ships with the AnyRaven distribution. It is not just a
 splash screen — it is a working page that does three jobs at once:
 
-1. **Onboards the user.** Introduces AnyClaw, explains the Request
+1. **Onboards the user.** Introduces AnyRaven, explains the Request
    button, and shows three example prompts the user can copy.
 2. **Demonstrates every pattern the style guide prescribes.** File
    layout, theme tokens, `usePreferences()`, PocketBase data fetching,
@@ -1579,14 +1579,14 @@ export default function Welcome() {
         <header className="space-y-2">
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
-            <span className="text-sm text-muted">Welcome to AnyClaw</span>
+            <span className="text-sm text-muted">Welcome to AnyRaven</span>
           </div>
           <h1 className="text-2xl font-semibold">
             Your personal app, built on request.
           </h1>
           <p className="text-base text-muted">
             Tap the Request button to ask for a feature in plain words.
-            AnyClaw will build it, test it, and deploy it here.
+            AnyRaven will build it, test it, and deploy it here.
           </p>
         </header>
 
@@ -1698,7 +1698,7 @@ PocketBase fetch, the shape is already here.
 
 #### Phase 1: Hetzner VPS, one container per user
 
-A single Hetzner CX32 VPS (4 vCPU, 8GB RAM, 80GB disk, US East via Ashburn — decision #18 and #44) runs one AnyClaw container per subscriber. Each container is the exact same image as the self-hosted distribution.
+A single Hetzner CX32 VPS (4 vCPU, 8GB RAM, 80GB disk, US East via Ashburn — decision #18 and #44) runs one AnyRaven container per subscriber. Each container is the exact same image as the self-hosted distribution.
 
 **VPS layout:**
 ```
@@ -1732,7 +1732,7 @@ Each user's container has its own `/data` volume and its own supervisord supervi
 - Lifecycle: create, start, stop, destroy.
 - Idle shutdown: stop containers after 30 minutes of tunnel inactivity; wake on the next mobile-app broker message.
 
-**Caddy** terminates TLS on `broker.anyclawapp.com` and reverse-proxies WSS to the broker process, which then routes per-user over the in-envelope service tag (decision #43).
+**Caddy** terminates TLS on `broker.anyraven.com` and reverse-proxies WSS to the broker process, which then routes per-user over the in-envelope service tag (decision #43).
 
 #### Phase 2: E2B microVMs or Kubernetes Agent Sandbox CRD (future)
 
@@ -1760,14 +1760,14 @@ Supports $12–15/month pricing with healthy margins; BYOK users drop COGS to ~$
 
 ---
 
-### 17. Hosting OpenClaw Alongside AnyClaw
+### 17. Hosting OpenClaw Alongside AnyRaven
 
 Cloud-hosted users who choose OpenClaw as their agent get their own OpenClaw instance — not a shared one. The one-container-per-user model (decision #22) makes this clean:
 
-- **Each user's AnyClaw container also runs OpenClaw** as one of the transient processes it spawns on demand. When the dispatch server handles a task and the user has selected OpenClaw as their adapter, it spawns OpenClaw with the worktree path as CWD. OpenClaw runs inside the same container, as the `anyclaw-agent` user, with access only to `/data/dev/.worktrees/task-<id>/` and the MCP endpoint at `http://127.0.0.1:3002/mcp`.
+- **Each user's AnyRaven container also runs OpenClaw** as one of the transient processes it spawns on demand. When the dispatch server handles a task and the user has selected OpenClaw as their adapter, it spawns OpenClaw with the worktree path as CWD. OpenClaw runs inside the same container, as the `anyclaw-agent` user, with access only to `/data/dev/.worktrees/task-<id>/` and the MCP endpoint at `http://127.0.0.1:3002/mcp`.
 - **Claude Code users** get the same model, except the dispatch server spawns `claude -p` instead (decision #3).
 - **There is no shared OpenClaw across users.** Each container is its own tenant boundary; cross-tenant state bleed is structurally impossible.
-- **Self-hosted plugin mode** is unchanged: the user's existing OpenClaw or Claude Code installation is packaged with AnyClaw skills by the install script, and the AnyClaw container exposes its MCP endpoint on loopback for the local agent to use.
+- **Self-hosted plugin mode** is unchanged: the user's existing OpenClaw or Claude Code installation is packaged with AnyRaven skills by the install script, and the AnyRaven container exposes its MCP endpoint on loopback for the local agent to use.
 
 For self-hosted standalone mode, the install script detects whether OpenClaw or Claude Code is available on the host and packages skills accordingly. If neither is present, the user is directed to install one (or use the generic MCP endpoint with any compatible agent).
 

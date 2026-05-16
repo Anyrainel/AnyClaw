@@ -1,6 +1,6 @@
 # Hetzner Single-VPS Deployment Guide (Phase 1)
 
-AnyClaw Phase 1 deployment: a single Hetzner CX32 VPS hosting the broker
+AnyRaven Phase 1 deployment: a single Hetzner CX32 VPS hosting the broker
 process, Caddy for TLS termination, and per-user containers.
 
 ## VPS Specification
@@ -74,12 +74,12 @@ sudo apt install -y caddy
 
 ## DNS Configuration
 
-Create the following DNS records for `anyclawapp.com` (or your domain):
+Create the following DNS records for `anyraven.com` (or your domain):
 
 | Type | Name | Value |
 |------|------|-------|
-| A | broker.anyclawapp.com | `<vps-ip>` |
-| A | anyclawapp.com | `<vps-ip>` |
+| A | broker.anyraven.com | `<vps-ip>` |
+| A | anyraven.com | `<vps-ip>` |
 
 Caddy handles TLS certificate provisioning automatically via Let's Encrypt.
 
@@ -106,7 +106,7 @@ sudo chown -R anyclaw:anyclaw /opt/anyclaw
 
 ```bash
 cat > /opt/anyclaw/caddy/Caddyfile << 'CADDYEOF'
-broker.anyclawapp.com {
+broker.anyraven.com {
     reverse_proxy localhost:8443
     encode gzip
 }
@@ -117,7 +117,7 @@ sudo cp /opt/anyclaw/caddy/Caddyfile /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-Caddy terminates TLS on `broker.anyclawapp.com` and reverse-proxies WSS
+Caddy terminates TLS on `broker.anyraven.com` and reverse-proxies WSS
 connections to the broker process on port 8443.
 
 ## Provisioner Compose

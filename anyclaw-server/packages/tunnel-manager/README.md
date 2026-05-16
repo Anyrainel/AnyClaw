@@ -1,7 +1,7 @@
 # @anyclaw/tunnel-manager
 
 Persistent WebSocket client that maintains a tunnel from the anyclaw-server to either:
-1. **The broker** — relayed connection through AnyClaw's cloud broker (auth + encrypted frame relay)
+1. **The broker** — relayed connection through AnyRaven's cloud broker (auth + encrypted frame relay)
 2. **A user-provided tunnel** — direct connection via Cloudflare Tunnel, ngrok, or any other WSS endpoint the user configures
 
 The tunnel manager routes inbound frames to the correct local service based on the service label in the envelope.
@@ -18,7 +18,7 @@ See [docs/plan4-connection-broker-design.md](../../../docs/plan4-connection-brok
 ## Connection Modes
 
 ### Broker Mode (default)
-Connects to `wss://broker.anyclawapp.com/relay/server` using the server's auth token. The broker relays encrypted frames between the mobile app and the server.
+Connects to `wss://broker.anyraven.com/relay/server` using the server's auth token. The broker relays encrypted frames between the mobile app and the server.
 
 ### Direct Mode
 Connects directly to a user-provided WSS URL (e.g. `wss://my-server.ngrok.io` or `wss://my-tunnel.cloudflare.com`). No broker involvement. The mobile app connects to the same endpoint.
@@ -41,7 +41,7 @@ Use direct mode when:
 | Variable | Default | Description |
 |---|---|---|
 | `ANYCLAW_DATA_ROOT` | `/data` | Locates secrets dir for server token and device keys |
-| `BROKER_URL` | `wss://broker.anyclawapp.com` | WSS URL of the broker (broker mode only) |
+| `BROKER_URL` | `wss://broker.anyraven.com` | WSS URL of the broker (broker mode only) |
 | `ANYCLAW_TUNNEL_URL` | — | User-provided WSS URL for direct mode. If set, takes precedence over broker mode. |
 
 ## Build & Run

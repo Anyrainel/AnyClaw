@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` when executing independent tasks in this plan, `superpowers:test-driven-development` for every code task (RED → GREEN → REFACTOR, no exceptions), `superpowers:verification-before-completion` before marking any task complete, and `superpowers:systematic-debugging` when tests fail. Every task below is a self-contained unit with exact file paths, exact commands, and complete code. Do not gold-plate. Do not skip tests. Do not claim completion without running the verification commands shown.
 
-**Goal:** Ship the AnyClaw Connection Broker — a cheap, stateless-where-possible Fastify service on Hetzner that authenticates users via OAuth, pairs self-hosted servers with cryptographic MITM protection, and relays NaCl-end-to-end-encrypted WSS traffic between mobile apps and user hosts — such that a simulated mobile client and a simulated host can complete OAuth → pair → BIP39-verify → WSS-relay a round-trip NaCl frame, with the broker provably never holding a private key.
+**Goal:** Ship the AnyRaven Connection Broker — a cheap, stateless-where-possible Fastify service on Hetzner that authenticates users via OAuth, pairs self-hosted servers with cryptographic MITM protection, and relays NaCl-end-to-end-encrypted WSS traffic between mobile apps and user hosts — such that a simulated mobile client and a simulated host can complete OAuth → pair → BIP39-verify → WSS-relay a round-trip NaCl frame, with the broker provably never holding a private key.
 
-**Architecture:** Node.js 22 + Fastify 4 fronted by Caddy (auto-TLS on `broker.anyclawapp.com`), backed by Postgres 16 and Lucia Auth v3 for identity. Two WSS endpoints — `/relay/client` (mobile, JWT-auth) and `/relay/server` (host, token-auth) — are bridged by an in-memory `serverConnections` map and a zero-copy pipe that routes frames by peeking at a CBOR envelope preamble; every data frame payload is a NaCl box ciphertext the broker cannot decrypt.
+**Architecture:** Node.js 22 + Fastify 4 fronted by Caddy (auto-TLS on `broker.anyraven.com`), backed by Postgres 16 and Lucia Auth v3 for identity. Two WSS endpoints — `/relay/client` (mobile, JWT-auth) and `/relay/server` (host, token-auth) — are bridged by an in-memory `serverConnections` map and a zero-copy pipe that routes frames by peeking at a CBOR envelope preamble; every data frame payload is a NaCl box ciphertext the broker cannot decrypt.
 
 **Tech Stack:** Node.js 22 LTS, Fastify 4, TypeScript 5, `@fastify/websocket`, Postgres 16, `postgres` (porsager), Lucia Auth v3 + `@lucia-auth/adapter-postgresql`, `jose` (JWT), `libsodium-wrappers` (X25519 + nacl.box), `cbor-x`, `zod`, `pino`, `vitest`, `testcontainers`, `nock`, `@bitgo/bip39` wordlist, Caddy 2.
 
@@ -26,10 +26,10 @@
 
 ## Repository Layout
 
-This plan scaffolds a **new standalone monorepo** at `F:/Codes/AnyClaw/broker/`, separate from `anyclaw-server`. It is its own deployable.
+This plan scaffolds a **new standalone monorepo** at `F:/Codes/AnyRaven/broker/`, separate from `anyclaw-server`. It is its own deployable.
 
 ```
-F:/Codes/AnyClaw/broker/
+F:/Codes/AnyRaven/broker/
 ├── package.json
 ├── pnpm-workspace.yaml          # single-package workspace (future-proof for coturn subpackage)
 ├── tsconfig.json
@@ -111,7 +111,7 @@ F:/Codes/AnyClaw/broker/
 
 **Files to create:**
 
-`F:/Codes/AnyClaw/broker/package.json`:
+`F:/Codes/AnyRaven/broker/package.json`:
 
 ```json
 {
@@ -155,7 +155,7 @@ F:/Codes/AnyClaw/broker/
 }
 ```
 
-`F:/Codes/AnyClaw/broker/tsconfig.json`:
+`F:/Codes/AnyRaven/broker/tsconfig.json`:
 
 ```json
 {
@@ -179,7 +179,7 @@ F:/Codes/AnyClaw/broker/
 }
 ```
 
-`F:/Codes/AnyClaw/broker/vitest.config.ts`:
+`F:/Codes/AnyRaven/broker/vitest.config.ts`:
 
 ```ts
 import { defineConfig } from 'vitest/config';
@@ -197,7 +197,7 @@ export default defineConfig({
 });
 ```
 
-`F:/Codes/AnyClaw/broker/.gitignore`:
+`F:/Codes/AnyRaven/broker/.gitignore`:
 
 ```
 node_modules
@@ -208,7 +208,7 @@ coverage
 *.log
 ```
 
-`F:/Codes/AnyClaw/broker/.env.example`:
+`F:/Codes/AnyRaven/broker/.env.example`:
 
 ```
 # Server
@@ -226,19 +226,19 @@ JWT_ACCESS_TTL_SECONDS=900
 # OAuth — Google
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=https://broker.anyclawapp.com/auth/oauth/google/callback
+GOOGLE_REDIRECT_URI=https://broker.anyraven.com/auth/oauth/google/callback
 
 # OAuth — Apple
-APPLE_CLIENT_ID=com.anyclawapp.ios
+APPLE_CLIENT_ID=com.anyravenapp.ios
 APPLE_TEAM_ID=
 APPLE_KEY_ID=
 APPLE_PRIVATE_KEY_PEM=
-APPLE_REDIRECT_URI=https://broker.anyclawapp.com/auth/oauth/apple/callback
+APPLE_REDIRECT_URI=https://broker.anyraven.com/auth/oauth/apple/callback
 
 # OAuth — GitHub
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
-GITHUB_REDIRECT_URI=https://broker.anyclawapp.com/auth/oauth/github/callback
+GITHUB_REDIRECT_URI=https://broker.anyraven.com/auth/oauth/github/callback
 
 # Provider-refresh-token encryption
 PROVIDER_TOKEN_ENC_KEY=replace-with-32-random-bytes-base64url
@@ -247,7 +247,7 @@ PROVIDER_TOKEN_ENC_KEY=replace-with-32-random-bytes-base64url
 **Commands:**
 
 ```bash
-cd F:/Codes/AnyClaw/broker
+cd F:/Codes/AnyRaven/broker
 pnpm install
 pnpm typecheck
 pnpm test
@@ -1771,10 +1771,10 @@ curl http://127.0.0.1:8080/healthz   # → {"ok":true}
 
 **Goal:** Deployable artifacts. No code in this task — just infra files that match design §2.3–2.4.
 
-`F:/Codes/AnyClaw/broker/Caddyfile`:
+`F:/Codes/AnyRaven/broker/Caddyfile`:
 
 ```caddy
-broker.anyclawapp.com {
+broker.anyraven.com {
     encode gzip zstd
     reverse_proxy 127.0.0.1:8080
     header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
@@ -1785,7 +1785,7 @@ broker.anyclawapp.com {
 }
 ```
 
-`F:/Codes/AnyClaw/broker/Dockerfile`:
+`F:/Codes/AnyRaven/broker/Dockerfile`:
 
 ```dockerfile
 FROM node:22-alpine AS build
@@ -1810,7 +1810,7 @@ EXPOSE 8080
 CMD ["node", "dist/index.js"]
 ```
 
-`F:/Codes/AnyClaw/broker/docker-compose.yml` (production-ish, single host):
+`F:/Codes/AnyRaven/broker/docker-compose.yml` (production-ish, single host):
 
 ```yaml
 version: '3.9'
@@ -1850,7 +1850,7 @@ volumes:
   pgdata:
 ```
 
-`F:/Codes/AnyClaw/broker/docker-compose.dev.yml` (local Postgres only):
+`F:/Codes/AnyRaven/broker/docker-compose.dev.yml` (local Postgres only):
 
 ```yaml
 version: '3.9'
@@ -1864,11 +1864,11 @@ services:
     ports: ['5432:5432']
 ```
 
-`F:/Codes/AnyClaw/broker/systemd/anyclaw-broker.service` (non-Docker deployment):
+`F:/Codes/AnyRaven/broker/systemd/anyclaw-broker.service` (non-Docker deployment):
 
 ```ini
 [Unit]
-Description=AnyClaw Connection Broker
+Description=AnyRaven Connection Broker
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -1895,8 +1895,8 @@ WantedBy=multi-user.target
 **Verify:**
 
 ```bash
-docker build -t anyclaw-broker:test F:/Codes/AnyClaw/broker
-docker compose -f F:/Codes/AnyClaw/broker/docker-compose.dev.yml up -d
+docker build -t anyclaw-broker:test F:/Codes/AnyRaven/broker
+docker compose -f F:/Codes/AnyRaven/broker/docker-compose.dev.yml up -d
 ```
 
 ---
@@ -2025,7 +2025,7 @@ This test is the acceptance gate for Plan 4. If it passes alongside every unit a
 Run, in order, and confirm every command exits zero:
 
 ```bash
-cd F:/Codes/AnyClaw/broker
+cd F:/Codes/AnyRaven/broker
 pnpm install
 pnpm typecheck
 pnpm test                                   # every unit + integration + e2e test green

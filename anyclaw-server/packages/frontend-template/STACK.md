@@ -1,6 +1,6 @@
 # Frontend Stack & Project Organization
 
-This is the **opinionated default stack** for AnyClaw frontend work. The goal: eliminate decision fatigue on common stuff so the agent can focus on product logic.
+This is the **opinionated default stack** for AnyRaven frontend work. The goal: eliminate decision fatigue on common stuff so the agent can focus on product logic.
 
 ## Stack
 

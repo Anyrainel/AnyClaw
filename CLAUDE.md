@@ -1,6 +1,6 @@
-# AnyClaw — Agent Guidance
+# AnyRaven — Agent Guidance
 
-AnyClaw is a self-evolving AI companion app. A coding agent builds and deploys a personalized full-stack web app; the user interacts via a mobile shell. **The project is not yet functional end-to-end** — broker↔tunnel-manager WSS integration and Docker validation are the remaining critical path items.
+AnyRaven is a self-evolving AI companion app. A coding agent builds and deploys a personalized full-stack web app; the user interacts via a mobile shell. **The project is not yet functional end-to-end** — broker↔tunnel-manager WSS integration and Docker validation are the remaining critical path items.
 
 ## Repo Layout
 

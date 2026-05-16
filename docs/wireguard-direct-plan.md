@@ -1,4 +1,4 @@
-# AnyClaw WireGuard Direct Connection Plan
+# AnyRaven WireGuard Direct Connection Plan
 
 ## Goal
 Enable native mobile apps (iOS/Android) to connect directly to user's self-hosted server via WireGuard VPN tunnel. Eliminate broker traffic relay to save costs. Broker only handles OAuth, server registry, and initial pairing.

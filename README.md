@@ -1,10 +1,10 @@
-# AnyClaw
+# AnyRaven
 
 > **Work in progress — not functional yet.**
 
-AnyClaw is a self-evolving AI companion app. A personal coding agent automatically designs, builds, and deploys a personalized full-stack web application; the user accesses it through a companion mobile app and submits feature requests in plain language. The agent handles clarification, implementation, testing, and deployment end-to-end.
+AnyRaven is a self-evolving AI companion app. A personal coding agent automatically designs, builds, and deploys a personalized full-stack web application; the user accesses it through a companion mobile app and submits feature requests in plain language. The agent handles clarification, implementation, testing, and deployment end-to-end.
 
-AnyClaw is **agent-agnostic** — it does not bundle a coding agent. It provides infrastructure and a mobile shell that works with any MCP-compatible agent (Claude Code, OpenClaw, and others).
+AnyRaven is **agent-agnostic** — it does not bundle a coding agent. It provides infrastructure and a mobile shell that works with any MCP-compatible agent (Claude Code, OpenClaw, and others).
 
 ## Architecture
 
@@ -35,7 +35,7 @@ AnyClaw is **agent-agnostic** — it does not bundle a coding agent. It provides
 ## Repository Layout
 
 ```
-AnyClaw/
+AnyRaven/
 ├── broker/             Auth + relay service (deploy to cloud)
 ├── mobile/             Expo companion app (iOS / Android / Web)
 ├── anyclaw-server/     Server monorepo (runs per-user, in Docker)

@@ -1,4 +1,4 @@
-# AnyClaw Local Setup Checklist
+# AnyRaven Local Setup Checklist
 
 ## Prerequisites (user must have)
 - [x] OpenClaw installed with valid API keys
@@ -29,7 +29,7 @@ mkdir -p /var/log/anyclaw
 cd /data/dev
 git init
 git config user.email "anyclaw@local"
-git config user.name "AnyClaw"
+git config user.name "AnyRaven"
 # Seed frontend-template source here
 touch README.md
 git add README.md
@@ -82,7 +82,7 @@ curl http://127.0.0.1:8090/api/health
 ```bash
 curl -X POST http://127.0.0.1:4100/api/tasks \
   -H "Content-Type: application/json" \
-  -d '{"taskId":"test-1","request":"Say hello from AnyClaw"}'
+  -d '{"taskId":"test-1","request":"Say hello from AnyRaven"}'
 ```
 
 ## Notes

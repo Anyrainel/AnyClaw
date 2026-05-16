@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The server infrastructure is the foundation every other AnyClaw plan builds on. It delivers:
+The server infrastructure is the foundation every other AnyRaven plan builds on. It delivers:
 
 - **`@anyclaw/shared`** — the shared library consumed by all packages: NaCl crypto, gzip SQLite snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager, and the `AnyClawPaths` resolver.
 - **`@anyclaw/dispatch`** — a single Express app on `:4100` that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes and agent adapters onto. Plan 1 scaffolds the app factory and the `/health` endpoint.

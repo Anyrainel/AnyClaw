@@ -1,6 +1,6 @@
 # Plan 4: Connection Broker — Detailed Design
 
-**Goal:** Build a lightweight cloud service that authenticates AnyClaw users, registers self-hosted server instances, and brokers connections between the mobile app and the user's host. The broker implements a phased tunnel strategy: **Phase 1 (launch): WSS relay with NaCl end-to-end encryption**, **Phase 2 (post-launch): WebRTC P2P with the broker reduced to signaling**.
+**Goal:** Build a lightweight cloud service that authenticates AnyRaven users, registers self-hosted server instances, and brokers connections between the mobile app and the user's host. The broker implements a phased tunnel strategy: **Phase 1 (launch): WSS relay with NaCl end-to-end encryption**, **Phase 2 (post-launch): WebRTC P2P with the broker reduced to signaling**.
 
 **Guiding constraint:** The broker must be cheap to operate, stateless where possible, and must never be able to read the plaintext traffic it relays. In Phase 1 it forwards every byte between the mobile app and the user's host, so the design minimises per-user bandwidth and makes the transition to Phase 2 (P2P) a drop-in upgrade rather than a rewrite.
 
@@ -36,10 +36,10 @@
 
 ### 2.1 Domain
 
-- **Apex domain:** `anyclawapp.com` (already purchased, per spec decision #15).
-- **Broker hostname:** `broker.anyclawapp.com`.
+- **Apex domain:** `anyraven.com` (already purchased, per spec decision #15).
+- **Broker hostname:** `broker.anyraven.com`.
 - **DNS:** A/AAAA records point at the Hetzner VPS. TTL 300s for initial deployment, raise to 3600s once stable.
-- **Wildcard TLS:** Not needed. Only one hostname for the broker. `broker.anyclawapp.com` covers REST + WSS on port 443.
+- **Wildcard TLS:** Not needed. Only one hostname for the broker. `broker.anyraven.com` covers REST + WSS on port 443.
 
 ### 2.2 VPS Provider: Hetzner (spec decision #44)
 
@@ -58,7 +58,7 @@
 **Caddyfile:**
 
 ```caddy
-broker.anyclawapp.com {
+broker.anyraven.com {
     encode gzip zstd
     reverse_proxy 127.0.0.1:8080
     header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
@@ -72,7 +72,7 @@ broker.anyclawapp.com {
 ### 2.4 Deployment Topology
 
 ```
-Hetzner CX22 (broker.anyclawapp.com)
+Hetzner CX22 (broker.anyraven.com)
 ├── Caddy          (443 → 127.0.0.1:8080, auto TLS)
 ├── Fastify broker (Node 22 LTS, PM2-supervised)
 ├── Postgres 16    (local, unix socket, daily pg_dump to off-box storage)
@@ -208,13 +208,13 @@ The refresh token itself is **not rotated** on each use (keeps mobile logic simp
 
 ### 5.1 Pairing Overview
 
-A "server" in broker terminology is the user's entire AnyClaw host (one row per host, not per process). The Tunnel Manager process on the host owns the relationship: it holds the `server_token`, maintains the WSS connection, and presents the host to the broker.
+A "server" in broker terminology is the user's entire AnyRaven host (one row per host, not per process). The Tunnel Manager process on the host owns the relationship: it holds the `server_token`, maintains the WSS connection, and presents the host to the broker.
 
 ### 5.2 Registration Flow
 
 1. Install script runs on the user's host. It generates the host's X25519 long-lived keypair `(server_pk, server_sk)`, storing `server_sk` at `/data/.anyclaw/server.key` with mode `0600` (owned by `anyclaw-infra` user).
 2. User completes the pairing flow (§6) in the mobile app, which provides the host with a `server_token`, the user's device public key `mobile_pk`, and a `broker_url`.
-3. Tunnel Manager writes these to its config file, then opens `wss://broker.anyclawapp.com/relay/server?token=<server_token>`.
+3. Tunnel Manager writes these to its config file, then opens `wss://broker.anyraven.com/relay/server?token=<server_token>`.
 4. On first successful connect, the Tunnel Manager sends an in-band registration frame:
    ```json
    {
@@ -287,14 +287,14 @@ Transitions happen in a single background job (`health-checker`) that runs every
    - `user_id`: the authenticated user.
    - `claimed`: false.
    - `expires_at`: now + 24h.
-3. Broker returns `{ server_token, broker_url: "wss://broker.anyclawapp.com/relay/server" }`.
+3. Broker returns `{ server_token, broker_url: "wss://broker.anyraven.com/relay/server" }`.
 4. App locally generates the device's X25519 long-lived keypair `(mobile_pk, mobile_sk)` via `libsodium-wrappers` and stores `mobile_sk` in `expo-secure-store` keyed by a placeholder `pending_pair_id` (rekeyed once the real `server_id` is known).
 5. App constructs a pairing payload:
    ```json
    {
      "server_token": "<base64url>",
      "mobile_pk": "<base64url>",
-     "broker_url": "wss://broker.anyclawapp.com/relay/server"
+     "broker_url": "wss://broker.anyraven.com/relay/server"
    }
    ```
 6. App encodes the JSON as a QR code (mobile-side, no broker involvement) and also offers "copy as text" for users pairing a host they're SSH'd into.
@@ -334,7 +334,7 @@ Transitions happen in a single background job (`health-checker`) that runs every
 
 ### 7.1 Endpoints
 
-The broker exposes two WebSocket listeners under `broker.anyclawapp.com`:
+The broker exposes two WebSocket listeners under `broker.anyraven.com`:
 
 | Endpoint                    | Caller                 | Auth                                           |
 |-----------------------------|------------------------|------------------------------------------------|
@@ -349,7 +349,7 @@ The broker keeps two in-memory maps (both backed by Redis pub/sub when running m
 ### 7.2 Connection Establishment
 
 1. Mobile app calls `GET /servers` over HTTPS → receives `[{ server_id, name, status, server_pk }]`.
-2. User selects a server. The app opens `wss://broker.anyclawapp.com/relay/client?server_id=<id>` with `Authorization: Bearer <jwt>`.
+2. User selects a server. The app opens `wss://broker.anyraven.com/relay/client?server_id=<id>` with `Authorization: Bearer <jwt>`.
 3. Broker validates the JWT, confirms `server_id` belongs to the authenticated user, assigns a random `client_id`.
 4. Broker looks up the server's WSS connection in `serverConnections`. If missing or `status != online` → broker closes the client WS with code `4001` reason `"server_offline"`.
 5. If present, broker sends a control frame to the host:
@@ -681,7 +681,7 @@ Sliding-window counters in Redis (single key per `(ip, endpoint)` or `(user_id, 
 
 ### 10.6 Server Zero-Port Guarantee
 
-The user's host **never listens on a public port**. The Tunnel Manager initiates an outbound WSS connection to the broker. All traffic flows over this single outbound connection. The host's firewall can `DROP` everything inbound. In Phase 2, WebRTC ICE also uses outbound-initiated UDP/TCP to STUN/TURN — still no inbound port required. This is the architectural property that lets AnyClaw run behind consumer NAT / carrier-grade NAT / corporate firewalls without any manual configuration.
+The user's host **never listens on a public port**. The Tunnel Manager initiates an outbound WSS connection to the broker. All traffic flows over this single outbound connection. The host's firewall can `DROP` everything inbound. In Phase 2, WebRTC ICE also uses outbound-initiated UDP/TCP to STUN/TURN — still no inbound port required. This is the architectural property that lets AnyRaven run behind consumer NAT / carrier-grade NAT / corporate firewalls without any manual configuration.
 
 ---
 
@@ -883,7 +883,7 @@ When a single broker box is not enough:
 
 | Layer             | Choice                                     | Rationale                                                      |
 |-------------------|--------------------------------------------|----------------------------------------------------------------|
-| Runtime           | Node.js 22 LTS (TypeScript)                | Shares tooling with the rest of AnyClaw, I/O-bound workload    |
+| Runtime           | Node.js 22 LTS (TypeScript)                | Shares tooling with the rest of AnyRaven, I/O-bound workload    |
 | HTTP framework    | Fastify 4                                  | Fast, first-class WS via `@fastify/websocket`, schema validation |
 | WebSocket         | `ws` (via `@fastify/websocket`)            | Battle-tested, zero-copy forwarding, permessage-deflate        |
 | Auth              | Lucia Auth v3                              | Thin, framework-agnostic, argon2id built in                    |

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Scaffold the AnyClaw server monorepo as the comprehensive foundation for every other plan. Plan 1 delivers: the shared library (`@anyclaw/shared` — NaCl crypto, snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager), the dispatch scaffold (`@anyclaw/dispatch` — the single Express app on port 4100 that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes + adapters onto), the tunnel manager package (`@anyclaw/tunnel-manager` — routing table + reconnection stub for Plan 4), the logic runner (`@anyclaw/logic-runner` — supervises the agent-built logic service), the prod-static server (`@anyclaw/prod-static` — serves built frontend), the frontend template (`@anyclaw/frontend-template` — seed project copied into `/data/dev/` on first run), the `/data` filesystem layout scripts, the pinned PocketBase 0.25 binary, the full 5-process `supervisord` config, and the Dockerfile bundling all of it.
+**Goal:** Scaffold the AnyRaven server monorepo as the comprehensive foundation for every other plan. Plan 1 delivers: the shared library (`@anyclaw/shared` — NaCl crypto, snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager), the dispatch scaffold (`@anyclaw/dispatch` — the single Express app on port 4100 that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes + adapters onto), the tunnel manager package (`@anyclaw/tunnel-manager` — routing table + reconnection stub for Plan 4), the logic runner (`@anyclaw/logic-runner` — supervises the agent-built logic service), the prod-static server (`@anyclaw/prod-static` — serves built frontend), the frontend template (`@anyclaw/frontend-template` — seed project copied into `/data/dev/` on first run), the `/data` filesystem layout scripts, the pinned PocketBase 0.25 binary, the full 5-process `supervisord` config, and the Dockerfile bundling all of it.
 
 **Architecture:** TypeScript monorepo under `anyclaw-server/` using npm workspaces. All shared code lives in `packages/shared/` (imported as `@anyclaw/shared`) and is consumed by every other package. `packages/dispatch/` is a single Express app listening on port 4100 — Plan 1 creates the scaffold (app factory + `/health`), Plan 2 mounts MCP routes, Plan 3 mounts REST routes and agent adapters. `packages/tunnel-manager/`, `packages/logic-runner/`, `packages/prod-static/` are independently supervised Node services. `packages/frontend-template/` is a Vite + React + TS + Tailwind v4 source tree that is copied into `/data/dev/` by `init-data-layout.sh` on first run. All persistent state is rooted at `/data` (PocketBase, dev, prod, snapshots, `.anyclaw`). Process supervision runs via `supervisord` inside a single Docker container with 5 supervised programs: `pocketbase`, `dispatch`, `tunnel-manager`, `logic-runner`, `prod-static`.
 
@@ -190,7 +190,7 @@ export default defineConfig({
 ```md
 # anyclaw-server
 
-Server-side monorepo for AnyClaw. See docs/superpowers/specs/2026-04-04-anyclaw-design.md.
+Server-side monorepo for AnyRaven. See docs/superpowers/specs/2026-04-04-anyclaw-design.md.
 
 Packages:
 - `shared` — crypto, snapshots, version store, worktrees, deploy manager, rollback manager
@@ -1690,7 +1690,7 @@ git commit -m "feat(dispatch): scaffold Express app on :4100 with /health"
 
 ### Task 8b: `@anyclaw/tunnel-manager` package (TDD)
 
-A Node service that will maintain a persistent WSS connection to `broker.anyclawapp.com` (real WSS wiring is Plan 4). In Plan 1 we create:
+A Node service that will maintain a persistent WSS connection to `broker.anyraven.com` (real WSS wiring is Plan 4). In Plan 1 we create:
 - a config loader that reads `/data/.anyclaw/server-token` and `/data/.anyclaw/device-keys.json`,
 - a routing table that maps the in-envelope `service` tag (`pb`/`api`/`app`) to a local port (`8090`/`4100`/`5173`),
 - a reconnection loop with exponential backoff that only logs (no real WSS).
@@ -1814,7 +1814,7 @@ describe("loadTunnelConfig", () => {
     expect(cfg.serverToken).toBe("tok-123");
     expect(cfg.deviceKeys.publicKey.length).toBe(32);
     expect(cfg.deviceKeys.secretKey.length).toBe(32);
-    expect(cfg.brokerUrl).toBe("wss://broker.anyclawapp.com");
+    expect(cfg.brokerUrl).toBe("wss://broker.anyraven.com");
   });
 
   it("throws when server-token is missing", async () => {
@@ -1898,7 +1898,7 @@ export async function loadTunnelConfig(opts: LoadOptions): Promise<TunnelConfig>
   return {
     serverToken,
     deviceKeys,
-    brokerUrl: opts.brokerUrl ?? "wss://broker.anyclawapp.com",
+    brokerUrl: opts.brokerUrl ?? "wss://broker.anyraven.com",
   };
 }
 ```
@@ -2230,7 +2230,7 @@ git commit -m "feat(logic-runner): supervise agent-built logic service on :3000"
 
 ### Task 8d: `@anyclaw/prod-static` package (TDD)
 
-A small Express server that serves static files from `/data/prod/frontend-build/` on port **5173**. If the directory is empty (nothing has been deployed), it serves a placeholder "Welcome to AnyClaw — your agent has not built anything yet" HTML page. SPA fallback: unknown routes return `index.html`.
+A small Express server that serves static files from `/data/prod/frontend-build/` on port **5173**. If the directory is empty (nothing has been deployed), it serves a placeholder "Welcome to AnyRaven — your agent has not built anything yet" HTML page. SPA fallback: unknown routes return `index.html`.
 
 **Files:**
 - Create: `anyclaw-server/packages/prod-static/package.json`
@@ -2304,7 +2304,7 @@ describe("prod-static", () => {
     const app = createProdStaticApp({ buildDir: root });
     const res = await request(app).get("/");
     expect(res.status).toBe(200);
-    expect(res.text).toMatch(/Welcome to AnyClaw/);
+    expect(res.text).toMatch(/Welcome to AnyRaven/);
     expect(res.text).toMatch(/has not built anything yet/);
   });
 
@@ -2348,12 +2348,12 @@ export const PLACEHOLDER_HTML = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>AnyClaw</title>
+    <title>AnyRaven</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
   </head>
   <body>
     <main style="font-family:system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem;">
-      <h1>Welcome to AnyClaw</h1>
+      <h1>Welcome to AnyRaven</h1>
       <p>Your agent has not built anything yet.</p>
     </main>
   </body>
@@ -2512,7 +2512,7 @@ export default defineConfig({
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AnyClaw</title>
+    <title>AnyRaven</title>
   </head>
   <body>
     <div id="root"></div>
@@ -2557,7 +2557,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 import { Routes, Route } from "react-router-dom";
 
 function Home() {
-  return <main className="p-8">AnyClaw template</main>;
+  return <main className="p-8">AnyRaven template</main>;
 }
 
 export function App() {
@@ -2681,7 +2681,7 @@ git status
 
 ```bash
 #!/usr/bin/env bash
-# Initialize the AnyClaw /data filesystem layout.
+# Initialize the AnyRaven /data filesystem layout.
 # Idempotent: safe to run multiple times.
 set -euo pipefail
 
@@ -2714,7 +2714,7 @@ if [ ! -d "$DATA_ROOT/dev/.git" ]; then
   ( cd "$DATA_ROOT/dev" \
     && git init --initial-branch=main \
     && git config user.email "anyclaw@local" \
-    && git config user.name  "AnyClaw" \
+    && git config user.name  "AnyRaven" \
     && git config commit.gpgsign false \
     && [ -f README.md ] || : > README.md \
     && git add -A \
@@ -2724,14 +2724,14 @@ fi
 # Always ensure the worktrees dir exists (even after first run)
 mkdir -p "$DATA_ROOT/dev/.worktrees"
 
-echo "AnyClaw data layout ready at $DATA_ROOT"
+echo "AnyRaven data layout ready at $DATA_ROOT"
 ```
 
 - [ ] **Step 2: Make it executable and test locally**
 
 Run: `chmod +x anyclaw-server/infra/scripts/init-data-layout.sh`
 Run: `DATA_ROOT=$(mktemp -d)/data bash anyclaw-server/infra/scripts/init-data-layout.sh`
-Expected: prints "AnyClaw data layout ready at ...", creates the directories, initializes git repo, exit 0.
+Expected: prints "AnyRaven data layout ready at ...", creates the directories, initializes git repo, exit 0.
 
 - [ ] **Step 3: Commit**
 
@@ -3012,7 +3012,7 @@ curl -fsS http://127.0.0.1:5173/ | head -5
 docker logs anyclaw-plan1 | tail -60
 docker stop anyclaw-plan1
 ```
-Expected: `curl /health` prints `{"status":"ok","version":"0.1.0"}`. `curl /` against prod-static returns the "Welcome to AnyClaw" placeholder HTML. Logs show all 5 supervised processes started: `pocketbase`, `dispatch`, `tunnel-manager`, `logic-runner`, `prod-static`. `/data/dev` contains the seeded frontend-template with a git history.
+Expected: `curl /health` prints `{"status":"ok","version":"0.1.0"}`. `curl /` against prod-static returns the "Welcome to AnyRaven" placeholder HTML. Logs show all 5 supervised processes started: `pocketbase`, `dispatch`, `tunnel-manager`, `logic-runner`, `prod-static`. `/data/dev` contains the seeded frontend-template with a git history.
 
 - [ ] **Step 5: Commit**
 

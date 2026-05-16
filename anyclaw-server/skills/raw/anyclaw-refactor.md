@@ -4,7 +4,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-refactor
 
-You are cleaning up the codebase of an AnyClaw personal web app. This skill
+You are cleaning up the codebase of an AnyRaven personal web app. This skill
 runs either on a schedule (after every 5th deployment) or proactively when
 you notice growing complexity while building a feature.
 

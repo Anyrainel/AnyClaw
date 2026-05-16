@@ -4,7 +4,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-describe-version
 
-You are writing a version description for a deployment of an AnyClaw
+You are writing a version description for a deployment of an AnyRaven
 personal web app. This appears in the user's version history. The user is
 NOT a developer. Write for a normal person.
 

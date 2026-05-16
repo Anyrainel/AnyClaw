@@ -145,7 +145,7 @@ The dispatch server (`packages/dispatch/src/index.ts`) can:
 Work done in this session to prepare the repo for GitHub publication and machine transition.
 
 ### Published to GitHub
-Repo pushed to GitHub as Anyrainel/AnyClaw (public). No CI existed before this session.
+Repo pushed to GitHub as Anyrainel/AnyRaven (public). No CI existed before this session.
 
 ### New file: `mobile/lib/pocketbase/sse.ts`
 Added PocketBase SSE subscription module: `initPocketBase`, `subscribeToTask`, `subscribeToAgentMessages`, `subscribeToDeployments`. All subscriptions decrypt NaCl-boxed envelopes via pairing keys from `loadPairingKeys`.

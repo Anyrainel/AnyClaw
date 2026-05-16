@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The AnyClaw MCP server is the chokepoint through which a coding agent performs operations that affect production: deploying new code, rolling back, snapshotting the database, managing PocketBase collections, and talking to the user on the mobile app. It runs as a supervised process on the same host as the rest of the AnyClaw infrastructure and exposes its tools over HTTP/SSE on loopback.
+The AnyRaven MCP server is the chokepoint through which a coding agent performs operations that affect production: deploying new code, rolling back, snapshotting the database, managing PocketBase collections, and talking to the user on the mobile app. It runs as a supervised process on the same host as the rest of the AnyRaven infrastructure and exposes its tools over HTTP/SSE on loopback.
 
 The guiding principle is **additive, not duplicative**. The agent (Claude Code, OpenClaw, or any MCP-capable agent) uses its own native file and shell tools inside a git worktree in the `dev/` workspace. The MCP server does not wrap those capabilities. It exposes exactly seven tools, each of which guards an operation that is either (a) failure-prone for agents, (b) requires infrastructure coordination that agents cannot safely perform alone, or (c) cannot be done with a local shell at all (user-facing messaging through the mobile app).
 
@@ -28,7 +28,7 @@ There are no scaffolding tools, no `read_file`/`write_file`, and no `run_command
 
 ### 2.1 Position in the Process Supervision Model
 
-AnyClaw runs all services as supervised processes under `systemd --user` (primary) or `supervisord` (fallback for minimal containers). The MCP server is one of those supervised processes. Per locked decisions #8, #23, and #25, there is **no three-container split** and **no sandbox container**. Everything runs in one host or one cloud container.
+AnyRaven runs all services as supervised processes under `systemd --user` (primary) or `supervisord` (fallback for minimal containers). The MCP server is one of those supervised processes. Per locked decisions #8, #23, and #25, there is **no three-container split** and **no sandbox container**. Everything runs in one host or one cloud container.
 
 ```
 Host (or single cloud container)
@@ -116,8 +116,8 @@ export function mountMcp(app: express.Express): void {
       { name: "anyclaw", version: "1.0.0" },
       {
         instructions: [
-          "AnyClaw MCP server. Use your own native file and shell tools for everything in the dev worktree.",
-          "Use AnyClaw MCP tools only for production operations: anyclaw_deploy, anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection.",
+          "AnyRaven MCP server. Use your own native file and shell tools for everything in the dev worktree.",
+          "Use AnyRaven MCP tools only for production operations: anyclaw_deploy, anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection.",
           "Use anyclaw_ask_user to clarify requirements and anyclaw_update_progress to keep the user informed.",
           "A version description of at least 10 characters is required for every deployment.",
         ].join(" "),
@@ -434,7 +434,7 @@ server.registerTool(
   },
   withErrorHandling(async (input) => {
     if (input.name.startsWith("_")) {
-      throw new ToolError("Collection names starting with '_' are reserved for AnyClaw infrastructure");
+      throw new ToolError("Collection names starting with '_' are reserved for AnyRaven infrastructure");
     }
     const snapshotId = await snapshotManager.create(`pre-schema-${input.name}-${Date.now()}`);
     const pb = getPocketBaseAdmin();
@@ -712,7 +712,7 @@ No DB snapshot, commit, or merge has happened yet — prod is untouched.
 
 ```bash
 git -C <worktreePath> add -A
-git -C <worktreePath> -c user.email=agent@anyclaw -c user.name="AnyClaw Agent" \
+git -C <worktreePath> -c user.email=agent@anyclaw -c user.name="AnyRaven Agent" \
     commit -m "<versionDescription>"
 git -C <worktreePath> tag "v${version}"
 ```

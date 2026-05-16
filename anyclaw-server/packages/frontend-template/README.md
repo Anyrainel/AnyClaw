@@ -15,7 +15,7 @@ This package is **not imported by any other package** — it is a standalone Vit
 
 ## Design Conventions
 
-All agent-generated UI should follow these conventions (from the AnyClaw design system in `docs/design.md`):
+All agent-generated UI should follow these conventions (from the AnyRaven design system in `docs/design.md`):
 
 - Tailwind v4 utility classes for all styling.
 - `oklch` color values for the accent color (user-chosen during onboarding).

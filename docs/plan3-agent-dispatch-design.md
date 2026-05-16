@@ -1,6 +1,6 @@
 # Plan 3: Agent Dispatch Layer -- Design Document
 
-**Goal:** Define the pluggable adapter layer that lets the AnyClaw mobile app submit work requests to the user's coding agent, relay clarifying questions back to the user, and report progress/completion/failure. Initial adapters cover OpenClaw and Claude Code, with a generic webhook adapter for future agents (Codex, Aider, Gemini CLI).
+**Goal:** Define the pluggable adapter layer that lets the AnyRaven mobile app submit work requests to the user's coding agent, relay clarifying questions back to the user, and report progress/completion/failure. Initial adapters cover OpenClaw and Claude Code, with a generic webhook adapter for future agents (Codex, Aider, Gemini CLI).
 
 **Depends on:** Plan 1 (Server Infrastructure) for PocketBase runtime and the supervised-process host layout.
 
@@ -70,7 +70,7 @@ All hops inside the host are loopback. Only the mobile hop traverses the WSS tun
 ```typescript
 /** Opaque handle returned by dispatch(). Adapters define the adapterRef shape. */
 type TaskHandle = {
-  taskId: string;           // AnyClaw-assigned UUID (client-generated)
+  taskId: string;           // AnyRaven-assigned UUID (client-generated)
   adapterRef: string;       // Adapter-specific reference (session ID, run ID, PID)
 };
 
@@ -416,7 +416,7 @@ The adapters and manager already pass the handle through; enabling limits later 
 
 ### 7.1 Connection
 
-Connects to a locally-running OpenClaw gateway at `ws://127.0.0.1:18789` over loopback. Two modes are the same code path: the user's existing install or an AnyClaw-bundled supervised process. Protocol version 3.
+Connects to a locally-running OpenClaw gateway at `ws://127.0.0.1:18789` over loopback. Two modes are the same code path: the user's existing install or an AnyRaven-bundled supervised process. Protocol version 3.
 
 **Handshake:**
 
@@ -449,7 +449,7 @@ class OpenClawAdapter implements AgentAdapter {
   constructor(private config: {
     gatewayUrl: string;   // "ws://127.0.0.1:18789"
     token: string;        // decrypted from PocketBase
-    workspace: string;    // OpenClaw workspace for AnyClaw tasks
+    workspace: string;    // OpenClaw workspace for AnyRaven tasks
   }) {}
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {

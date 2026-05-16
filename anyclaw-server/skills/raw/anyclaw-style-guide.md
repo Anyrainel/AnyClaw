@@ -4,7 +4,7 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-style-guide
 
-You are building the frontend UI for an AnyClaw personal web app. This guide
+You are building the frontend UI for an AnyRaven personal web app. This guide
 defines exact conventions for all React components, CSS, and any text the
 user will read. Consistency matters — the user sees every feature you build
 side by side, so they must look like they belong together.

@@ -1,12 +1,12 @@
-# AnyClaw — Self-Evolving AI Companion App
+# AnyRaven — Self-Evolving AI Companion App
 
 ## Overview
 
-AnyClaw is a self-evolving mobile UI layer powered by a personal AI coding agent. Instead of a fixed interface, the agent designs, builds, and maintains a fully personalized full-stack web application that the user accesses through a companion mobile app. The user submits feature requests; the agent clarifies requirements, then designs, implements, tests, and deploys — all automatically.
+AnyRaven is a self-evolving mobile UI layer powered by a personal AI coding agent. Instead of a fixed interface, the agent designs, builds, and maintains a fully personalized full-stack web application that the user accesses through a companion mobile app. The user submits feature requests; the agent clarifies requirements, then designs, implements, tests, and deploys — all automatically.
 
-**AnyClaw is agent-agnostic.** It does not own or bundle a coding agent. Instead, it provides infrastructure (server runtime, MCP tools, deployment pipeline) and a mobile viewer that works with any compatible coding agent. Initial adapters support **OpenClaw** and **Claude Code**, with the architecture extensible to Codex, Aider, or any agent that can use MCP tools.
+**AnyRaven is agent-agnostic.** It does not own or bundle a coding agent. Instead, it provides infrastructure (server runtime, MCP tools, deployment pipeline) and a mobile viewer that works with any compatible coding agent. Initial adapters support **OpenClaw** and **Claude Code**, with the architecture extensible to Codex, Aider, or any agent that can use MCP tools.
 
-**AnyClaw consists of:**
+**AnyRaven consists of:**
 
 1. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend + dev/prod deployment pipeline. This is the foundation the agent builds on.
 2. **An MCP server + skill suite** — gives any compatible coding agent the ability to deploy, rollback, snapshot data, and ask the user questions.
@@ -15,7 +15,7 @@ AnyClaw is a self-evolving mobile UI layer powered by a personal AI coding agent
 
 ## Product Principles
 
-These principles shape every product decision and inform the agent's skill prompts. They are not implementation details — they are how AnyClaw should *feel* to use.
+These principles shape every product decision and inform the agent's skill prompts. They are not implementation details — they are how AnyRaven should *feel* to use.
 
 ### Voice & Tone
 
@@ -74,10 +74,10 @@ The agent **never** asks the user about visual preferences during a task. It rea
 
 ### Empty State as Canonical Example
 
-When a user first connects, the WebView shows a default "Welcome to AnyClaw" page. This page serves two purposes:
+When a user first connects, the WebView shows a default "Welcome to AnyRaven" page. This page serves two purposes:
 
 1. **Onboards the user.** Explains how to use the Request button, what kinds of features the agent can build, and shows example prompts ("Try: 'Build me a daily mood tracker'").
-2. **Is the canonical example for the agent.** The page is written using the exact patterns the style guide skill prescribes — file structure, component composition, data fetching, theme tokens, error handling, loading states. The agent reads it as the authoritative example of "how AnyClaw code should look."
+2. **Is the canonical example for the agent.** The page is written using the exact patterns the style guide skill prescribes — file structure, component composition, data fetching, theme tokens, error handling, loading states. The agent reads it as the authoritative example of "how AnyRaven code should look."
 
 When the user replaces it with their first real feature, the welcome page is preserved as `dev/_examples/welcome.tsx` so the agent can still reference it.
 
@@ -85,15 +85,15 @@ When the user replaces it with their first real feature, the welcome page is pre
 
 **Hybrid: self-hosted or cloud-hosted. Both modes produce the same server layout.**
 
-- **Self-hosted (plugin):** User already has a coding agent (OpenClaw, Claude Code, etc.). Installs AnyClaw MCP server + skills + infrastructure alongside it. Free. User provides their own LLM API keys.
-- **Self-hosted (standalone):** A single install script sets up everything from scratch — a default agent (OpenClaw) + AnyClaw infrastructure. Free. User provides their own LLM API keys.
-- **Cloud-hosted:** Monthly subscription. AnyClaw hosts the full stack (one container per subscriber) on Hetzner. LLM tokens bundled or BYOK.
+- **Self-hosted (plugin):** User already has a coding agent (OpenClaw, Claude Code, etc.). Installs AnyRaven MCP server + skills + infrastructure alongside it. Free. User provides their own LLM API keys.
+- **Self-hosted (standalone):** A single install script sets up everything from scratch — a default agent (OpenClaw) + AnyRaven infrastructure. Free. User provides their own LLM API keys.
+- **Cloud-hosted:** Monthly subscription. AnyRaven hosts the full stack (one container per subscriber) on Hetzner. LLM tokens bundled or BYOK.
 
 ## Connection Options
 
 The mobile app can connect to the user's server through multiple paths:
 
-1. **Broker relay (legacy):** A lightweight cloud service run by AnyClaw that authenticates users and brokers connections between the mobile app and the server. Content flows end-to-end encrypted — the broker only relays opaque bytes. **Note: Broker relay is being phased out.**
+1. **Broker relay (legacy):** A lightweight cloud service run by AnyRaven that authenticates users and brokers connections between the mobile app and the server. Content flows end-to-end encrypted — the broker only relays opaque bytes. **Note: Broker relay is being phased out.**
 2. **Direct tunnel (recommended):** User provides their own tunnel URL (Cloudflare Tunnel, ngrok, or any WSS-capable reverse proxy). The mobile app connects directly to this endpoint. No broker involvement, no bandwidth limits, full user control.
 3. **Local network:** When mobile and server are on the same network, direct HTTP/WebSocket connection without tunneling.
 
@@ -127,7 +127,7 @@ The mobile app can connect to the user's server through multiple paths:
                                 |  │   or OpenClaw)   │ |
                                 |  │        │         │ |
                                 |  │        ▼  uses   │ |
-                                |  │  AnyClaw MCP     │ |
+                                |  │  AnyRaven MCP     │ |
                                 |  │  (HTTP/SSE)      │ |
                                 |  │        │         │ |
                                 |  │        ▼         │ |
@@ -146,7 +146,7 @@ The mobile app can connect to the user's server through multiple paths:
 
 **Connection paths:**
 1. **Direct tunnel (default):** Mobile app connects directly to a user-provided WSS URL (Cloudflare Tunnel, ngrok, etc.). The tunnel manager on the host accepts this connection.
-2. **Broker relay (legacy):** Mobile app connects to `broker.anyclawapp.com`, which relays to the host. Still supported but not the default.
+2. **Broker relay (legacy):** Mobile app connects to `broker.anyraven.com`, which relays to the host. Still supported but not the default.
 3. **Local network:** Direct HTTP connection when both devices are on the same network.
 
 ### Layer 1: Mobile App (Client)
@@ -226,7 +226,7 @@ Two environments live on the server:
 
 ### Layer 3: Connection Broker
 
-**Lightweight cloud service run by AnyClaw. Hosted in US East (Hetzner, iad).**
+**Lightweight cloud service run by AnyRaven. Hosted in US East (Hetzner, iad).**
 
 - **Auth:** Google + Apple + GitHub OAuth. Broker issues short-lived JWTs (15 min) after OAuth validation and stores provider refresh tokens server-side. A `/auth/refresh` endpoint mints new access tokens. (Apple Sign In: the broker persists name/email from the first OAuth callback, since subsequent logins only provide the user ID.)
 - **Registry:** Self-hosted servers send heartbeats; broker tracks which servers are online.
@@ -261,7 +261,7 @@ Embedded WireGuard and Tailscale tsnet are not viable in React Native/Expo manag
 
 ## Process Architecture
 
-AnyClaw uses **process supervision** for crash isolation. All services run as supervised processes on a single host (or inside a single cloud container). Each process has its own restart policy and crash domain.
+AnyRaven uses **process supervision** for crash isolation. All services run as supervised processes on a single host (or inside a single cloud container). Each process has its own restart policy and crash domain.
 
 ```
 Host (or single cloud container)
@@ -335,7 +335,7 @@ A container-per-role split (app server / control plane / sandbox) would give the
 
 ## Task Dispatch Protocol
 
-AnyClaw communicates with agents through a pluggable **Agent Adapter** interface. The interaction model is **task dispatch with clarification**, not real-time chat.
+AnyRaven communicates with agents through a pluggable **Agent Adapter** interface. The interaction model is **task dispatch with clarification**, not real-time chat.
 
 ### Task Lifecycle
 
@@ -387,7 +387,7 @@ interface TaskStatus {
 
 **OpenClaw:** Dispatches via the gateway's WebSocket or OpenAI-compatible REST endpoint. Multi-turn clarification uses the gateway's conversation support. Progress and activity log come from gateway event streams. Cancel via gateway API. OpenClaw users can also continue dispatching work through WhatsApp/Discord — the mobile app's task dispatch is an additional channel, not a replacement.
 
-**Claude Code:** Dispatches by spawning `claude -p` as a subprocess with the user's request as the prompt and the AnyClaw MCP server pre-configured. Clarification uses the `anyclaw_ask_user` MCP tool, which writes the question to PocketBase and polls for the answer. Progress via `anyclaw_update_progress` plus `--output-format stream-json`. Cancel by killing the subprocess. A future upgrade to `@anthropic-ai/claude-agent-sdk` is possible for richer lifecycle control.
+**Claude Code:** Dispatches by spawning `claude -p` as a subprocess with the user's request as the prompt and the AnyRaven MCP server pre-configured. Clarification uses the `anyclaw_ask_user` MCP tool, which writes the question to PocketBase and polls for the answer. Progress via `anyclaw_update_progress` plus `--output-format stream-json`. Cancel by killing the subprocess. A future upgrade to `@anthropic-ai/claude-agent-sdk` is possible for richer lifecycle control.
 
 **Generic webhook:** For future agents (Codex, Aider, custom harnesses). Dispatches a POST to a user-configured webhook with `{ request, taskId, callbackUrl }`. The agent POSTs questions, progress, and completion back to the callback URL.
 
@@ -397,7 +397,7 @@ The agent subprocess authenticates to the MCP server with a per-task bearer toke
 
 ### MCP Tools
 
-The MCP server is deliberately minimal. Agents use their own built-in tools (file I/O, shell, git) for everything they already do well. AnyClaw MCP tools only guard failure-prone operations:
+The MCP server is deliberately minimal. Agents use their own built-in tools (file I/O, shell, git) for everything they already do well. AnyRaven MCP tools only guard failure-prone operations:
 
 - `anyclaw_deploy` — Run validation suite, commit, merge worktree, snapshot DB if needed, promote to prod, restart logic service via supervisor
 - `anyclaw_rollback` — Revert to a specific version (code + DB atomically)
@@ -523,7 +523,7 @@ All decisions below are binding for implementation.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Domain | `anyclawapp.com` (purchased); mobile app uses `broker.anyclawapp.com` | Owned |
+| Domain | `anyraven.com` (purchased); mobile app uses `broker.anyraven.com` | Owned |
 | OAuth providers | Google + Apple + GitHub at launch | Apple required by App Store; GitHub for developer early adopters |
 | OAuth strategy | Broker-issued short-lived JWTs (15 min) after OAuth validation; broker holds provider refresh tokens; `/auth/refresh` endpoint | Standard pattern (Supabase, Firebase, Clerk) |
 | Apple Sign In quirk | Broker persists name/email from first OAuth callback | Apple documented behavior |
@@ -577,8 +577,8 @@ All decisions below are binding for implementation.
 
 | Tier | What's included | Cost |
 |------|----------------|------|
-| Free (self-hosted) | Mobile app + connection broker + AnyClaw server. User provides hardware + LLM API keys. | Free |
-| Cloud-hosted | Everything above, hosted by AnyClaw (one container per user on Hetzner). LLM tokens bundled or BYOK. | Monthly subscription |
+| Free (self-hosted) | Mobile app + connection broker + AnyRaven server. User provides hardware + LLM API keys. | Free |
+| Cloud-hosted | Everything above, hosted by AnyRaven (one container per user on Hetzner). LLM tokens bundled or BYOK. | Monthly subscription |
 
 ## Out of Scope (for now)
 

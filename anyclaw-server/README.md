@@ -1,6 +1,6 @@
 # anyclaw-server
 
-Server-side monorepo for AnyClaw. Runs per-user, inside a single Docker container (or bare Linux host). Manages the agent's working environment, coordinates deployments, and exposes the MCP tool suite and REST API to the mobile app.
+Server-side monorepo for AnyRaven. Runs per-user, inside a single Docker container (or bare Linux host). Manages the agent's working environment, coordinates deployments, and exposes the MCP tool suite and REST API to the mobile app.
 
 See [docs/plan1-server-infrastructure-design.md](../docs/plan1-server-infrastructure-design.md) for architecture details.
 

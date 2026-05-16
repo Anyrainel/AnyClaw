@@ -157,9 +157,9 @@ package-skills.sh claude-code [--project-dir DIR]
 
 **Behavior:**
 1. Copies each skill `.md` (frontmatter stripped) into `<project-dir>/.claude/commands/anyclaw-*.md` so they become slash commands.
-2. Appends (or replaces between sentinel markers) an `## AnyClaw Agent Instructions` block in `<project-dir>/CLAUDE.md`. The block:
+2. Appends (or replaces between sentinel markers) an `## AnyRaven Agent Instructions` block in `<project-dir>/CLAUDE.md`. The block:
    - Lists the 5 slash commands and when to use each (build-feature for every task, style-guide for frontend, canonical-example before frontend, refactor every 5 deployments, describe-version on every deploy).
-   - Lists the AnyClaw MCP tool set (deploy, rollback, snapshot_db, create_collection, ask_user, update_progress, list_versions) and states that file/shell tools are the agent's own.
+   - Lists the AnyRaven MCP tool set (deploy, rollback, snapshot_db, create_collection, ask_user, update_progress, list_versions) and states that file/shell tools are the agent's own.
    - Is bounded by `<!-- anyclaw:begin -->` / `<!-- anyclaw:end -->` sentinels so re-runs are idempotent.
 3. Creates `CLAUDE.md` if absent.
 
@@ -168,7 +168,7 @@ package-skills.sh claude-code [--project-dir DIR]
 2. Re-run replaces the block (not duplicated) — sentinels stable.
 3. Re-run does not touch content outside the sentinels.
 4. Generated slash commands have no frontmatter.
-5. The AnyClaw Agent Instructions block lists all 5 skills and all 7 MCP tools.
+5. The AnyRaven Agent Instructions block lists all 5 skills and all 7 MCP tools.
 
 **Acceptance:** bats tests green. Manual read of a generated `CLAUDE.md` block.
 
@@ -185,7 +185,7 @@ package-skills.sh generic [--source DIR] [--out FILE]
 **Behavior:**
 1. Concatenates the 5 skill bodies (frontmatter stripped) in the order: build-feature, canonical-example, style-guide, refactor, describe-version.
 2. Separates each with a `\n\n---\n\n` rule.
-3. Prepends a 3-line preamble: `# AnyClaw Agent System Prompt` / `# Combined skill suite — do not edit, regenerate via package-skills.sh generic.` / blank line.
+3. Prepends a 3-line preamble: `# AnyRaven Agent System Prompt` / `# Combined skill suite — do not edit, regenerate via package-skills.sh generic.` / blank line.
 4. Writes to `--out`.
 
 **Tests:**
@@ -211,7 +211,7 @@ GET /api/version
   }
 ```
 
-**Dispatch-time gate:** When the dispatch server assembles the skill set for an agent subprocess, it calls `parseSkillFile` on each and runs `isCompatible`. If any skill is incompatible, the task is rejected with a user-facing error: `"Skill <name> v<x> requires server >= <y>. Update the AnyClaw server."` or the reverse.
+**Dispatch-time gate:** When the dispatch server assembles the skill set for an agent subprocess, it calls `parseSkillFile` on each and runs `isCompatible`. If any skill is incompatible, the task is rejected with a user-facing error: `"Skill <name> v<x> requires server >= <y>. Update the AnyRaven server."` or the reverse.
 
 **Tests:**
 1. `GET http://127.0.0.1:4100/api/version` returns the package.json version and the configured `min_skill_version`.
@@ -397,7 +397,7 @@ tips (base)
 
 ## Task 13: `install.sh` (TDD)
 
-**Location:** `anyclaw-server/install.sh` (served at `https://get.anyclawapp.com`).
+**Location:** `anyclaw-server/install.sh` (served at `https://get.anyraven.com`).
 
 **Scope:** The user-facing one-command installer. It does NOT create the Dockerfile or supervisord.conf (bundled in the Plan 1 image) and it does NOT download the PocketBase binary (Plan 1's `download-pocketbase.sh` runs at image build time). It drives Plan 1's init scripts and talks to Plan 3's `/internal/api-keys` endpoint on port **4100**.
 
@@ -409,7 +409,7 @@ set -euo pipefail
 ANYCLAW_VERSION="${ANYCLAW_VERSION:-latest}"
 INSTALL_DIR="${ANYCLAW_DIR:-$HOME/.anyclaw-host}"
 
-echo "=== AnyClaw Installer ==="
+echo "=== AnyRaven Installer ==="
 
 # [1/6] Prerequisites — OS check, cgroup v2 warning, RAM + disk warnings.
 # [2/6] Docker — install via get.docker.com on Linux if missing, verify daemon + compose v2.
@@ -472,7 +472,7 @@ echo "=== AnyClaw Installer ==="
   - `provisioner/docker-compose.yml`
   - `caddy/Caddyfile`
   - `users/user-<id>/docker-compose.yml` (templated per user)
-- Example `Caddyfile` that terminates TLS on `broker.anyclawapp.com` and reverse-proxies WSS to the broker process.
+- Example `Caddyfile` that terminates TLS on `broker.anyraven.com` and reverse-proxies WSS to the broker process.
 - Per-user compose template: unique container name, unique volume, no host port bindings (all ingress via tunnel). Uses the Plan 1 image (`ghcr.io/anyclaw/anyclaw:latest`).
 - Provisioner responsibilities (lines 1729–1735):
   - Allocate unique `ANYCLAW_USER_TOKEN` per user.
@@ -494,7 +494,7 @@ echo "=== AnyClaw Installer ==="
 
 **Procedure:**
 1. Spin up a clean Hetzner CX32 VPS (or a local Ubuntu 24.04 VM).
-2. Run `curl -fsSL https://get.anyclawapp.com | bash` (point the install script at a local release mirror during testing).
+2. Run `curl -fsSL https://get.anyraven.com | bash` (point the install script at a local release mirror during testing).
 3. Verify all 5 supervised processes are running: `docker compose exec anyclaw supervisorctl status`.
 4. Verify `/data/.anyclaw/pb-token` exists (0600, anyclaw-infra).
 5. Verify `/data/.anyclaw/master.key` exists (0600).
@@ -518,4 +518,4 @@ This plan delivers, in order:
 2. Welcome page content layered on top of Plan 1's `frontend-template` scaffold, reviewed at a visual checkpoint that also LOCKS the final `@theme` block (Plan 1 shipped a provisional one).
 3. The user-facing `install.sh` — driving Plan 1's init scripts, bootstrapping PocketBase 0.25.x via `_superusers`, and stashing the user's LLM key via Plan 3's `POST /internal/api-keys` on port 4100 — plus the Hetzner deployment guide and an end-to-end smoke test.
 
-After Task 15, AnyClaw can be installed from scratch by a user with one curl command, can receive a feature request from the mobile app, can dispatch it to an agent, and can deploy the result. All six plans compose into a working end-to-end product.
+After Task 15, AnyRaven can be installed from scratch by a user with one curl command, can receive a feature request from the mobile app, can dispatch it to an agent, and can deploy the result. All six plans compose into a working end-to-end product.

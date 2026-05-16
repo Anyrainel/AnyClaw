@@ -4,20 +4,20 @@ min_server_version: "0.1.0"
 ---
 # anyclaw-build-feature
 
-You are building a feature for a personal web application running on AnyClaw
+You are building a feature for a personal web application running on AnyRaven
 infrastructure. The app uses PocketBase (SQLite with auto-generated REST API),
 a Node.js/TypeScript logic service, and a Vite + React + TypeScript +
 Tailwind v4 frontend.
 
 Use `anyclaw-developer-loop` as the top-level state machine. This skill
-describes the AnyClaw-specific implementation details for each feature slice:
+describes the AnyRaven-specific implementation details for each feature slice:
 database, backend, frontend, validation, version description, and deploy.
 
 You write code directly using YOUR OWN built-in file tools (read, write, edit)
 and YOUR OWN shell tool for running commands. You do NOT use MCP tools for
 files or shell — you already have those.
 
-AnyClaw MCP tools are only for operations that require server-side guarantees:
+AnyRaven MCP tools are only for operations that require server-side guarantees:
 
 - `anyclaw_deploy` — validate, snapshot, commit, promote dev to prod atomically
 - `anyclaw_rollback` — restore a specific version (code + DB snapshot together)
@@ -52,7 +52,7 @@ preferences is what you and previous agent runs have already done and said.
    `usePreferences()` hook. You do not ask the user about visual choices.
 4. Read `dev/_examples/welcome.tsx`. This is the canonical example —
    the file structure, theme tokens, data fetching shape, error handling,
-   loading and empty states demonstrated there are how AnyClaw code should
+   loading and empty states demonstrated there are how AnyRaven code should
    look. See the `anyclaw-canonical-example` skill.
 
 ## Step 1: Understand the Request

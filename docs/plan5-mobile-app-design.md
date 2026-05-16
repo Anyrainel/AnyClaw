@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The AnyClaw mobile app is a thin Expo (React Native) shell that wraps the agent-built web UI in a WebView and provides the four native capabilities that must work even when the agent-built app is broken: connection management, task dispatch (with clarification Q&A), version history with rollback, and settings.
+The AnyRaven mobile app is a thin Expo (React Native) shell that wraps the agent-built web UI in a WebView and provides the four native capabilities that must work even when the agent-built app is broken: connection management, task dispatch (with clarification Q&A), version history with rollback, and settings.
 
 **Four responsibilities:**
 
@@ -78,7 +78,7 @@ All traffic is TLS-encrypted to the broker relay; sensitive API payloads are add
 // app.json
 {
   "expo": {
-    "name": "AnyClaw",
+    "name": "AnyRaven",
     "scheme": "anyclaw",
     "ios": { "bundleIdentifier": "com.anyclaw.app", "deploymentTarget": "15.1" },
     "android": { "package": "com.anyclaw.app", "minSdkVersion": 28 },
@@ -229,14 +229,14 @@ import { parseBridgeMessage, sendBridgeMessage } from "@/lib/bridge";
 import { ErrorScreen } from "./ErrorScreen";
 
 const BRIDGE_INIT = `
-  window.AnyClaw = {
+  window.AnyRaven = {
     postMessage: (m) => window.ReactNativeWebView.postMessage(JSON.stringify(m)),
     onMessage: null,
   };
   document.addEventListener('message', (e) => {
-    try { const m = JSON.parse(e.data); window.AnyClaw.onMessage && window.AnyClaw.onMessage(m); } catch {}
+    try { const m = JSON.parse(e.data); window.AnyRaven.onMessage && window.AnyRaven.onMessage(m); } catch {}
   });
-  window.AnyClaw.postMessage({ type: 'bridge-ready' });
+  window.AnyRaven.postMessage({ type: 'bridge-ready' });
   true;
 `;
 
@@ -713,7 +713,7 @@ export function RollbackConfirm({ version, visible, onConfirm, onCancel, loading
 
 ### Login (broker OAuth)
 
-Login authenticates against `https://broker.anyclawapp.com` — the user's AnyClaw account, not their server. OAuth providers: **Google, Apple, GitHub**. Apple is required by the App Store; GitHub targets developer early adopters.
+Login authenticates against `https://broker.anyraven.com` — the user's AnyRaven account, not their server. OAuth providers: **Google, Apple, GitHub**. Apple is required by the App Store; GitHub targets developer early adopters.
 
 **Flow:**
 
@@ -728,7 +728,7 @@ Login authenticates against `https://broker.anyclawapp.com` — the user's AnyCl
 import * as AuthSession from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
 
-const BROKER = "https://broker.anyclawapp.com";
+const BROKER = "https://broker.anyraven.com";
 const redirectUri = AuthSession.makeRedirectUri({ scheme: "anyclaw" });
 
 export async function loginWithProvider(provider: "google" | "apple" | "github") {
@@ -761,14 +761,14 @@ export async function refreshBrokerJwt(): Promise<string> {
 ### Server discovery
 
 ```
-GET https://broker.anyclawapp.com/api/servers
+GET https://broker.anyraven.com/api/servers
 Authorization: Bearer <jwt>
 
 Response:
 { "servers": [{ "id":"srv_abc", "name":"Home Server", "status":"online", "lastSeen":"...", "paired": true }] }
 ```
 
-- Zero servers: show "Install the AnyClaw server" onboarding with install script instructions.
+- Zero servers: show "Install the AnyRaven server" onboarding with install script instructions.
 - One paired online server: auto-connect.
 - Multiple servers: show list; user taps one.
 - Unpaired server: jump into the pairing flow (§9.3).
@@ -854,7 +854,7 @@ const conn = await fetch(`${BROKER}/api/connect`, {
   body: JSON.stringify({ serverId }),
 }).then(r => r.json());
 
-// { relayUrl: "https://abc123.relay.anyclawapp.com", sessionToken, pbAuthToken }
+// { relayUrl: "https://abc123.relay.anyraven.com", sessionToken, pbAuthToken }
 
 await SecureStore.setItemAsync("server_session", JSON.stringify({
   serverId, relayUrl: conn.relayUrl, sessionToken: conn.sessionToken, pbAuthToken: conn.pbAuthToken,
@@ -950,7 +950,7 @@ Order of screens:
 
 | # | Route | Screen | Purpose |
 |---|-------|--------|---------|
-| 1 | `/onboarding/welcome` | **Welcome** | "Welcome to AnyClaw." One-paragraph plain-language explanation: "AnyClaw builds tools for you. You ask, it builds, you use. No code." Single primary button: **Get started**. |
+| 1 | `/onboarding/welcome` | **Welcome** | "Welcome to AnyRaven." One-paragraph plain-language explanation: "AnyRaven builds tools for you. You ask, it builds, you use. No code." Single primary button: **Get started**. |
 | 2 | `/onboarding/theme` | **Theme** | Three large tappable cards: **System** (default), **Light**, **Dark**. Selecting a card immediately re-themes the screen behind the cards as a live preview. **Skip** in top right. |
 | 3 | `/onboarding/font-size` | **Font size** | Three samples ("Aa") at Small / Medium / Large. Default is **System** (whatever `PixelRatio.getFontScale()` returns at launch). Picking one of S/M/L overrides the system value. A "Use system size" link resets to system. |
 | 4 | `/onboarding/font-family` | **Font family** | Two samples: **Sans** (default, Inter) and **Serif** (Source Serif). Live preview of a paragraph. |
@@ -1410,7 +1410,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("default", {
-      name: "AnyClaw",
+      name: "AnyRaven",
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
     });

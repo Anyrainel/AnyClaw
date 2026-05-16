@@ -1,6 +1,6 @@
 # broker
 
-The AnyClaw connection broker. A cloud-hosted relay service that sits between the mobile app and each user's anyclaw-server instance. It handles user authentication, server pairing, and encrypted message relay — the broker itself never decrypts the payloads it forwards.
+The AnyRaven connection broker. A cloud-hosted relay service that sits between the mobile app and each user's anyclaw-server instance. It handles user authentication, server pairing, and encrypted message relay — the broker itself never decrypts the payloads it forwards.
 
 See [docs/plan4-connection-broker-design.md](../docs/plan4-connection-broker-design.md) for architecture details.
 

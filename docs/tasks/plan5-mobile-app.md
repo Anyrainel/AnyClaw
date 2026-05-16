@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development for all tasks in this plan. Each task is self-contained and can be dispatched to a subagent. Logic tasks use TDD (superpowers:test-driven-development). UI tasks end in a CHECKPOINT for human review before proceeding.
 
-**Goal:** Ship a production-ready Expo (React Native) companion app that authenticates the user, pairs end-to-end-encrypted with their AnyClaw server, renders the agent-built frontend in a WebView, dispatches tasks with a resumable state machine, and exposes version history, rollback, and personalization preferences.
+**Goal:** Ship a production-ready Expo (React Native) companion app that authenticates the user, pairs end-to-end-encrypted with their AnyRaven server, renders the agent-built frontend in a WebView, dispatches tasks with a resumable state machine, and exposes version history, rollback, and personalization preferences.
 
 **Architecture:** A thin Expo managed-workflow shell using expo-router tabs over four screens (Home/WebView, Request, Versions, Settings) plus an onboarding stack and an auth stack. All sensitive traffic is wrapped in `libsodium` `crypto_box` envelopes on top of TLS; task/version state streams over PocketBase Realtime SSE; zustand stores back every screen. The WebView and native shell talk over a postMessage JS bridge that injects the session token and resolved preferences.
 
@@ -135,7 +135,7 @@ Requirements:
 
 Implement `lib/broker.ts` per design doc §9.1:
 
-- `loginWithProvider(provider: 'google' | 'apple' | 'github')` using `expo-auth-session` against `https://broker.anyclawapp.com/auth/{provider}/start`. On success stores `broker_jwt` and `broker_refresh` in SecureStore.
+- `loginWithProvider(provider: 'google' | 'apple' | 'github')` using `expo-auth-session` against `https://broker.anyraven.com/auth/{provider}/start`. On success stores `broker_jwt` and `broker_refresh` in SecureStore.
 - `refreshBrokerJwt()` posts to `/auth/refresh`, updates SecureStore, returns the new access token, throws on failure.
 - `fetchServers()` GETs `/api/servers` with the current JWT, auto-refreshing once on 401.
 - `requestPairing(serverId, clientPublicKey)` POSTs to `/api/pair` and returns `{ serverPublicKey }` as a `Uint8Array`.
@@ -160,7 +160,7 @@ Implement `lib/broker.ts` per design doc §9.1:
 
 Implement `lib/api.ts` per design doc §10.
 
-- `ApiClient` class with `configure({ baseUrl, sessionToken, serverId, debug })`, `get<T>(path)`, `post<T>(path, body)`. `baseUrl` always points at the dispatch REST API root (`/api/*`, port 4100 on the host; in the paired-over-broker case, requests go to `https://broker.anyclawapp.com/relay/client` and are routed via the in-envelope `service` tag). The full host surface the app talks to: `POST /api/tasks`, `POST /api/tasks/:id/answer`, `POST /api/tasks/:id/cancel`, `POST /api/rollback`, `POST /api/restart-app`, `GET /api/versions`, `GET /api/health`, `GET /api/settings`, `PATCH /api/settings`, `POST /api/device/register`.
+- `ApiClient` class with `configure({ baseUrl, sessionToken, serverId, debug })`, `get<T>(path)`, `post<T>(path, body)`. `baseUrl` always points at the dispatch REST API root (`/api/*`, port 4100 on the host; in the paired-over-broker case, requests go to `https://broker.anyraven.com/relay/client` and are routed via the in-envelope `service` tag). The full host surface the app talks to: `POST /api/tasks`, `POST /api/tasks/:id/answer`, `POST /api/tasks/:id/cancel`, `POST /api/rollback`, `POST /api/restart-app`, `GET /api/versions`, `GET /api/health`, `GET /api/settings`, `PATCH /api/settings`, `POST /api/device/register`.
 - POST wraps body in `encryptJSON` under the loaded pairing keys, sends with headers `content-type: application/x-nacl-box`, `authorization: Bearer ...`, `x-anyclaw-client-pk: <base64>`, and decrypts the response.
 - GET sends no body, decrypts the response envelope.
 - Non-2xx responses throw `Error("HTTP ${status}")`.
