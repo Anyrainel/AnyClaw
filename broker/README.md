@@ -1,6 +1,6 @@
 # broker
 
-The AnyRaven connection broker. A cloud-hosted relay service that sits between the mobile app and each user's anyclaw-server instance. It handles user authentication, server pairing, and encrypted message relay — the broker itself never decrypts the payloads it forwards.
+The AnyRaven connection broker. A cloud-hosted relay service that sits between the mobile app and each user's anyraven-server instance. It handles user authentication, server pairing, and encrypted message relay — the broker itself never decrypts the payloads it forwards.
 
 See [docs/plan4-connection-broker-design.md](../docs/plan4-connection-broker-design.md) for architecture details.
 
@@ -8,7 +8,7 @@ See [docs/plan4-connection-broker-design.md](../docs/plan4-connection-broker-des
 
 - **OAuth authentication** — Google, Apple, and GitHub via Lucia auth + JWT sessions.
 - **Server pairing** — Issues server tokens and stores per-device public keys used for end-to-end encryption.
-- **WebSocket relay** — Bidirectional binary frame relay between mobile clients and their paired anyclaw-server instances. Frames are CBOR-encoded NaCl-boxed envelopes; the broker does not decrypt them.
+- **WebSocket relay** — Bidirectional binary frame relay between mobile clients and their paired anyraven-server instances. Frames are CBOR-encoded NaCl-boxed envelopes; the broker does not decrypt them.
 - **Rate limiting** — Per-IP and per-user token-bucket throttling.
 
 ## Tech Stack
@@ -32,7 +32,7 @@ broker/
 │   ├── app.ts                Fastify app factory
 │   ├── relay/
 │   │   ├── client-handler.ts  Mobile app WebSocket handler
-│   │   ├── server-handler.ts  anyclaw-server WebSocket handler
+│   │   ├── server-handler.ts  anyraven-server WebSocket handler
 │   │   ├── envelope.ts        Frame encode/decode
 │   │   └── connection-map.ts  Active connection registry
 │   ├── auth/

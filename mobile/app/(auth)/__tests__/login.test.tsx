@@ -43,7 +43,7 @@ describe("LoginScreen", () => {
 
   it("displays the app title and subtitle", () => {
     const { getByText } = render(<LoginScreen />);
-    expect(getByText("AnyClaw")).toBeTruthy();
+    expect(getByText("AnyRaven")).toBeTruthy();
     expect(getByText("Sign in to get started")).toBeTruthy();
   });
 });

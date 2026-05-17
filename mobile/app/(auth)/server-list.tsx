@@ -112,7 +112,7 @@ export default function ServerListScreen() {
       <View style={styles.centered} testID="server-list-empty">
         <Text style={styles.emptyTitle}>No Servers</Text>
         <Text style={styles.emptySubtitle}>
-          Install AnyClaw on your server, then pair it here.
+          Install AnyRaven on your server, then pair it here.
         </Text>
         <TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
           <Text style={styles.addButtonText}>Add Server</Text>

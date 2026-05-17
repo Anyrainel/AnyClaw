@@ -10,13 +10,13 @@ The seven tools are:
 
 | Tool | Purpose |
 |------|---------|
-| `anyclaw_deploy` | Validate the current worktree, snapshot DB, commit, merge to `main`, promote to prod, restart the prod app backend. |
-| `anyclaw_rollback` | Atomically revert code and database to a previous version. |
-| `anyclaw_snapshot_db` | Create a labelled compressed SQLite snapshot. |
-| `anyclaw_list_versions` | Return deployment history. |
-| `anyclaw_create_collection` | Create a PocketBase collection via admin API with a mandatory pre-change snapshot. |
-| `anyclaw_ask_user` | Post a clarifying question to the mobile app and wait for the user's answer. |
-| `anyclaw_update_progress` | Post a progress update to the mobile app (fire-and-forget). |
+| `anyraven_deploy` | Validate the current worktree, snapshot DB, commit, merge to `main`, promote to prod, restart the prod app backend. |
+| `anyraven_rollback` | Atomically revert code and database to a previous version. |
+| `anyraven_snapshot_db` | Create a labelled compressed SQLite snapshot. |
+| `anyraven_list_versions` | Return deployment history. |
+| `anyraven_create_collection` | Create a PocketBase collection via admin API with a mandatory pre-change snapshot. |
+| `anyraven_ask_user` | Post a clarifying question to the mobile app and wait for the user's answer. |
+| `anyraven_update_progress` | Post a progress update to the mobile app (fire-and-forget). |
 
 There are no scaffolding tools, no `read_file`/`write_file`, and no `run_command`. Those needs are met by the agent's native tools.
 
@@ -34,13 +34,13 @@ AnyRaven runs all services as supervised processes under `systemd --user` (prima
 Host (or single cloud container)
 │
 ├── [systemd unit, restart=always] pocketbase.service
-├── [systemd unit, restart=always] anyclaw-tunnel.service
-├── [systemd unit, restart=always] anyclaw-dispatch.service    ← embeds the MCP server
-├── [systemd unit, restart=on-failure] anyclaw-logic.service   ← agent-modifiable; deploy restarts this
-├── [systemd unit, restart=always] anyclaw-app-frontend.service
+├── [systemd unit, restart=always] anyraven-tunnel.service
+├── [systemd unit, restart=always] anyraven-dispatch.service    ← embeds the MCP server
+├── [systemd unit, restart=on-failure] anyraven-logic.service   ← agent-modifiable; deploy restarts this
+├── [systemd unit, restart=always] anyraven-app-frontend.service
 │
 ├── [transient, spawned per task] Agent subprocess (claude -p / openclaw / ...)
-│       Runs as `anyclaw-agent` OS user inside a git worktree.
+│       Runs as `anyraven-agent` OS user inside a git worktree.
 │       Talks to MCP server at http://127.0.0.1:4100/mcp with a per-task bearer token.
 │
 └── [transient, spawned by agent] Vite dev server (per build)
@@ -55,37 +55,37 @@ The dispatch server and the MCP server live in the **same source package and sam
 | Coding agent | inbound HTTP/SSE on `127.0.0.1:4100/mcp` | Tool calls |
 | PocketBase | outbound REST on `127.0.0.1:8090` | Collection CRUD, `_tasks` / `_agent_messages` / `_versions` reads/writes, realtime subscriptions |
 | Local filesystem | direct | Worktree create/merge, validation, git commits, prod artifact copies |
-| systemd (user bus) | `systemctl --user restart anyclaw-logic` via subprocess | Restart prod app backend after deploy (decision #28) |
+| systemd (user bus) | `systemctl --user restart anyraven-logic` via subprocess | Restart prod app backend after deploy (decision #28) |
 | Dispatch REST clients (mobile app via tunnel) | inbound HTTP on same port | Emergency rollback, version list, restart-app, task submission |
 
 ### 2.3 File Layout on Disk
 
-The MCP/dispatch server source and configuration live under `/data/.anyclaw/`, owned by the `anyclaw-infra` OS user with mode `0750`. The agent runs as `anyclaw-agent` and has no write access to this directory — its source code is safe from agent mistakes.
+The MCP/dispatch server source and configuration live under `/data/.anyraven/`, owned by the `anyraven-infra` OS user with mode `0750`. The agent runs as `anyraven-agent` and has no write access to this directory — its source code is safe from agent mistakes.
 
 ```
 /data/
-├── .anyclaw/                            owned by anyclaw-infra, 0750
+├── .anyraven/                            owned by anyraven-infra, 0750
 │   ├── bin/                             compiled dispatch/MCP server
 │   ├── systemd/                         unit files
 │   ├── master.key                       0600 — AES-256-GCM key (decision #48)
 │   ├── pb-token                         0600 — PocketBase API token (decision #47)
 │   ├── mcp-tokens/                      per-task bearer tokens (decision #35)
-│   │   └── task-<uuid>.token            0640, group: anyclaw-agent
+│   │   └── task-<uuid>.token            0640, group: anyraven-agent
 │   └── snapshots/                       SQLite snapshots (gzip)
 │
-├── dev/                                 owned by anyclaw-agent, group-writable
+├── dev/                                 owned by anyraven-agent, group-writable
 │   ├── .git/                            primary git repo
 │   ├── .worktrees/                      per-task isolation (decision #36)
 │   │   └── task-<uuid>/                 worktree created by dispatch, removed after merge
 │   ├── logic/                           agent-modifiable Node.js app backend
 │   └── frontend/                        agent-modifiable Vite+React frontend
 │
-├── prod/                                owned by anyclaw-infra, 0755
+├── prod/                                owned by anyraven-infra, 0755
 │   ├── logic/                           promoted app backend artifacts
 │   └── frontend/                        promoted frontend build artifacts
 │
 └── pocketbase/
-    ├── pb_data/                         owned by anyclaw-infra, 0700
+    ├── pb_data/                         owned by anyraven-infra, 0700
     └── pb_migrations/
 ```
 
@@ -113,12 +113,12 @@ export function mountMcp(app: express.Express): void {
     const taskId = resolveTaskFromToken(req);
 
     const server = new McpServer(
-      { name: "anyclaw", version: "1.0.0" },
+      { name: "anyraven", version: "1.0.0" },
       {
         instructions: [
           "AnyRaven MCP server. Use your own native file and shell tools for everything in the dev worktree.",
-          "Use AnyRaven MCP tools only for production operations: anyclaw_deploy, anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection.",
-          "Use anyclaw_ask_user to clarify requirements and anyclaw_update_progress to keep the user informed.",
+          "Use AnyRaven MCP tools only for production operations: anyraven_deploy, anyraven_rollback, anyraven_snapshot_db, anyraven_create_collection.",
+          "Use anyraven_ask_user to clarify requirements and anyraven_update_progress to keep the user informed.",
           "A version description of at least 10 characters is required for every deployment.",
         ].join(" "),
       }
@@ -136,15 +136,15 @@ export function mountMcp(app: express.Express): void {
 
 ### 3.2 Per-Task Bearer Token
 
-Per locked decision #35, the MCP endpoint is authenticated with a **per-task bearer token**. The dispatch server generates a fresh token when it creates a task, writes it to `/data/.anyclaw/mcp-tokens/task-<uuid>.token` with mode `0640` (readable by the `anyclaw-agent` group), and injects it into the agent subprocess as `ANYCLAW_MCP_TOKEN`. The agent's MCP config (e.g., Claude Code's `.mcp.json`) references that env var:
+Per locked decision #35, the MCP endpoint is authenticated with a **per-task bearer token**. The dispatch server generates a fresh token when it creates a task, writes it to `/data/.anyraven/mcp-tokens/task-<uuid>.token` with mode `0640` (readable by the `anyraven-agent` group), and injects it into the agent subprocess as `ANYRAVEN_MCP_TOKEN`. The agent's MCP config (e.g., Claude Code's `.mcp.json`) references that env var:
 
 ```json
 {
   "mcpServers": {
-    "anyclaw": {
+    "anyraven": {
       "type": "http",
       "url": "http://127.0.0.1:4100/mcp",
-      "headers": { "Authorization": "Bearer ${ANYCLAW_MCP_TOKEN}" }
+      "headers": { "Authorization": "Bearer ${ANYRAVEN_MCP_TOKEN}" }
     }
   }
 }
@@ -158,7 +158,7 @@ import type { Request, Response, NextFunction } from "express";
 import fs from "node:fs";
 import path from "node:path";
 
-const TOKEN_DIR = "/data/.anyclaw/mcp-tokens";
+const TOKEN_DIR = "/data/.anyraven/mcp-tokens";
 const tokenToTask = new Map<string, string>();
 
 export function registerTaskToken(taskId: string, token: string): void {
@@ -180,12 +180,12 @@ export function requireBearerToken(req: Request, res: Response, next: NextFuncti
     res.status(401).json({ error: "invalid_token" });
     return;
   }
-  (req as any).anyclawToken = match[1];
+  (req as any).anyravenToken = match[1];
   next();
 }
 
 export function resolveTaskFromToken(req: Request): string {
-  const token = (req as any).anyclawToken as string;
+  const token = (req as any).anyravenToken as string;
   const taskId = tokenToTask.get(token);
   if (!taskId) throw new Error("token_not_registered");
   return taskId;
@@ -200,7 +200,7 @@ When the task finishes (deploy, rollback, cancel, or fail), the dispatch server 
 
 ### 4.1 Admin Client
 
-PocketBase is reached via its REST admin API (locked decision #20 — API tokens, not email/password). The token is provisioned once by the install script (decision #47) and stored at `/data/.anyclaw/pb-token` mode `0600` owned by `anyclaw-infra`. Supervisord/systemd injects it into the dispatch process as `PB_ADMIN_TOKEN`.
+PocketBase is reached via its REST admin API (locked decision #20 — API tokens, not email/password). The token is provisioned once by the install script (decision #47) and stored at `/data/.anyraven/pb-token` mode `0600` owned by `anyraven-infra`. Supervisord/systemd injects it into the dispatch process as `PB_ADMIN_TOKEN`.
 
 ```typescript
 // src/mcp-server/pocketbase-client.ts
@@ -212,7 +212,7 @@ let pbAdmin: PocketBase | null = null;
 export function getPocketBaseAdmin(): PocketBase {
   if (!pbAdmin) {
     const url = process.env.POCKETBASE_URL ?? "http://127.0.0.1:8090";
-    const token = process.env.PB_ADMIN_TOKEN ?? fs.readFileSync("/data/.anyclaw/pb-token", "utf8").trim();
+    const token = process.env.PB_ADMIN_TOKEN ?? fs.readFileSync("/data/.anyraven/pb-token", "utf8").trim();
     pbAdmin = new PocketBase(url);
     pbAdmin.authStore.save(token, null);
   }
@@ -263,7 +263,7 @@ The MCP/dispatch server owns three PocketBase collections. Access rules are admi
 | `description` | text, required, min 10 | User-facing description |
 | `gitCommit` | text, required | Full SHA on `main` after merge |
 | `gitTag` | text | e.g., `v1.2.3` |
-| `dbSnapshotId` | text, nullable | ID in `/data/.anyclaw/snapshots/` |
+| `dbSnapshotId` | text, nullable | ID in `/data/.anyraven/snapshots/` |
 | `deployedBy` | text | Source taskId |
 | `artifacts` | json | `{ frontendPath, logicPath }` in prod |
 | `createdAt` | auto | |
@@ -319,7 +319,7 @@ If resume fails for any reason, the task is marked `failed` with reason `"resume
 
 Locked decision #13: **PocketBase Realtime SSE + REST** is the single communication mechanism. Server-to-client push uses SSE subscriptions; client-to-server responses use REST POST. The MCP server uses the PocketBase Node SDK's subscription API to receive answers.
 
-### 6.1 `anyclaw_ask_user` Protocol
+### 6.1 `anyraven_ask_user` Protocol
 
 ```
 Agent                     MCP Server               PocketBase              Mobile App
@@ -334,7 +334,7 @@ Agent                     MCP Server               PocketBase              Mobil
   │◀── { answer, answeredAt } ─│                        │                       │
 ```
 
-Exact PocketBase record written by `anyclaw_ask_user`:
+Exact PocketBase record written by `anyraven_ask_user`:
 
 ```json
 {
@@ -371,7 +371,7 @@ The mobile app POSTs its answer record with `direction: "user_to_agent"`, `type:
 
 Timeout behavior (decision #2): default 5 minutes. If the user has selected "pause indefinitely" in settings, the dispatch server passes `timeoutMs: Infinity` into the tool and the promise never rejects on timeout. On server restart while waiting, the resume flow (Section 5.2) picks up the unanswered question from `_agent_messages` and waits again.
 
-### 6.2 `anyclaw_update_progress` Protocol
+### 6.2 `anyraven_update_progress` Protocol
 
 Fire-and-forget. The tool writes a `progress` record and returns immediately:
 
@@ -394,11 +394,11 @@ PocketBase realtime pushes to the mobile app's subscription. The tool returns `{
 
 All tool handlers live under `src/mcp-server/tools/`. Each tool validates its input with Zod, executes its handler inside the global error wrapper (Section 10), and returns a `content` array plus `structuredContent` where applicable.
 
-### 7.1 `anyclaw_create_collection`
+### 7.1 `anyraven_create_collection`
 
 ```typescript
 server.registerTool(
-  "anyclaw_create_collection",
+  "anyraven_create_collection",
   {
     title: "Create Collection",
     description:
@@ -456,11 +456,11 @@ server.registerTool(
 );
 ```
 
-### 7.2 `anyclaw_deploy`
+### 7.2 `anyraven_deploy`
 
 ```typescript
 server.registerTool(
-  "anyclaw_deploy",
+  "anyraven_deploy",
   {
     title: "Deploy to Production",
     description:
@@ -497,11 +497,11 @@ server.registerTool(
 
 The pipeline is implemented in Plan 1's `DeployManager` but is specified end-to-end in Section 8 below.
 
-### 7.3 `anyclaw_rollback`
+### 7.3 `anyraven_rollback`
 
 ```typescript
 server.registerTool(
-  "anyclaw_rollback",
+  "anyraven_rollback",
   {
     title: "Rollback to Version",
     description:
@@ -523,11 +523,11 @@ server.registerTool(
 
 The same rollback logic is reachable via the dispatch server's `POST /rollback` REST endpoint so the mobile app can recover even when no agent is running.
 
-### 7.4 `anyclaw_snapshot_db`
+### 7.4 `anyraven_snapshot_db`
 
 ```typescript
 server.registerTool(
-  "anyclaw_snapshot_db",
+  "anyraven_snapshot_db",
   {
     title: "Snapshot Database",
     description:
@@ -552,11 +552,11 @@ server.registerTool(
 );
 ```
 
-### 7.5 `anyclaw_list_versions`
+### 7.5 `anyraven_list_versions`
 
 ```typescript
 server.registerTool(
-  "anyclaw_list_versions",
+  "anyraven_list_versions",
   {
     title: "List Versions",
     description: "Show deployment history.",
@@ -595,11 +595,11 @@ server.registerTool(
 );
 ```
 
-### 7.6 `anyclaw_ask_user`
+### 7.6 `anyraven_ask_user`
 
 ```typescript
 server.registerTool(
-  "anyclaw_ask_user",
+  "anyraven_ask_user",
   {
     title: "Ask User",
     description:
@@ -624,11 +624,11 @@ server.registerTool(
 
 See Section 6.1 for the full protocol.
 
-### 7.7 `anyclaw_update_progress`
+### 7.7 `anyraven_update_progress`
 
 ```typescript
 server.registerTool(
-  "anyclaw_update_progress",
+  "anyraven_update_progress",
   {
     title: "Update Progress",
     description:
@@ -664,7 +664,7 @@ server.registerTool(
 
 ## 8. Deploy Pipeline
 
-`anyclaw_deploy` runs the pipeline below. Every step is atomic in isolation; failures at any step leave prod unchanged and surface a detailed `isError` response so the agent can fix and retry. The implementation lives in `packages/deploy/src/deploy-manager.ts` (from Plan 1) and is invoked by the tool handler.
+`anyraven_deploy` runs the pipeline below. Every step is atomic in isolation; failures at any step leave prod unchanged and surface a detailed `isError` response so the agent can fix and retry. The implementation lives in `packages/deploy/src/deploy-manager.ts` (from Plan 1) and is invoked by the tool handler.
 
 ### 8.1 Inputs
 
@@ -706,13 +706,13 @@ On any failure the pipeline aborts and returns:
 No DB snapshot, commit, or merge has happened yet — prod is untouched.
 
 **3. Database snapshot** (unless `skipDbSnapshot`).
-`snapshotManager.create(\`pre-deploy-v${version}\`)` copies `pocketbase/pb_data/data.db` through SQLite's `VACUUM INTO` to a temp file, gzips it, moves it into `/data/.anyclaw/snapshots/`, and records it in the snapshot index. Returns `snapshotId`.
+`snapshotManager.create(\`pre-deploy-v${version}\`)` copies `pocketbase/pb_data/data.db` through SQLite's `VACUUM INTO` to a temp file, gzips it, moves it into `/data/.anyraven/snapshots/`, and records it in the snapshot index. Returns `snapshotId`.
 
 **4. Git commit in the worktree.**
 
 ```bash
 git -C <worktreePath> add -A
-git -C <worktreePath> -c user.email=agent@anyclaw -c user.name="AnyRaven Agent" \
+git -C <worktreePath> -c user.email=agent@anyraven -c user.name="AnyRaven Agent" \
     commit -m "<versionDescription>"
 git -C <worktreePath> tag "v${version}"
 ```
@@ -741,7 +741,7 @@ The copy is staged to `/data/prod/<component>.new/` then atomically renamed over
 **7. Restart prod app backend** (decision #28).
 
 ```bash
-systemctl --user restart anyclaw-logic
+systemctl --user restart anyraven-logic
 ```
 
 Wait up to 10 seconds for the service to report `active (running)`. If it does not, trigger an automatic rollback to the previous `_versions` entry (Section 9) and return `isError: true` with the health-check output.
@@ -789,7 +789,7 @@ Mark `_tasks[taskId].state = "done"`, revoke the per-task bearer token, and retu
 
 ## 9. Rollback Pipeline
 
-`anyclaw_rollback` (and the dispatch REST endpoint `POST /rollback`) run this pipeline. It is the user's emergency recovery path and must work even when the app backend is broken.
+`anyraven_rollback` (and the dispatch REST endpoint `POST /rollback`) run this pipeline. It is the user's emergency recovery path and must work even when the app backend is broken.
 
 ### 9.1 Steps
 
@@ -813,7 +813,7 @@ git -C /data/dev checkout v<version>
 
 **5. Rebuild and promote.** Run `vite build` and `tsc` in the checked-out code and copy the artifacts to `/data/prod/frontend/` and `/data/prod/logic/` using the same atomic-rename pattern as deploy step 6.
 
-**6. Restart prod app backend.** `systemctl --user restart anyclaw-logic`.
+**6. Restart prod app backend.** `systemctl --user restart anyraven-logic`.
 
 **7. Record the rollback.** Insert a new row into `_versions` with `description = "Rollback to v${version}"`, `gitCommit = target.gitCommit`, `dbSnapshotId = target.dbSnapshotId`. Rollback is just another version in the history.
 
@@ -835,8 +835,8 @@ If any step fails, the pipeline halts and attempts to restore the pre-rollback s
 | Authentication | Missing or unknown bearer token | Express middleware returns HTTP 401 before the MCP layer sees the request |
 | Constraint violation | `create_collection` name starts with `_` | `ToolError` thrown in handler → `isError: true` |
 | Infrastructure failure | PocketBase unreachable, git fails | Caught in wrapper, returned as `isError: true` with diagnostic detail |
-| Validation failure | Lint/type/build/test errors in deploy | `anyclaw_deploy` returns `isError: true` with full output so the agent can self-correct |
-| Timeout | `anyclaw_ask_user` waits too long | Returns `isError: true` with `timedOut: true` in structuredContent |
+| Validation failure | Lint/type/build/test errors in deploy | `anyraven_deploy` returns `isError: true` with full output so the agent can self-correct |
+| Timeout | `anyraven_ask_user` waits too long | Returns `isError: true` with `timedOut: true` in structuredContent |
 | Unknown / unexpected | Unhandled exception | Global wrapper returns `isError: true` with message and (in dev) stack trace |
 
 ### 10.2 ToolError Class and Wrapper
@@ -880,10 +880,10 @@ If PocketBase is unreachable, the admin client retries with exponential backoff 
 
 ### 10.4 Retry Semantics
 
-- `anyclaw_deploy` and `anyclaw_rollback` are **not** idempotent (`idempotentHint: false`). The agent must inspect the error and decide whether to retry.
-- `anyclaw_snapshot_db`, `anyclaw_list_versions`, `anyclaw_update_progress` are safe to retry.
-- `anyclaw_ask_user` retrying creates a duplicate question — the agent should only retry on explicit timeout, not on other errors.
-- `anyclaw_create_collection` is not idempotent; a retry against an existing collection will fail with a PocketBase 400 and be surfaced as `ToolError`.
+- `anyraven_deploy` and `anyraven_rollback` are **not** idempotent (`idempotentHint: false`). The agent must inspect the error and decide whether to retry.
+- `anyraven_snapshot_db`, `anyraven_list_versions`, `anyraven_update_progress` are safe to retry.
+- `anyraven_ask_user` retrying creates a duplicate question — the agent should only retry on explicit timeout, not on other errors.
+- `anyraven_create_collection` is not idempotent; a retry against an existing collection will fail with a PocketBase 400 and be surfaced as `ToolError`.
 
 ---
 
@@ -900,7 +900,7 @@ packages/mcp-server/
     ├── pocketbase-client.ts         # admin client singleton
     ├── errors.ts                    # ToolError class
     ├── task-checkpoint.ts           # TaskCheckpoint type
-    ├── ask-user-protocol.ts         # anyclaw_ask_user implementation
+    ├── ask-user-protocol.ts         # anyraven_ask_user implementation
     └── tools/
         ├── index.ts                 # registerAllTools(server, ctx)
         ├── register.ts              # withErrorHandling wrapper
@@ -926,7 +926,7 @@ packages/deploy/                     # from Plan 1, consumed by tools
 
 ```json
 {
-  "name": "@anyclaw/mcp-server",
+  "name": "@anyraven/mcp-server",
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -969,13 +969,13 @@ Representative test matrix:
 
 | Tool | Key cases |
 |------|-----------|
-| `anyclaw_create_collection` | happy path, reserved name `_foo` rejected, snapshot failure aborts, PocketBase 400 surfaced |
-| `anyclaw_deploy` | happy path, lint failure returns isError, typecheck failure, build failure, test failure, app-backend restart failure triggers rollback |
-| `anyclaw_rollback` | happy path, unknown version, safety snapshot failure aborts, DB restore failure |
-| `anyclaw_snapshot_db` | happy path, label too short, disk-full simulation |
-| `anyclaw_list_versions` | empty list, limit bounds, PB unreachable retries then fails |
-| `anyclaw_ask_user` | happy path, timeout, answer arrives after unsubscribe, pause-indefinitely (Infinity) |
-| `anyclaw_update_progress` | happy path, PB create fails |
+| `anyraven_create_collection` | happy path, reserved name `_foo` rejected, snapshot failure aborts, PocketBase 400 surfaced |
+| `anyraven_deploy` | happy path, lint failure returns isError, typecheck failure, build failure, test failure, app-backend restart failure triggers rollback |
+| `anyraven_rollback` | happy path, unknown version, safety snapshot failure aborts, DB restore failure |
+| `anyraven_snapshot_db` | happy path, label too short, disk-full simulation |
+| `anyraven_list_versions` | empty list, limit bounds, PB unreachable retries then fails |
+| `anyraven_ask_user` | happy path, timeout, answer arrives after unsubscribe, pause-indefinitely (Infinity) |
+| `anyraven_update_progress` | happy path, PB create fails |
 
 Auth middleware tests: valid token, missing header, unknown token, revoked token.
 
@@ -990,10 +990,10 @@ A dedicated integration suite (`tests/integration/`) spins up the real dependenc
 
 Scenarios:
 
-1. **Full deploy happy path.** Seed a worktree with a trivial change, call `anyclaw_deploy`, assert `_versions` row exists, prod dirs updated, `_agent_messages` has a `deploy_event`.
-2. **Deploy validation failure.** Introduce a type error, call `anyclaw_deploy`, assert `isError: true`, `_versions` untouched, prod untouched.
+1. **Full deploy happy path.** Seed a worktree with a trivial change, call `anyraven_deploy`, assert `_versions` row exists, prod dirs updated, `_agent_messages` has a `deploy_event`.
+2. **Deploy validation failure.** Introduce a type error, call `anyraven_deploy`, assert `isError: true`, `_versions` untouched, prod untouched.
 3. **Rollback round-trip.** Deploy v1, deploy v2, rollback to v1, assert prod artifacts match v1 and the DB snapshot was restored.
-4. **ask_user round-trip.** Kick off `anyclaw_ask_user` in a background promise, simulate mobile app by POSTing an `answer` record to `_agent_messages`, assert the promise resolves with the answer.
+4. **ask_user round-trip.** Kick off `anyraven_ask_user` in a background promise, simulate mobile app by POSTing an `answer` record to `_agent_messages`, assert the promise resolves with the answer.
 5. **Task resume after restart.** Start a deploying task, SIGKILL the dispatch process, restart, assert the task moves to `failed` with `error: "server_restart"` (decision #40).
 6. **Bearer token auth.** Call `/mcp` without a token (401), with a wrong token (401), with a revoked token (401), with a valid token (200).
 

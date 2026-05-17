@@ -20,7 +20,7 @@ AnyRaven is **agent-agnostic** — it does not bundle a coding agent. It provide
 └────────────────────────────┬────────────────────────────────┘
                              │ WSS tunnel (tunnel-manager)
 ┌────────────────────────────▼────────────────────────────────┐
-│  anyclaw-server/      Per-user server (Docker or bare host)  │
+│  anyraven-server/      Per-user server (Docker or bare host)  │
 │  ├── dispatch         Task orchestration + REST API :4100    │
 │  ├── mcp-server       MCP tools for coding agents            │
 │  ├── tunnel-manager   Persistent WSS tunnel to broker        │
@@ -38,7 +38,7 @@ AnyRaven is **agent-agnostic** — it does not bundle a coding agent. It provide
 AnyRaven/
 ├── broker/             Auth + relay service (deploy to cloud)
 ├── mobile/             Expo companion app (iOS / Android / Web)
-├── anyclaw-server/     Server monorepo (runs per-user, in Docker)
+├── anyraven-server/     Server monorepo (runs per-user, in Docker)
 │   └── packages/
 │       ├── shared/
 │       ├── dispatch/
@@ -64,7 +64,7 @@ AnyRaven/
 
 - [broker/README.md](broker/README.md)
 - [mobile/README.md](mobile/README.md)
-- [anyclaw-server/README.md](anyclaw-server/README.md)
+- [anyraven-server/README.md](anyraven-server/README.md)
 
 ## Key Design Decisions
 

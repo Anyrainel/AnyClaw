@@ -7,6 +7,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:4100}"
 APP_URL="${APP_URL:-http://127.0.0.1:5173}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-60}"
+export ANYRAVEN_DISABLE_TASK_AUTORUN="${ANYRAVEN_DISABLE_TASK_AUTORUN:-1}"
 
 echo "=== AnyRaven Baseline E2E Smoke Test ==="
 echo "Compose file: $COMPOSE_FILE"
@@ -41,13 +42,18 @@ echo "    ✓ dispatch healthy"
 done
 
 echo "[3b/6] Verifying app frontend..."
-if curl -fsS "$APP_URL/" >/dev/null; then
-  echo "    ✓ app frontend reachable"
-else
-  echo "    ✗ app frontend not reachable"
-  docker compose -f "$COMPOSE_FILE" logs --tail 50 app-frontend 2>/dev/null || docker compose -f "$COMPOSE_FILE" logs --tail 50
-  exit 1
-fi
+for i in $(seq 1 "$TIMEOUT_SEC"); do
+  if curl -fsS "$APP_URL/" >/dev/null 2>&1; then
+    echo "    ✓ app frontend reachable"
+    break
+  fi
+  if [ "$i" -eq "$TIMEOUT_SEC" ]; then
+    echo "    ✗ app frontend not reachable"
+    docker compose -f "$COMPOSE_FILE" logs --tail 50 app-frontend 2>/dev/null || docker compose -f "$COMPOSE_FILE" logs --tail 50
+    exit 1
+  fi
+  sleep 1
+done
 
 # ---------------------------------------------------------------------------
 # 3. Create a task

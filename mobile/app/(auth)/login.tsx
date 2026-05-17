@@ -37,7 +37,7 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>AnyClaw</Text>
+        <Text style={styles.title}>AnyRaven</Text>
         <Text style={styles.subtitle}>Sign in to get started</Text>
       </View>
 

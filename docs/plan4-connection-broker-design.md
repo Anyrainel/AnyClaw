@@ -4,7 +4,7 @@
 
 **Guiding constraint:** The broker must be cheap to operate, stateless where possible, and must never be able to read the plaintext traffic it relays. In Phase 1 it forwards every byte between the mobile app and the user's host, so the design minimises per-user bandwidth and makes the transition to Phase 2 (P2P) a drop-in upgrade rather than a rewrite.
 
-**Relationship to the user's host (process supervision, not containers):** Per the main spec's Process Architecture section, the user's side is a single host — one Docker container or a native install — running supervised processes: PocketBase, Tunnel Manager, Dispatch/MCP server, Logic service, and Prod static server. The broker treats the user's side as a single endpoint: one persistent WSS connection per host, owned by the supervised **Tunnel Manager** process (`restart=always`). The broker relays opaque frames and does not know or care that multiple processes live behind the tunnel. Fan-out to the internal services (PocketBase on `127.0.0.1:8090`, Dispatch/MCP on `127.0.0.1:3000`, Prod static on `127.0.0.1:4000`) is performed by the Tunnel Manager on the user's side, driven by an in-envelope `service` tag (see §7.4).
+**Relationship to the user's host (process supervision, not containers):** Per the main spec's Process Architecture section, the user's side is a single host — one Docker container or a native install — running supervised processes: PocketBase, Tunnel Manager, Dispatch/MCP server, app-backend, and app-frontend server. The broker treats the user's side as a single endpoint: one persistent WSS connection per host, owned by the supervised **Tunnel Manager** process (`restart=always`). The broker relays opaque frames and does not know or care that multiple processes live behind the tunnel. Fan-out to the internal services (PocketBase on `127.0.0.1:8090`, Dispatch/MCP on `127.0.0.1:3000`, app-frontend on `127.0.0.1:4000`) is performed by the Tunnel Manager on the user's side, driven by an in-envelope `service` tag (see §7.4).
 
 ---
 
@@ -85,9 +85,9 @@ All five run under systemd on the host (no Docker Compose for MVP — simpler op
 ### 2.5 CI/CD
 
 - **Source:** GitHub monorepo subdirectory `broker/`.
-- **Pipeline:** GitHub Actions — on push to `main`: `pnpm install` → `pnpm test` → `pnpm build` → `rsync` the compiled JS + `package.json` to the VPS → `systemctl reload anyclaw-broker.service`.
+- **Pipeline:** GitHub Actions — on push to `main`: `pnpm install` → `pnpm test` → `pnpm build` → `rsync` the compiled JS + `package.json` to the VPS → `systemctl reload anyraven-broker.service`.
 - **Migrations:** `pnpm migrate` step runs before reload. Migrations are forward-only SQL files under `src/db/migrations/`.
-- **Rollback:** Previous build kept in `/opt/anyclaw-broker/releases/<sha>/`. `systemctl reload` swaps the symlink. Rollback = swap symlink back + `systemctl reload`.
+- **Rollback:** Previous build kept in `/opt/anyraven-broker/releases/<sha>/`. `systemctl reload` swaps the symlink. Rollback = swap symlink back + `systemctl reload`.
 
 ---
 
@@ -157,7 +157,7 @@ Mobile App              Broker                 OAuth Provider
     |                     |   create session        |
     |                     |   mint broker JWT       |
     |                     |                         |
- 7. |<-- 302 to anyclaw://auth/success#jwt=...&rt=...
+ 7. |<-- 302 to anyraven://auth/success#jwt=...&rt=...
     |   (deep link back to mobile app)              |
     |                     |                         |
  8. |-- POST /auth/exchange -----------------------
@@ -212,7 +212,7 @@ A "server" in broker terminology is the user's entire AnyRaven host (one row per
 
 ### 5.2 Registration Flow
 
-1. Install script runs on the user's host. It generates the host's X25519 long-lived keypair `(server_pk, server_sk)`, storing `server_sk` at `/data/.anyclaw/server.key` with mode `0600` (owned by `anyclaw-infra` user).
+1. Install script runs on the user's host. It generates the host's X25519 long-lived keypair `(server_pk, server_sk)`, storing `server_sk` at `/data/.anyraven/server.key` with mode `0600` (owned by `anyraven-infra` user).
 2. User completes the pairing flow (§6) in the mobile app, which provides the host with a `server_token`, the user's device public key `mobile_pk`, and a `broker_url`.
 3. Tunnel Manager writes these to its config file, then opens `wss://broker.anyraven.com/relay/server?token=<server_token>`.
 4. On first successful connect, the Tunnel Manager sends an in-band registration frame:
@@ -301,10 +301,10 @@ Transitions happen in a single background job (`health-checker`) that runs every
 
 ### 6.2 Host-Side Claim
 
-1. On the host, the user runs `anyclaw pair` (an install-script-provided command).
+1. On the host, the user runs `anyraven pair` (an install-script-provided command).
 2. The CLI either scans the QR via a terminal QR reader (`zbarimg` if an image is piped in), or accepts the pasted text.
-3. The CLI writes the token + `mobile_pk` + `broker_url` into `/data/.anyclaw/tunnel.conf`.
-4. The CLI loads the already-generated `server_sk` and `server_pk` from `/data/.anyclaw/server.key`.
+3. The CLI writes the token + `mobile_pk` + `broker_url` into `/data/.anyraven/tunnel.conf`.
+4. The CLI loads the already-generated `server_sk` and `server_pk` from `/data/.anyraven/server.key`.
 5. The CLI computes the NaCl shared secret:
    ```
    shared_secret = X25519(server_sk, mobile_pk)
@@ -382,7 +382,7 @@ The envelope fields:
 |-------------|----------|-----------------------------------------------------------------------|
 | `type`      | string   | `"data"`, `"stream_open"`, `"stream_close"`, `"stream_error"`         |
 | `client_id` | string   | Demultiplexes across mobile clients on the host side                  |
-| `service`   | enum     | `"pb"` (PocketBase), `"api"` (Dispatch/MCP), `"app"` (Prod static)    |
+| `service`   | enum     | `"pb"` (PocketBase), `"api"` (Dispatch/MCP), `"app"` (app-frontend)    |
 | `stream_id` | uint32   | Per-`client_id` logical HTTP/SSE stream identifier                    |
 | `flags`     | bitfield | `END_STREAM` bit for HTTP request/response delimiting                 |
 
@@ -405,7 +405,7 @@ on_frame(envelope, ciphertext):
     match envelope.service:
         "pb"  -> forward to 127.0.0.1:8090 (PocketBase)
         "api" -> forward to 127.0.0.1:3000 (Dispatch/MCP server)
-        "app" -> forward to 127.0.0.1:4000 (Prod static server)
+        "app" -> forward to 127.0.0.1:4000 (app-frontend server)
 
     on response from internal service:
         ciphertext = nacl.box(response_bytes, next_nonce, mobile_pk[client_id], server_sk)
@@ -456,7 +456,7 @@ Both WS directions use protocol-level ping frames every 15 seconds. If no pong i
 ### 8.2 Key Lifecycle (spec decision #31)
 
 - **Mobile device key `(mobile_pk, mobile_sk)`:** generated during pairing (§6.1). Long-lived. Stored in `expo-secure-store` keyed by `server_id`. **Never rotated in MVP.**
-- **Host key `(server_pk, server_sk)`:** generated during install. Long-lived. Stored at `/data/.anyclaw/server.key` mode 0600. **Never rotated in MVP.**
+- **Host key `(server_pk, server_sk)`:** generated during install. Long-lived. Stored at `/data/.anyraven/server.key` mode 0600. **Never rotated in MVP.**
 - **Shared secret `S = X25519(mobile_sk, server_pk) = X25519(server_sk, mobile_pk)`:** derived on demand, cached in memory.
 - **Device loss:** user revokes the session (§3.4) then re-pairs. The broker stores only public keys, so revocation is a single row delete in `device_keys`.
 
@@ -481,7 +481,7 @@ Mobile App                    Broker                     User's Host
     |===========================|=========> user scans ========|
     |                           |                              |
 4.  |                           |      load server_sk from     |
-    |                           |      /data/.anyclaw/         |
+    |                           |      /data/.anyraven/         |
     |                           |      server.key              |
     |                           |                              |
 5.  |                           |      crypto_scalarmult(      |
@@ -564,7 +564,7 @@ nonce[1..5] = uint32 session epoch (incremented on every cold start, persisted)
 nonce[5..24] = counter
 ```
 
-Session epoch is persisted on the host at `/data/.anyclaw/nonce-epoch` and in `expo-secure-store` on mobile. Cold start reads, increments, writes back, then uses the new value. This closes the theoretical reconnect-collision hole without requiring tight counter persistence on every frame.
+Session epoch is persisted on the host at `/data/.anyraven/nonce-epoch` and in `expo-secure-store` on mobile. Cold start reads, increments, writes back, then uses the new value. This closes the theoretical reconnect-collision hole without requiring tight counter persistence on every frame.
 
 ### 8.6 What is NOT Encrypted (per spec decision #33)
 
@@ -578,7 +578,7 @@ An opt-in toggle in mobile app settings labelled *"Developer: log decrypted traf
 
 - The mobile client writes decrypted frames to a rolling local log file (capped at 10 MB).
 - The log file is visible only to the mobile app; it is never uploaded, never sent to the broker, and is wiped on logout.
-- The host side has a symmetric env var `ANYCLAW_DEBUG_DECRYPTED_LOG=1` that logs to `/data/.anyclaw/debug/decrypted.log`.
+- The host side has a symmetric env var `ANYRAVEN_DEBUG_DECRYPTED_LOG=1` that logs to `/data/.anyraven/debug/decrypted.log`.
 
 This gives developers a troubleshooting path for connectivity issues without compromising the default privacy model.
 
@@ -619,9 +619,9 @@ The `connection_type` field lets the broker record whether a TURN fallback was n
 
 ### 9.5 Data Channel
 
-Single reliable, ordered data channel named `"anyclaw"`:
+Single reliable, ordered data channel named `"anyraven"`:
 ```typescript
-pc.createDataChannel("anyclaw", { ordered: true, maxRetransmits: null });
+pc.createDataChannel("anyraven", { ordered: true, maxRetransmits: null });
 ```
 
 It carries the same framing format as Phase 1 (CBOR envelope + NaCl ciphertext). The Tunnel Manager on the host fans out to PocketBase/Dispatch/Prod exactly as in Phase 1 — the `service` tag and routing table are unchanged. DTLS (mandatory in WebRTC) provides transport-layer encryption; NaCl provides the E2E layer **above** DTLS so the design is uniform across Phase 1 and Phase 2 and the user's privacy guarantee survives a hypothetical TURN server compromise.
@@ -911,7 +911,7 @@ broker/
 ├── pnpm-lock.yaml
 ├── Caddyfile
 ├── systemd/
-│   └── anyclaw-broker.service
+│   └── anyraven-broker.service
 ├── src/
 │   ├── index.ts                    # Fastify entrypoint, route registration
 │   ├── config.ts                   # Env vars, secrets, defaults

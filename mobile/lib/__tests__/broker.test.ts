@@ -16,7 +16,7 @@ const mockAuthRequest = {
 };
 jest.mock("expo-auth-session", () => ({
   AuthRequest: jest.fn().mockImplementation(() => mockAuthRequest),
-  makeRedirectUri: jest.fn(() => "anyclaw://auth"),
+  makeRedirectUri: jest.fn(() => "anyraven://auth"),
 }));
 
 // Mock expo-web-browser

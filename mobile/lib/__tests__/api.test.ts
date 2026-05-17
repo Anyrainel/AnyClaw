@@ -83,7 +83,7 @@ describe("ApiClient", () => {
     expect(opts.method).toBe("POST");
     expect(opts.headers["content-type"]).toBe("application/x-nacl-box");
     expect(opts.headers["authorization"]).toBe("Bearer tok-123");
-    expect(opts.headers["x-anyclaw-client-pk"]).toBeDefined();
+    expect(opts.headers["x-anyraven-client-pk"]).toBeDefined();
 
     // Body should be an encrypted envelope (JSON with ciphertext and nonce)
     const body = JSON.parse(opts.body);

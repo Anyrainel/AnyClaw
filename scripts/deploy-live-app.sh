@@ -8,7 +8,7 @@ set -euo pipefail
 # build the frontend, atomically replace /data/prod/app-frontend, optionally
 # replace /data/prod/app-backend, then restart the supervised app services.
 
-CONTAINER_NAME="${ANYRAVEN_CONTAINER_NAME:-anyclaw}"
+CONTAINER_NAME="${ANYRAVEN_CONTAINER_NAME:-anyraven}"
 DEV_DIR="${ANYRAVEN_DEV_DIR:-/data/dev}"
 APP_FRONTEND_DIR="${ANYRAVEN_APP_FRONTEND_DIR:-/data/prod/app-frontend}"
 APP_BACKEND_SRC="${ANYRAVEN_APP_BACKEND_SRC:-$DEV_DIR/app-backend}"
@@ -20,6 +20,18 @@ docker exec "$CONTAINER_NAME" bash -lc "
   APP_FRONTEND_DIR='$APP_FRONTEND_DIR'
   APP_BACKEND_SRC='$APP_BACKEND_SRC'
   APP_BACKEND_DIR='$APP_BACKEND_DIR'
+  export HOME=\"/data/.anyraven\"
+  export npm_config_cache=\"/data/.anyraven/npm-cache\"
+  mkdir -p \"\$npm_config_cache\"
+  chown -R anyraven-infra:anyraven-infra \"\$HOME\" \"\$npm_config_cache\" 2>/dev/null || true
+
+  run_as_app_user() {
+    if id anyraven-infra >/dev/null 2>&1; then
+      runuser -u anyraven-infra -- \"\$@\"
+    else
+      \"\$@\"
+    fi
+  }
 
   promote_dir() {
     src=\"\$1\"
@@ -37,7 +49,16 @@ docker exec "$CONTAINER_NAME" bash -lc "
   }
 
   cd \"\$DEV_DIR\"
-  npm run build
+  chown -R anyraven-infra:anyraven-infra \
+    \"\$DEV_DIR/node_modules\" \
+    \"\$DEV_DIR/dist\" \
+    \"\$DEV_DIR/package-lock.json\" 2>/dev/null || true
+  if [ ! -x \"\$DEV_DIR/node_modules/.bin/vite\" ]; then
+    rm -rf \"\$DEV_DIR/node_modules\"
+    run_as_app_user npm install
+  fi
+  rm -rf \"\$DEV_DIR/dist\"
+  run_as_app_user \"\$DEV_DIR/node_modules/.bin/vite\" build
   test -f \"\$DEV_DIR/dist/index.html\"
   promote_dir \"\$DEV_DIR/dist\" \"\$APP_FRONTEND_DIR\"
 

@@ -19,7 +19,7 @@ describe('oauth/apple', () => {
   beforeAll(async () => {
     const { pem } = await makeApplePkcs8();
     cfg = {
-      clientId: 'com.example.anyclaw',
+      clientId: 'com.example.anyraven',
       teamId: 'TEAM1234',
       keyId: 'KEYABCD',
       privateKeyPem: pem,

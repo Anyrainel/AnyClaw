@@ -13,7 +13,7 @@ The agent dispatch layer is the bridge between a mobile user typing "add a mood 
 1. **Task lifecycle** -- input, clarification, work, deploy, done/failed -- including exactly-once submission semantics.
 2. **Pluggable `AgentAdapter` interface** -- a uniform contract that each supported agent implements.
 3. **Per-task git worktree** -- each task gets its own isolated workspace under `dev/.worktrees/`.
-4. **Clarification relay** -- a universal `anyclaw_ask_user` MCP tool that works identically for every adapter.
+4. **Clarification relay** -- a universal `anyraven_ask_user` MCP tool that works identically for every adapter.
 5. **REST API** exposed to the mobile app over the WSS tunnel.
 6. **Persistence and resume** so that a dispatch-server restart never loses an in-flight task.
 
@@ -34,7 +34,7 @@ The dispatch/MCP server is the "control plane": the small, stable process that a
 3. Emergency endpoints (`POST /api/rollback`, `POST /api/restart-app`).
 4. Owning the `AdapterManager`, which spawns and supervises the transient agent subprocess per task.
 
-**Source file protection.** The dispatch/MCP server's source files live under `.anyclaw/` and are NOT inside the agent's writable path. The agent's `cwd` is a per-task worktree under `dev/.worktrees/`. It literally cannot edit the process that supervises it.
+**Source file protection.** The dispatch/MCP server's source files live under `.anyraven/` and are NOT inside the agent's writable path. The agent's `cwd` is a per-task worktree under `dev/.worktrees/`. It literally cannot edit the process that supervises it.
 
 ### 2.2 Communication path
 
@@ -53,7 +53,7 @@ Dispatch / MCP Server (supervised process)
     │     └── WebhookAdapter ──HTTP──> user-configured URL
     │
     ├── MCP HTTP/SSE endpoint (same process, loopback)
-    │     the agent subprocess connects back here for anyclaw_* tools
+    │     the agent subprocess connects back here for anyraven_* tools
     │
     └── PocketBase client ──loopback──> PocketBase (127.0.0.1:8090)
           persistence: tasks, clarifications, activity log, queue
@@ -162,7 +162,7 @@ interface AgentAdapter {
   subscribe(handle: TaskHandle, signal: AbortSignal): AsyncIterable<TaskStatus>;
 
   /** Send the user's answer. No-op for adapters where the answer flows via the
-   *  anyclaw_ask_user MCP tool blocking inside the same process. */
+   *  anyraven_ask_user MCP tool blocking inside the same process. */
   answerQuestion(handle: TaskHandle, answer: string): Promise<void>;
 
   /** Graceful stop (SIGTERM -> SIGKILL or abort RPC). Idempotent. */
@@ -192,7 +192,7 @@ interface SystemContext {
   mcpBearerToken: string;
   /** Per-task MCP config file path (for agents that take --mcp-config). */
   mcpConfigPath: string;
-  /** System prompt additions that point the agent at the anyclaw_* tools. */
+  /** System prompt additions that point the agent at the anyraven_* tools. */
   systemPrompt: string;
   /** Tools the agent may call without interactive permission prompts. */
   allowedTools: string[];
@@ -230,7 +230,7 @@ submit -->│  queued  │
           └────┬─────┘
                │ scheduler picks task, adapter.dispatch()
                ▼
-          ┌──────────┐      agent calls anyclaw_ask_user
+          ┌──────────┐      agent calls anyraven_ask_user
           │ working  │◄────────────┐
           └────┬─────┘             │
                │                   │
@@ -239,7 +239,7 @@ submit -->│  queued  │
           ┌────────────┐           │
           │ clarifying │───────────┘
           └────┬───────┘
-               │ agent calls anyclaw_deploy
+               │ agent calls anyraven_deploy
                ▼
           ┌───────────┐
           │ deploying │
@@ -263,9 +263,9 @@ Terminal states: `done`, `failed`, `cancelled`. Once a task reaches a terminal s
 | (none) | `POST /api/tasks` with new UUID | `queued` | Row inserted in `tasks`, push to `task_queue`. |
 | (none) | `POST /api/tasks` with existing UUID | (no-op) | Idempotent upsert returns current status. |
 | `queued` | Scheduler picks task | `working` | Create worktree, spawn adapter. |
-| `working` | `anyclaw_ask_user` tool called | `clarifying` | Write to `task_clarifications`, push notification. |
+| `working` | `anyraven_ask_user` tool called | `clarifying` | Write to `task_clarifications`, push notification. |
 | `clarifying` | Answer written via REST | `working` | Tool resolves, agent continues. |
-| `working` | `anyclaw_deploy` tool called | `deploying` | Progress event. |
+| `working` | `anyraven_deploy` tool called | `deploying` | Progress event. |
 | `deploying` | Validation pass + git merge + prod copy | `done` | Merge worktree branch to `main`, delete worktree. |
 | `deploying` | Validation fail | `failed` | Delete worktree, leave `main` untouched. |
 | any non-terminal | `POST /api/tasks/:id/cancel` | `cancelled` | SIGTERM agent, delete worktree. |
@@ -335,7 +335,7 @@ class WorktreeManager {
     const branch = `task/${taskId}`;
     const path = join(this.devRoot, ".worktrees", `task-${taskId}`);
 
-    // The agent has already committed in the worktree (either directly or via anyclaw_deploy).
+    // The agent has already committed in the worktree (either directly or via anyraven_deploy).
     await exec(`git -C "${this.devRoot}" merge --ff-only ${branch}`);
     await exec(`git -C "${this.devRoot}" worktree remove "${path}"`);
     await exec(`git -C "${this.devRoot}" branch -d ${branch}`);
@@ -353,14 +353,14 @@ class WorktreeManager {
 
 ### 5.3 Merge flow on successful deploy
 
-Triggered inside the `anyclaw_deploy` MCP tool handler (part of Plan 2):
+Triggered inside the `anyraven_deploy` MCP tool handler (part of Plan 2):
 
 1. Run validation in the worktree (lint, typecheck, build, smoke tests).
-2. Snapshot the DB (`anyclaw_snapshot_db`).
+2. Snapshot the DB (`anyraven_snapshot_db`).
 3. Commit staged changes in the worktree (`git commit` on `task/<id>`).
 4. `WorktreeManager.mergeAndRemove(taskId)` -- fast-forward `main`.
 5. Copy built artifacts to the prod static directory.
-6. `systemctl --user restart anyclaw-logic` (decision #28).
+6. `systemctl --user restart anyraven-logic` (decision #28).
 7. Emit terminal `done` status with the version description.
 
 If any step fails, the deploy tool throws; the adapter marks the task `failed` and the manager calls `WorktreeManager.discard(taskId)`. `main` and prod are never touched.
@@ -424,7 +424,7 @@ Connects to a locally-running OpenClaw gateway at `ws://127.0.0.1:18789` over lo
 Gateway --> Client:  { type: "event", event: "connect.challenge", payload: { nonce, ts } }
 Client  --> Gateway: { type: "req", id: "1", method: "connect", params: {
                          minProtocol: 3, maxProtocol: 3,
-                         client: { name: "anyclaw-adapter", version: "1.0.0" },
+                         client: { name: "anyraven-adapter", version: "1.0.0" },
                          role: "operator",
                          scopes: ["operator.read", "operator.write"],
                          auth: { token: OPENCLAW_GATEWAY_TOKEN }
@@ -499,7 +499,7 @@ class OpenClawAdapter implements AgentAdapter {
     }
   }
 
-  /** No-op: the answer is picked up by anyclaw_ask_user blocking inside the
+  /** No-op: the answer is picked up by anyraven_ask_user blocking inside the
    *  dispatch server process via PocketBase realtime. */
   async answerQuestion(): Promise<void> {}
 
@@ -546,13 +546,13 @@ class OpenClawAdapter implements AgentAdapter {
 
   private mapEventToStatus(payload: any, seq: number): TaskStatus | null {
     const now = new Date().toISOString();
-    if (payload.type === "tool_call" && payload.tool === "anyclaw_ask_user") {
+    if (payload.type === "tool_call" && payload.tool === "anyraven_ask_user") {
       return { state: "clarifying", question: payload.args?.question, seq, updatedAt: now };
     }
-    if (payload.type === "tool_call" && payload.tool === "anyclaw_deploy") {
+    if (payload.type === "tool_call" && payload.tool === "anyraven_deploy") {
       return { state: "deploying", progressSummary: "Running validation and deploying...", seq, updatedAt: now };
     }
-    if (payload.type === "tool_call" && payload.tool === "anyclaw_update_progress") {
+    if (payload.type === "tool_call" && payload.tool === "anyraven_update_progress") {
       return { state: "working", progressSummary: payload.args?.message, seq, updatedAt: now };
     }
     if (payload.type === "run_complete") {
@@ -575,7 +575,7 @@ class OpenClawAdapter implements AgentAdapter {
     const challenge = await new Promise<any>((resolve) => this.addEventListener("connect.challenge", resolve));
     await this.rpc("connect", {
       minProtocol: 3, maxProtocol: 3,
-      client: { name: "anyclaw-adapter", version: "1.0.0" },
+      client: { name: "anyraven-adapter", version: "1.0.0" },
       role: "operator",
       scopes: ["operator.read", "operator.write"],
       auth: { token: this.config.token },
@@ -584,7 +584,7 @@ class OpenClawAdapter implements AgentAdapter {
 }
 ```
 
-Clarification works identically to Claude Code: the agent calls `anyclaw_ask_user` and the tool blocks inside the dispatch server waiting on PocketBase realtime. The OpenClaw adapter only needs to **surface** the tool call as a status update (so the mobile app shows the question); it doesn't handle the answer itself.
+Clarification works identically to Claude Code: the agent calls `anyraven_ask_user` and the tool blocks inside the dispatch server waiting on PocketBase realtime. The OpenClaw adapter only needs to **surface** the tool call as a status update (so the mobile app shows the question); it doesn't handle the answer itself.
 
 ---
 
@@ -637,11 +637,11 @@ class ClaudeCodeAdapter implements AgentAdapter {
     // Write per-task MCP config
     await writeFile(ctx.mcpConfigPath, JSON.stringify({
       mcpServers: {
-        anyclaw: {
+        anyraven: {
           type: "http",
           url: ctx.mcpEndpointUrl,
           headers: {
-            "x-anyclaw-task-id": taskId,
+            "x-anyraven-task-id": taskId,
             "authorization": `Bearer ${ctx.mcpBearerToken}`,
           },
         },
@@ -662,9 +662,9 @@ class ClaudeCodeAdapter implements AgentAdapter {
       env: {
         ...process.env,
         ANTHROPIC_API_KEY: await this.config.getApiKey(),
-        ANYCLAW_TASK_ID: taskId,
-        ANYCLAW_MCP_URL: ctx.mcpEndpointUrl,
-        ANYCLAW_MCP_TOKEN: ctx.mcpBearerToken,
+        ANYRAVEN_TASK_ID: taskId,
+        ANYRAVEN_MCP_URL: ctx.mcpEndpointUrl,
+        ANYRAVEN_MCP_TOKEN: ctx.mcpBearerToken,
       },
       signal,
     });
@@ -704,7 +704,7 @@ class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   async answerQuestion(): Promise<void> {
-    // No-op. anyclaw_ask_user picks up answers via PocketBase realtime in-process.
+    // No-op. anyraven_ask_user picks up answers via PocketBase realtime in-process.
   }
 
   async cancel(handle: TaskHandle): Promise<void> {
@@ -726,9 +726,9 @@ class ClaudeCodeAdapter implements AgentAdapter {
       env: {
         ...process.env,
         ANTHROPIC_API_KEY: await this.config.getApiKey(),
-        ANYCLAW_TASK_ID: taskId,
-        ANYCLAW_MCP_URL: ctx.mcpEndpointUrl,
-        ANYCLAW_MCP_TOKEN: ctx.mcpBearerToken,
+        ANYRAVEN_TASK_ID: taskId,
+        ANYRAVEN_MCP_URL: ctx.mcpEndpointUrl,
+        ANYRAVEN_MCP_TOKEN: ctx.mcpBearerToken,
       },
       signal,
     });
@@ -787,15 +787,15 @@ class ClaudeCodeAdapter implements AgentAdapter {
     if (event.type === "assistant" && event.message?.content) {
       for (const block of event.message.content) {
         if (block.type !== "tool_use") continue;
-        if (block.name === "anyclaw_ask_user") {
+        if (block.name === "anyraven_ask_user") {
           session.status = { state: "clarifying", question: block.input?.question, seq, updatedAt: now };
           return;
         }
-        if (block.name === "anyclaw_deploy") {
+        if (block.name === "anyraven_deploy") {
           session.status = { state: "deploying", progressSummary: "Running validation and deploying...", seq, updatedAt: now };
           return;
         }
-        if (block.name === "anyclaw_update_progress") {
+        if (block.name === "anyraven_update_progress") {
           session.status = { state: "working", progressSummary: block.input?.message, seq, updatedAt: now };
           return;
         }
@@ -902,7 +902,7 @@ class WebhookAdapter implements AgentAdapter {
 
   async answerQuestion(): Promise<void> {
     // Answer is written by the REST handler; the remote agent reads it via
-    // anyclaw_ask_user or its own polling of the callback contract.
+    // anyraven_ask_user or its own polling of the callback contract.
   }
 
   async cancel(handle: TaskHandle): Promise<void> {
@@ -927,13 +927,13 @@ The webhook callback endpoint (`POST /api/webhook/callback`) is a REST handler i
 
 ## 10. Clarification Relay
 
-### 10.1 The universal mechanism: `anyclaw_ask_user`
+### 10.1 The universal mechanism: `anyraven_ask_user`
 
-Regardless of adapter, clarification flows through the `anyclaw_ask_user` MCP tool. The tool is registered on the dispatch/MCP server's MCP endpoint -- the same process as the adapter.
+Regardless of adapter, clarification flows through the `anyraven_ask_user` MCP tool. The tool is registered on the dispatch/MCP server's MCP endpoint -- the same process as the adapter.
 
 ```typescript
 const askUserTool = tool(
-  "anyclaw_ask_user",
+  "anyraven_ask_user",
   "Ask the user a clarifying question and wait for their answer",
   {
     question: z.string().describe("The question to ask the user"),
@@ -941,8 +941,8 @@ const askUserTool = tool(
   },
   async ({ question, taskId: explicit }, ctx) => {
     const taskId = explicit
-      ?? ctx.request.headers["x-anyclaw-task-id"]
-      ?? process.env.ANYCLAW_TASK_ID;
+      ?? ctx.request.headers["x-anyraven-task-id"]
+      ?? process.env.ANYRAVEN_TASK_ID;
     if (!taskId) throw new Error("No task ID available");
 
     const pb = getPocketBase();
@@ -990,16 +990,16 @@ async function waitForAnswer(
 
 ```
 Agent child process
-    │ calls anyclaw_ask_user(...)
+    │ calls anyraven_ask_user(...)
     │ HTTP/SSE loopback
     ▼
-Dispatch/MCP server (anyclaw_ask_user handler)
+Dispatch/MCP server (anyraven_ask_user handler)
     │ insert task_clarifications row {status: pending}
     ▼
 PocketBase (loopback)
     │ realtime event
     ▼
-Adapter sees tool_call "anyclaw_ask_user", yields TaskStatus {state: clarifying, question}
+Adapter sees tool_call "anyraven_ask_user", yields TaskStatus {state: clarifying, question}
     │ PocketBase realtime on tasks collection
     ▼
 Tunnel Manager ─── WSS ───> Mobile app shows question
@@ -1012,7 +1012,7 @@ Mobile app ─── WSS ───> POST /api/tasks/:id/answer
 Dispatch REST handler updates task_clarifications {status: answered, answer}
     │ PocketBase realtime
     ▼
-anyclaw_ask_user resolves with answer text, MCP tool returns to agent
+anyraven_ask_user resolves with answer text, MCP tool returns to agent
     │
     ▼
 Agent continues
@@ -1027,7 +1027,7 @@ User-configurable in `settings.dispatch`:
 - `clarificationTimeoutMode: "best_judgment"` (default) -- after `clarificationTimeoutMs` (default 300_000 / 5 min), the tool resolves with a canned `"The user is unavailable. Use your best judgment and proceed."` string. The agent then continues.
 - `clarificationTimeoutMode: "pause_indefinitely"` -- no timer is set. The tool waits forever. This is the "I want to review every question" mode.
 
-The mode is honored on resume as well: if the dispatch server restarts while an `anyclaw_ask_user` call is blocked, the fresh handler re-subscribes with the same mode.
+The mode is honored on resume as well: if the dispatch server restarts while an `anyraven_ask_user` call is blocked, the fresh handler re-subscribes with the same mode.
 
 ### 10.4 Push notifications
 
@@ -1179,7 +1179,7 @@ The scenario: user set `clarificationTimeoutMode = "pause_indefinitely"`, the ag
 - The `task_clarifications` row is `pending`.
 - The startup sweep does **not** touch `clarifying` tasks.
 - When the user eventually answers via `POST /api/tasks/:id/answer`, the handler writes the answer to `task_clarifications`.
-- An immediate follow-up step in the handler checks if the task's agent subprocess is alive. If not, it calls `resumeTask(task)` which re-spawns the agent with `--resume`. The freshly-spawned `anyclaw_ask_user` handler on that task sees the `answered` row immediately and resolves with the answer.
+- An immediate follow-up step in the handler checks if the task's agent subprocess is alive. If not, it calls `resumeTask(task)` which re-spawns the agent with `--resume`. The freshly-spawned `anyraven_ask_user` handler on that task sees the `answered` row immediately and resolves with the answer.
 
 No question is ever duplicated. No instruction is lost.
 
@@ -1201,7 +1201,7 @@ All endpoints are served by the dispatch/MCP server over loopback, forwarded by 
 | `GET` | `/api/adapter/config` | Current adapter type + non-secret config. |
 | `PUT` | `/api/adapter/config` | Switch adapter or update config. Body: `{ activeAdapter, ... }`. |
 | `POST` | `/api/rollback` | Emergency rollback. Always works. |
-| `POST` | `/api/restart-app` | Restart app backend via `systemctl --user restart anyclaw-logic`. |
+| `POST` | `/api/restart-app` | Restart app backend via `systemctl --user restart anyraven-logic`. |
 | `POST` | `/api/webhook/callback` | Webhook adapter callback sink. |
 
 The mobile app does not poll `GET /api/tasks/:id` for status; it subscribes to PocketBase realtime on the `tasks` collection (filtered by `taskId`) through the tunnel. The REST endpoints exist for the commands (submit, answer, cancel) and for initial snapshots.
@@ -1323,7 +1323,7 @@ class AdapterManager {
 ## 14. File Structure
 
 ```
-.anyclaw/dispatch-server/
+.anyraven/dispatch-server/
 ├── src/
 │   ├── index.ts                   # process entry; supervisord target
 │   ├── rest/
@@ -1336,9 +1336,9 @@ class AdapterManager {
 │   │   ├── server.ts              # HTTP/SSE MCP endpoint
 │   │   ├── auth.ts                # per-task bearer token validation
 │   │   └── tools/
-│   │       ├── ask-user.ts        # anyclaw_ask_user
-│   │       ├── update-progress.ts # anyclaw_update_progress
-│   │       ├── deploy.ts          # anyclaw_deploy (Plan 2)
+│   │       ├── ask-user.ts        # anyraven_ask_user
+│   │       ├── update-progress.ts # anyraven_update_progress
+│   │       ├── deploy.ts          # anyraven_deploy (Plan 2)
 │   │       └── ...                # rollback, snapshot, etc.
 │   ├── adapters/
 │   │   ├── types.ts               # AgentAdapter, TaskStatus, etc.
@@ -1374,7 +1374,7 @@ class AdapterManager {
 └── tsconfig.json
 ```
 
-The entire tree lives under `.anyclaw/` and is NOT inside the agent's writable path (`dev/`). The `anyclaw_write_file` MCP tool rejects any path outside `dev/`.
+The entire tree lives under `.anyraven/` and is NOT inside the agent's writable path (`dev/`). The `anyraven_write_file` MCP tool rejects any path outside `dev/`.
 
 ---
 
@@ -1402,7 +1402,7 @@ The entire tree lives under `.anyclaw/` and is NOT inside the agent's writable p
 2. **Adapter dispatch succeeds but subscribe() fails.** Task is already `queued` or `working`; the supervisor loop will retry subscribe once, then mark `failed`.
 3. **Agent subprocess crashes mid-task.** The `consumeOutput` loop ends with a non-zero exit code; status transitions to `failed`. Worktree is discarded.
 4. **PocketBase unreachable.** Retry with exponential backoff (up to 30s). If still failing, surface `INTERNAL` to the caller.
-5. **`anyclaw_deploy` fails in the deploying state.** Worktree stays on disk in `task/<id>` branch for post-mortem; status is `failed`; user can retry with a new UUID.
+5. **`anyraven_deploy` fails in the deploying state.** Worktree stays on disk in `task/<id>` branch for post-mortem; status is `failed`; user can retry with a new UUID.
 6. **Merge fails on success** (should never happen in MVP due to sequential ff-only). Log, mark `failed`, leave worktree for inspection.
 
 ### 15.3 Testing strategy

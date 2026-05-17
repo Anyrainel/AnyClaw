@@ -76,10 +76,10 @@ IF both fail:
 
 ## Components to Modify
 
-### 1. Server (anyclaw-server)
+### 1. Server (anyraven-server)
 
 #### New: WireGuard Service
-- **Package**: `@anyclaw/wireguard` or built into `tunnel-manager`
+- **Package**: `@anyraven/wireguard` or built into `tunnel-manager`
 - **Responsibilities**:
   - Generate server WireGuard keypair on first boot
   - Run WireGuard daemon (or userspace `wireguard-go`)
@@ -271,16 +271,16 @@ Client scans:
 ## Files to Create/Modify
 
 ### New Files
-- `anyclaw-server/packages/wireguard/src/index.ts`
-- `anyclaw-server/packages/wireguard/src/config.ts`
-- `anyclaw-server/packages/direct-connect/src/index.ts` (public IP detection)
+- `anyraven-server/packages/wireguard/src/index.ts`
+- `anyraven-server/packages/wireguard/src/config.ts`
+- `anyraven-server/packages/direct-connect/src/index.ts` (public IP detection)
 - `mobile/lib/wireguard.ts`
 - `mobile/lib/direct-api.ts`
 
 ### Modified Files
-- `anyclaw-server/infra/Dockerfile` (add wireguard-tools)
-- `anyclaw-server/infra/supervisord.conf` (add wireguard process)
-- `anyclaw-server/packages/tunnel-manager/src/index.ts`
+- `anyraven-server/infra/Dockerfile` (add wireguard-tools)
+- `anyraven-server/infra/supervisord.conf` (add wireguard process)
+- `anyraven-server/packages/tunnel-manager/src/index.ts`
 - `broker/src/servers/pairing.ts`
 - `broker/src/db/migrate.ts`
 - `mobile/lib/broker.ts`

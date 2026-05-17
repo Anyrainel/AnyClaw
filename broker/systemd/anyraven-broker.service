@@ -1,0 +1,23 @@
+[Unit]
+Description=AnyRaven Connection Broker
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=anyraven-broker
+Group=anyraven-broker
+WorkingDirectory=/opt/anyraven-broker/current
+EnvironmentFile=/etc/anyraven-broker/env
+ExecStartPre=/usr/bin/node dist/db/migrate.js
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/anyraven-broker
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

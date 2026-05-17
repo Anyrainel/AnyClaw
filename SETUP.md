@@ -2,7 +2,7 @@
 
 ## Prerequisites (user must have)
 - [x] OpenClaw installed with valid API keys
-- [x] `anyclaw-test` agent created in OpenClaw config
+- [x] `anyraven-test` agent created in OpenClaw config
 
 ## Setup Steps (to automate in install script)
 
@@ -20,15 +20,15 @@ mkdir -p /data/dev/.worktrees
 mkdir -p /data/prod/app-frontend
 mkdir -p /data/prod/app-backend
 mkdir -p /data/snapshots
-mkdir -p /data/.anyclaw/logs
-mkdir -p /var/log/anyclaw
+mkdir -p /data/.anyraven/logs
+mkdir -p /var/log/anyraven
 ```
 
 ### 3. Git Repo Initialization
 ```bash
 cd /data/dev
 git init
-git config user.email "anyclaw@local"
+git config user.email "anyraven@local"
 git config user.name "AnyRaven"
 # Seed frontend-template source here
 touch README.md
@@ -39,17 +39,17 @@ git commit -m "initial: frontend-template seed"
 ### 4. Environment Variables
 ```bash
 export ADAPTER=openclaw                    # or claude-code
-export OPENCLAW_WORKSPACE=anyclaw-test
+export OPENCLAW_WORKSPACE=anyraven-test
 export OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789/gateway
 export OPENCLAW_TOKEN=<from ~/.openclaw/openclaw.json>
-export ANYCLAW_DATA_ROOT=/data
+export ANYRAVEN_DATA_ROOT=/data
 export PORT=4100
-export ANYCLAW_ALLOWED_TOOLS="anyclaw_ask_user,anyclaw_update_progress,anyclaw_create_collection,anyclaw_snapshot_db,anyclaw_deploy,anyclaw_rollback,anyclaw_list_versions"
+export ANYRAVEN_ALLOWED_TOOLS="anyraven_ask_user,anyraven_update_progress,anyraven_create_collection,anyraven_snapshot_db,anyraven_deploy,anyraven_rollback,anyraven_list_versions"
 ```
 
 ### 5. Build All Packages
 ```bash
-cd anyclaw-server
+cd anyraven-server
 npm ci
 npm run build        # builds all packages including dispatch
 ```
@@ -60,16 +60,16 @@ npm run build        # builds all packages including dispatch
 pocketbase serve --http=127.0.0.1:8090 --dir=/data/pocketbase/pb_data &
 
 # Dispatch
-node anyclaw-server/packages/dispatch/dist/index.js &
+node anyraven-server/packages/dispatch/dist/index.js &
 
 # Prod-static (serves built frontend)
-# node anyclaw-server/packages/app-frontend/dist/index.js &
+# node anyraven-server/packages/app-frontend/dist/index.js &
 
 # Logic-runner (watches /data/dev for changes)
-# node anyclaw-server/packages/app-backend/dist/index.js &
+# node anyraven-server/packages/app-backend/dist/index.js &
 
 # Tunnel-manager (optional, for external access)
-# node anyclaw-server/packages/tunnel-manager/dist/index.js &
+# node anyraven-server/packages/tunnel-manager/dist/index.js &
 ```
 
 ### 7. Verify
@@ -86,8 +86,8 @@ curl -X POST http://127.0.0.1:4100/api/tasks \
 ```
 
 ## Notes
-- The `init-data-layout.sh` script exists in `anyclaw-server/infra/scripts/` but assumes `/data` is writable
-- For non-root installs, use `ANYCLAW_DATA_ROOT=$HOME/.anyclaw/data`
+- The `init-data-layout.sh` script exists in `anyraven-server/infra/scripts/` but assumes `/data` is writable
+- For non-root installs, use `ANYRAVEN_DATA_ROOT=$HOME/.anyraven/data`
 - PocketBase collections (`_tasks`, `_task_clarifications`) are auto-created on first dispatch boot
 - The dispatch server needs the `pocketbase` package installed (already in package.json)
 

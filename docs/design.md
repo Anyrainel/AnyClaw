@@ -139,7 +139,7 @@ The mobile app can connect to the user's server through multiple paths:
                                 |  - dev/ (agent rw,    |
                                 |    worktree per task) |
                                 |  - prod/ (deployed)   |
-                                |  - .anyclaw/ (infra,  |
+                                |  - .anyraven/ (infra,  |
                                 |    agent read-only)   |
                                 +-----------------------+
 ```
@@ -297,7 +297,7 @@ Host (or single cloud container)
 
 **Supervisor:** `systemd --user` is the primary choice (works on any distro with cgroup v2 delegation — Ubuntu 22.04+, Debian 12+, Fedora). `supervisord` is the fallback inside minimal containers that lack systemd. Linux-first for MVP; Windows/macOS self-hosters use WSL2 or a Linux VM.
 
-**User accounts:** An install script run as root once during setup creates `anyclaw-infra` (runs supervised services) and `anyclaw-agent` (runs agent subprocesses) users and sets directory ownership. After install, no service runs as root.
+**User accounts:** An install script run as root once during setup creates `anyraven-infra` (runs supervised services) and `anyraven-agent` (runs agent subprocesses) users and sets directory ownership. After install, no service runs as root.
 
 **Resource limits:** A `ResourceLimits` interface is defined but is a no-op for MVP. Real cgroup/JobObject limits will be applied once abuse patterns emerge from production data.
 
@@ -322,7 +322,7 @@ Its source files are not in the agent's writable path. The agent cannot modify i
 | What crashes | What survives | User experience |
 |--------------|---------------|-----------------|
 | Agent subprocess | Everything else | Task marked failed; user retries from app |
-| Logic service (agent code) | PocketBase, tunnel, dispatch, prod static | WebView shows API errors; user rolls back via version history |
+| app-backend (agent code) | PocketBase, tunnel, dispatch, prod static | WebView shows API errors; user rolls back via version history |
 | Vite dev server | Everything else | Current build fails; deploy doesn't happen |
 | PocketBase | Tunnel, dispatch | ~2s restart; WebView and dispatch retry automatically |
 | Tunnel manager | Everything else | App shows reconnecting; comes back when tunnel restarts |
@@ -346,7 +346,7 @@ AnyRaven communicates with agents through a pluggable **Agent Adapter** interfac
 ```
 
 1. **Input** — User types a request ("add a mood tracker for stress, sleep, and energy").
-2. **Clarifying** — Agent may ask questions via the `anyclaw_ask_user` tool. User answers in the app. Multiple rounds possible. Agent may skip if the request is clear.
+2. **Clarifying** — Agent may ask questions via the `anyraven_ask_user` tool. User answers in the app. Multiple rounds possible. Agent may skip if the request is clear.
 3. **Working** — Agent designs, implements, and tests the feature in the task's worktree. App shows progress updates. User can cancel.
 4. **Deploying** — Agent runs the validation suite, commits, snapshots the DB if needed, promotes to prod.
 5. **Done** — WebView reloads. Task card shows the version description.
@@ -387,25 +387,25 @@ interface TaskStatus {
 
 **OpenClaw:** Dispatches via the gateway's WebSocket or OpenAI-compatible REST endpoint. Multi-turn clarification uses the gateway's conversation support. Progress and activity log come from gateway event streams. Cancel via gateway API. OpenClaw users can also continue dispatching work through WhatsApp/Discord — the mobile app's task dispatch is an additional channel, not a replacement.
 
-**Claude Code:** Dispatches by spawning `claude -p` as a subprocess with the user's request as the prompt and the AnyRaven MCP server pre-configured. Clarification uses the `anyclaw_ask_user` MCP tool, which writes the question to PocketBase and polls for the answer. Progress via `anyclaw_update_progress` plus `--output-format stream-json`. Cancel by killing the subprocess. A future upgrade to `@anthropic-ai/claude-agent-sdk` is possible for richer lifecycle control.
+**Claude Code:** Dispatches by spawning `claude -p` as a subprocess with the user's request as the prompt and the AnyRaven MCP server pre-configured. Clarification uses the `anyraven_ask_user` MCP tool, which writes the question to PocketBase and polls for the answer. Progress via `anyraven_update_progress` plus `--output-format stream-json`. Cancel by killing the subprocess. A future upgrade to `@anthropic-ai/claude-agent-sdk` is possible for richer lifecycle control.
 
 **Generic webhook:** For future agents (Codex, Aider, custom harnesses). Dispatches a POST to a user-configured webhook with `{ request, taskId, callbackUrl }`. The agent POSTs questions, progress, and completion back to the callback URL.
 
 ### MCP Loopback Auth
 
-The agent subprocess authenticates to the MCP server with a per-task bearer token written to a file only the agent's user can read, injected via `ANYCLAW_MCP_TOKEN` env var.
+The agent subprocess authenticates to the MCP server with a per-task bearer token written to a file only the agent's user can read, injected via `ANYRAVEN_MCP_TOKEN` env var.
 
 ### MCP Tools
 
 The MCP server is deliberately minimal. Agents use their own built-in tools (file I/O, shell, git) for everything they already do well. AnyRaven MCP tools only guard failure-prone operations:
 
-- `anyclaw_deploy` — Run validation suite, commit, merge worktree, snapshot DB if needed, promote to prod, restart app backend via supervisor
-- `anyclaw_rollback` — Revert to a specific version (code + DB atomically)
-- `anyclaw_snapshot_db` — Create a DB backup (called automatically before migrations)
-- `anyclaw_list_versions` — Show deployment history
-- `anyclaw_create_collection` — Define a PocketBase collection via admin API
-- `anyclaw_ask_user` — Post a clarifying question and wait for the answer
-- `anyclaw_update_progress` — Post a progress update to the task card
+- `anyraven_deploy` — Run validation suite, commit, merge worktree, snapshot DB if needed, promote to prod, restart app backend via supervisor
+- `anyraven_rollback` — Revert to a specific version (code + DB atomically)
+- `anyraven_snapshot_db` — Create a DB backup (called automatically before migrations)
+- `anyraven_list_versions` — Show deployment history
+- `anyraven_create_collection` — Define a PocketBase collection via admin API
+- `anyraven_ask_user` — Post a clarifying question and wait for the answer
+- `anyraven_update_progress` — Post a progress update to the task card
 
 Enforced constraints:
 
@@ -425,10 +425,10 @@ Agent-specific prompts/skills that teach the agent *how* to use the MCP tools an
 
 Skills:
 
-- **anyclaw-build-feature** — Workflow: clarify → plan → implement → test → deploy. Post progress throughout.
-- **anyclaw-style-guide** — React + Tailwind v4 conventions; locked `@theme` tokens; responsive layout rules.
-- **anyclaw-refactor** — Periodic cleanup: extract shared components, remove dead code.
-- **anyclaw-describe-version** — Write a clear, non-technical version description.
+- **anyraven-build-feature** — Workflow: clarify → plan → implement → test → deploy. Post progress throughout.
+- **anyraven-style-guide** — React + Tailwind v4 conventions; locked `@theme` tokens; responsive layout rules.
+- **anyraven-refactor** — Periodic cleanup: extract shared components, remove dead code.
+- **anyraven-describe-version** — Write a clear, non-technical version description.
 
 **Skill versioning:** Skills declare a minimum server version. Server rejects incompatible skills. Skills iterate independently of the server.
 
@@ -437,8 +437,8 @@ Skills:
 | Agent | MCP Tools | Skills Format | Dispatch Adapter | Clarification Support |
 |-------|-----------|---------------|------------------|----------------------|
 | OpenClaw | Native MCP | OpenClaw skills directory | Gateway WS/REST | Full (multi-turn via gateway) |
-| Claude Code | Native MCP | CLAUDE.md + slash commands | `claude -p` subprocess | Via `anyclaw_ask_user` |
-| Codex / future | Via MCP or tool-use API | System prompt template | Generic webhook | Via `anyclaw_ask_user` |
+| Claude Code | Native MCP | CLAUDE.md + slash commands | `claude -p` subprocess | Via `anyraven_ask_user` |
+| Codex / future | Via MCP or tool-use API | System prompt template | Generic webhook | Via `anyraven_ask_user` |
 
 ## Versioning & Rollback
 
@@ -476,8 +476,8 @@ All decisions below are binding for implementation.
 | Supervisor choice | `systemd --user` primary; `supervisord` fallback for minimal containers | Works without root on any modern distro with cgroup v2 delegation |
 | Platform | Linux-first for MVP; WSL2/VM for Windows/macOS self-hosters | Cross-platform cgroup abstraction not worth MVP complexity |
 | Resource limits | `ResourceLimits` interface exists as a no-op for MVP | Premature optimization; lock down once real abuse emerges |
-| Filesystem bootstrapping | Install script runs as root once; creates `anyclaw-infra` and `anyclaw-agent` users; services run non-root after install | Standard Linux pattern |
-| Restart prod app backend after deploy | `systemctl --user restart anyclaw-logic` (or supervisord equivalent), invoked by dispatch server | Standard supervisor mechanism |
+| Filesystem bootstrapping | Install script runs as root once; creates `anyraven-infra` and `anyraven-agent` users; services run non-root after install | Standard Linux pattern |
+| Restart prod app backend after deploy | `systemctl --user restart anyraven-logic` (or supervisord equivalent), invoked by dispatch server | Standard supervisor mechanism |
 
 ### Agent Integration
 
@@ -486,7 +486,7 @@ All decisions below are binding for implementation.
 | Agent execution | Transient subprocess using its own built-in tools for files/shell | Agents already know how to run commands — don't duplicate |
 | MCP tools philosophy | No scaffolding. MCP only for deploy, rollback, snapshot, ask_user, update_progress, create_collection | Robustness over convenience; guard failure-prone operations |
 | MCP transport | HTTP/SSE from day one | Cloud-ready from the start |
-| MCP loopback auth | Per-task bearer token in a file only the agent user can read, injected via `ANYCLAW_MCP_TOKEN` | Cross-platform, simple, sufficient for loopback |
+| MCP loopback auth | Per-task bearer token in a file only the agent user can read, injected via `ANYRAVEN_MCP_TOKEN` | Cross-platform, simple, sufficient for loopback |
 | Claude Code adapter | `claude -p` CLI mode for MVP; upgrade to TS SDK later if needed | Less code; clarification via MCP tool works fine |
 | `run_dev` commands | Blocklist for MVP, log all commands, tighten to allowlist later | Ship fast, observe real behavior, lock down |
 | Concurrent tasks | Single active task + queue; worktree-per-task from day one | Simplest for MVP without painting into a corner |
@@ -516,7 +516,7 @@ All decisions below are binding for implementation.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | CSS framework | Tailwind v4 | Newer CSS-first config; conventions enforced via style guide skill |
-| `@theme` tokens | Style guide ships a complete default `@theme` block (colors, spacing, typography, shadows) in `app.css`. Agent uses existing tokens; cannot add new tokens without user approval via `anyclaw_ask_user` | Consistency with user-approved extension path |
+| `@theme` tokens | Style guide ships a complete default `@theme` block (colors, spacing, typography, shadows) in `app.css`. Agent uses existing tokens; cannot add new tokens without user approval via `anyraven_ask_user` | Consistency with user-approved extension path |
 | Dark mode | `@media (prefers-color-scheme: dark)` overrides in the default `@theme` block | Automatic, no toggle initially |
 
 ### Connection & Security
@@ -543,9 +543,9 @@ All decisions below are binding for implementation.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | PocketBase credentials | PocketBase API tokens, not email/password | More secure for programmatic access |
-| PocketBase token provisioning | Install script runs `pocketbase superuser create` non-interactively, calls admin API to mint a long-lived token, stores at `/data/.anyclaw/pb-token`. Superuser account remains for emergency access | Non-interactive, repeatable |
+| PocketBase token provisioning | Install script runs `pocketbase superuser create` non-interactively, calls admin API to mint a long-lived token, stores at `/data/.anyraven/pb-token`. Superuser account remains for emergency access | Non-interactive, repeatable |
 | API key storage | Encrypted in PocketBase for both self-hosted and cloud. Settings UI manages keys in both modes | Consistent experience across modes |
-| Master encryption key | Generated at install time, stored at `/data/.anyclaw/master.key` mode `0600`, owned by `anyclaw-infra`. Cloud: derived from per-user provisioning secret | Simple, standard |
+| Master encryption key | Generated at install time, stored at `/data/.anyraven/master.key` mode `0600`, owned by `anyraven-infra`. Cloud: derived from per-user provisioning secret | Simple, standard |
 | Encrypted secrets algorithm | AES-256-GCM, implemented in the dispatch server | Industry-standard authenticated encryption |
 | Cloud hosting | Single Hetzner VPS with Docker Compose (one container per user with supervisord inside). Migrate to E2B microVMs or Kubernetes Agent Sandbox later | Start simple, same layout as self-hosted |
 

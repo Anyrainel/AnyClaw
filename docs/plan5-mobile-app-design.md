@@ -15,7 +15,7 @@ The AnyRaven mobile app is a thin Expo (React Native) shell that wraps the agent
 
 | Path | Process | Purpose |
 |------|---------|---------|
-| `/app/*` | Prod static server | Serves the agent-built React bundle into the WebView |
+| `/app/*` | app-frontend server | Serves the agent-built React bundle into the WebView |
 | `/api/*` | Dispatch/MCP server | Task dispatch, rollback, versions, restart-app, health. Always available. |
 | `/pb/*` | PocketBase | Data, auth, realtime SSE for `_tasks`, `_deployments`, `_agent_messages` |
 
@@ -79,9 +79,9 @@ All traffic is TLS-encrypted to the broker relay; sensitive API payloads are add
 {
   "expo": {
     "name": "AnyRaven",
-    "scheme": "anyclaw",
-    "ios": { "bundleIdentifier": "com.anyclaw.app", "deploymentTarget": "15.1" },
-    "android": { "package": "com.anyclaw.app", "minSdkVersion": 28 },
+    "scheme": "anyraven",
+    "ios": { "bundleIdentifier": "com.anyraven.app", "deploymentTarget": "15.1" },
+    "android": { "package": "com.anyraven.app", "minSdkVersion": 28 },
     "plugins": ["expo-router", "expo-secure-store"]
   }
 }
@@ -92,7 +92,7 @@ All traffic is TLS-encrypted to the broker relay; sensitive API payloads are add
 ## 4. Project Structure
 
 ```
-anyclaw-mobile/
+anyraven-mobile/
 ├── app.json
 ├── package.json
 ├── tsconfig.json
@@ -334,8 +334,8 @@ pb.collection("_deployments").subscribe("*", (e) => {
 | Scenario | Detection | Behavior |
 |----------|-----------|----------|
 | Tunnel down / server unreachable | `onError` or network failure in `lib/api` | Red header badge, full-screen reconnect card, exponential backoff |
-| Logic service crashed (5xx on `/app/*` API calls) | `onHttpError >= 500` | "Your app has a problem" screen with a prominent "Open Version History" button routing to Versions tab |
-| Prod static server crashed | WebView load failure | Same "app broken" screen; Versions tab still functional via `/api/*` |
+| app-backend crashed (5xx on `/app/*` API calls) | `onHttpError >= 500` | "Your app has a problem" screen with a prominent "Open Version History" button routing to Versions tab |
+| app-frontend server crashed | WebView load failure | Same "app broken" screen; Versions tab still functional via `/api/*` |
 | Session token expired (401 on `/app/*`) | `onHttpError 401` | Silent refresh against broker; on failure, log out |
 | WebView content process died | `onRenderProcessGone` / `onContentProcessDidTerminate` | Auto-reload, toast |
 | Dispatch server down | `/api/health` fails | Header badge turns red; submit button disabled; Versions tab becomes read-only |
@@ -729,12 +729,12 @@ import * as AuthSession from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
 
 const BROKER = "https://broker.anyraven.com";
-const redirectUri = AuthSession.makeRedirectUri({ scheme: "anyclaw" });
+const redirectUri = AuthSession.makeRedirectUri({ scheme: "anyraven" });
 
 export async function loginWithProvider(provider: "google" | "apple" | "github") {
   const discovery = { authorizationEndpoint: `${BROKER}/auth/${provider}/start` };
   const req = new AuthSession.AuthRequest({
-    clientId: "anyclaw-mobile", redirectUri, scopes: ["openid", "email"],
+    clientId: "anyraven-mobile", redirectUri, scopes: ["openid", "email"],
   });
   const result = await req.promptAsync(discovery);
   if (result.type !== "success") throw new Error("OAuth cancelled");
@@ -814,7 +814,7 @@ export async function generatePairingKeypair() {
 
 // Derive a 4-word BIP39 code from the two public keys (same on both sides).
 export function verificationCode(clientPk: Uint8Array, serverPk: Uint8Array): string[] {
-  const h = sodium.crypto_generichash(8, sodium.from_string("anyclaw-pair"),
+  const h = sodium.crypto_generichash(8, sodium.from_string("anyraven-pair"),
     new Uint8Array([...clientPk, ...serverPk]));
   const words: string[] = [];
   for (let i = 0; i < 4; i++) {
@@ -1064,7 +1064,7 @@ import {
   subscribeToSystemChanges,
 } from './system';
 
-const SECURE_KEY = 'anyclaw.user_preferences.v1';
+const SECURE_KEY = 'anyraven.user_preferences.v1';
 
 interface PrefState {
   prefs: UserPreferences;
@@ -1299,7 +1299,7 @@ class ApiClient {
       headers: {
         "content-type": "application/x-nacl-box",
         "authorization": `Bearer ${sessionToken}`,
-        "x-anyclaw-client-pk": sodium.to_base64(keys.clientPublicKey),
+        "x-anyraven-client-pk": sodium.to_base64(keys.clientPublicKey),
       },
       body: JSON.stringify(envelope),
     });
@@ -1427,9 +1427,9 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
 | Event | Title | Body | Data | Deep link |
 |-------|-------|------|------|-----------|
-| Agent asks question | "Question from your agent" | Truncated question | `{ screen: "task", taskId }` | `anyclaw://task/{id}` |
-| Task completed | "New version deployed" | Truncated version description | `{ screen: "versions" }` | `anyclaw://versions` |
-| Task failed | "Task failed" | Truncated error | `{ screen: "task", taskId }` | `anyclaw://task/{id}` |
+| Agent asks question | "Question from your agent" | Truncated question | `{ screen: "task", taskId }` | `anyraven://task/{id}` |
+| Task completed | "New version deployed" | Truncated version description | `{ screen: "versions" }` | `anyraven://versions` |
+| Task failed | "Task failed" | Truncated error | `{ screen: "task", taskId }` | `anyraven://task/{id}` |
 
 ```typescript
 // Deep-link handling (called from app/_layout.tsx)
@@ -1510,12 +1510,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   clarificationTimeoutMinutes: 5,
   debugEncryptedTraffic: false,
   hydrate: async () => {
-    const raw = await AsyncStorage.getItem("anyclaw_settings");
+    const raw = await AsyncStorage.getItem("anyraven_settings");
     if (raw) set(JSON.parse(raw));
   },
   update: async (patch) => {
     set(patch as any);
-    await AsyncStorage.setItem("anyclaw_settings", JSON.stringify(get()));
+    await AsyncStorage.setItem("anyraven_settings", JSON.stringify(get()));
     // Mirror to server for agent-relevant settings
     if ("clarificationMode" in patch || "clarificationTimeoutMinutes" in patch) {
       const { clarificationMode, clarificationTimeoutMinutes } = get();

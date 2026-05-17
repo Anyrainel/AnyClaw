@@ -2,7 +2,7 @@ import { create } from "zustand";
 import * as SecureStore from "expo-secure-store";
 import { apiClient } from "../api";
 
-export const SETTINGS_STORE_KEY = "anyclaw_settings";
+export const SETTINGS_STORE_KEY = "anyraven_settings";
 
 export type ClarificationMode = "auto-timeout" | "pause-indefinitely";
 

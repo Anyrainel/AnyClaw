@@ -2,7 +2,7 @@
  * Architecture boundary tests for the broker.
  *
  * Rules:
- *   - No file imports @anyclaw/* packages (broker is standalone)
+ *   - No file imports @anyraven/* packages (broker is standalone)
  *   - src/relay/ is protocol-agnostic: must not import from src/auth/
  *   - src/crypto/ is a pure utility: must not import from src/relay/ or src/auth/
  */
@@ -44,11 +44,11 @@ function filesUnder(subdir: string) {
 
 // ─── external package boundaries ────────────────────────────────────────────
 
-describe("broker — standalone, no @anyclaw/* imports", () => {
-  it("has no @anyclaw/* imports anywhere in src/", () => {
+describe("broker — standalone, no @anyraven/* imports", () => {
+  it("has no @anyraven/* imports anywhere in src/", () => {
     const violations = importsMatching(
       walkTs(SRC),
-      /from ["'](@anyclaw\/[^"']+)["']/g
+      /from ["'](@anyraven\/[^"']+)["']/g
     );
     expect(violations).toEqual({});
   });

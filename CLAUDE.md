@@ -7,7 +7,7 @@ AnyRaven is a self-evolving AI companion app. A coding agent builds and deploys 
 ```
 broker/            Fastify auth + WSS relay (Node 22, PostgreSQL)
 mobile/            Expo companion app (iOS/Android/Web)
-anyclaw-server/    Server monorepo (Node 20, npm workspaces)
+anyraven-server/    Server monorepo (Node 20, npm workspaces)
   packages/
     shared/        Crypto, paths, snapshot/version/worktree/deploy managers
     dispatch/      Task orchestration + REST API (:4100)
@@ -22,13 +22,13 @@ docs/              Architecture design docs (plan1–plan6) + tasks/
 ## Running Tests
 
 ```bash
-# anyclaw-server (all packages, fast — no external deps)
-cd anyclaw-server && npm test
-cd anyclaw-server && npm run typecheck
+# anyraven-server (all packages, fast — no external deps)
+cd anyraven-server && npm test
+cd anyraven-server && npm run typecheck
 
 # Single package
-cd anyclaw-server && npm run -w @anyclaw/shared test
-cd anyclaw-server && npm run -w @anyclaw/dispatch test
+cd anyraven-server && npm run -w @anyraven/shared test
+cd anyraven-server && npm run -w @anyraven/dispatch test
 
 # broker (requires Docker for testcontainers)
 cd broker && npm test
@@ -41,27 +41,27 @@ cd mobile && npm run typecheck
 
 ## TypeScript Conventions
 
-The `anyclaw-server` tsconfig enforces strict settings that trip up naive code:
+The `anyraven-server` tsconfig enforces strict settings that trip up naive code:
 
 - **`exactOptionalPropertyTypes: true`** — optional class fields must be typed `: T | undefined`, not `?: T`. The two are not interchangeable under this flag.
 - **`noUncheckedIndexedAccess: true`** — array/object index access returns `T | undefined`. Always narrow before use.
 - **`strict: true`** — all standard strict checks enabled.
 
-These apply to all packages under `anyclaw-server/`. The `broker/` and `mobile/` projects have their own tsconfigs; check those before assuming the same flags.
+These apply to all packages under `anyraven-server/`. The `broker/` and `mobile/` projects have their own tsconfigs; check those before assuming the same flags.
 
 ## Key Patterns
 
-**Test filesystem isolation** — All anyclaw-server packages resolve paths through `AnyClawPaths`. Tests override the data root via:
+**Test filesystem isolation** — All anyraven-server packages resolve paths through `AnyRavenPaths`. Tests override the data root via:
 ```typescript
-process.env.ANYCLAW_DATA_ROOT = await mkdtemp(join(os.tmpdir(), "anyclaw-"));
+process.env.ANYRAVEN_DATA_ROOT = await mkdtemp(join(os.tmpdir(), "anyraven-"));
 ```
 Never hardcode `/data/` in test code.
 
-**libsodium version pin** — `libsodium-wrappers` is pinned to `0.7.15` in both `anyclaw-server` and `broker`. Do not upgrade: `0.7.16` ships a broken ESM build (`libsodium.mjs` is missing from the package).
+**libsodium version pin** — `libsodium-wrappers` is pinned to `0.7.15` in both `anyraven-server` and `broker`. Do not upgrade: `0.7.16` ships a broken ESM build (`libsodium.mjs` is missing from the package).
 
-**Deploy flow** — `DeployManager` in `@anyclaw/shared` is the canonical deploy entry point. It runs: validate worktree → snapshot DB → merge to main → copy artifacts to prod → signal app-backend restart. Never implement deploy logic outside this class.
+**Deploy flow** — `DeployManager` in `@anyraven/shared` is the canonical deploy entry point. It runs: validate worktree → snapshot DB → merge to main → copy artifacts to prod → signal app-backend restart. Never implement deploy logic outside this class.
 
-**MCP bearer tokens** — Each agent task gets a unique token from `registerTaskToken(taskId)` in `@anyclaw/mcp-server`. Always call `revokeTaskToken(taskId)` on task completion or failure, including in error paths.
+**MCP bearer tokens** — Each agent task gets a unique token from `registerTaskToken(taskId)` in `@anyraven/mcp-server`. Always call `revokeTaskToken(taskId)` on task completion or failure, including in error paths.
 
 **Broker frames** — All mobile↔server traffic is CBOR-encoded NaCl-boxed envelopes. The broker forwards frames without decrypting them. Never put plaintext user data in broker-routed messages.
 
@@ -78,7 +78,7 @@ Scopes: `mobile`, `dispatch`, `mcp`, `broker`, `shared`, `tunnel`, `infra`.
 ## What's WIP
 
 - **Tunnel integration** — `tunnel-manager` has a reconnect stub. The real WSS handshake with the broker (frame relay, service routing) is not yet implemented. Requires Docker environment to validate.
-- **Docker build** — `infra/Dockerfile` written but never built on Linux. Validate with `docker build -f anyclaw-server/infra/Dockerfile anyclaw-server/` before treating the container as deployable.
+- **Docker build** — `infra/Dockerfile` written but never built on Linux. Validate with `docker build -f anyraven-server/infra/Dockerfile anyraven-server/` before treating the container as deployable.
 - **Broker OAuth** — OAuth provider credentials must be configured via environment variables. See `broker/.env.example`.
 
 ## Architecture References

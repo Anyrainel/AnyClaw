@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "AnyClaw",
-    "slug": "anyclaw",
-    "scheme": "anyclaw",
+    "name": "AnyRaven",
+    "slug": "anyraven",
+    "scheme": "anyraven",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anyclaw.app"
+      "bundleIdentifier": "com.anyraven.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +23,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.anyclaw.app",
+      "package": "com.anyraven.app",
       "minSdkVersion": 28
     },
     "web": {

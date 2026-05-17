@@ -1,24 +1,24 @@
 services:
-  anyclaw:
+  anyraven:
     build:
-      context: ./anyclaw-server
+      context: ./anyraven-server
       dockerfile: infra/Dockerfile
-    container_name: anyclaw
+    container_name: anyraven
     ports:
       - "8090:8090"   # PocketBase
       - "4100:4100"   # Dispatch API
-      - "5173:5173"   # Prod static frontend
-      - "3000:3000"   # Logic runner
+      - "5173:5173"   # app-frontend frontend
+      - "3000:3000"   # app-backend
     environment:
       # Adapter selection: openclaw | claude-code | webhook
       - ADAPTER=claude-code
       - PORT=4100
-      - ANYCLAW_DATA_ROOT=/data
-      - ANYCLAW_VERSION=0.1.0
+      - ANYRAVEN_DATA_ROOT=/data
+      - ANYRAVEN_VERSION=0.1.0
       # OpenClaw adapter config (uncomment if using ADAPTER=openclaw)
       # - OPENCLAW_GATEWAY_URL=ws://host.docker.internal:18789/gateway
       # - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
-      # - OPENCLAW_WORKSPACE=anyclaw-test
+      # - OPENCLAW_WORKSPACE=anyraven-test
       # Claude Code adapter config
       - CLAUDE_CODE_PATH=claude
       - MAX_TASK_DURATION_MS=600000
@@ -26,17 +26,18 @@ services:
       - CLARIFICATION_TIMEOUT_MODE=best_judgment
       - MAX_BUDGET_USD=5
       # Allowed MCP tools
-      - ANYCLAW_ALLOWED_TOOLS=anyclaw_ask_user,anyclaw_update_progress,anyclaw_create_collection,anyclaw_snapshot_db,anyclaw_deploy,anyclaw_rollback,anyclaw_list_versions
+      - ANYRAVEN_ALLOWED_TOOLS=anyraven_ask_user,anyraven_update_progress,anyraven_create_collection,anyraven_snapshot_db,anyraven_deploy,anyraven_rollback,anyraven_list_versions
+      - ANYRAVEN_DISABLE_TASK_AUTORUN=${ANYRAVEN_DISABLE_TASK_AUTORUN:-0}
       # App frontend/backend. Dev mode keeps :5173 hot-reloaded from /data/dev for MVP template iteration.
       - APP_FRONTEND_SERVER_MODE=dev
       - APP_FRONTEND_DIR=/data/prod/app-frontend
       - APP_BACKEND_DIR=/data/prod/app-backend
       - POCKETBASE_URL=http://127.0.0.1:8090
       # Tunnel-manager (disabled for baseline — stub mode)
-      - ANYCLAW_CONNECTION_MODE=direct
+      - ANYRAVEN_CONNECTION_MODE=direct
     volumes:
-      - anyclaw-data:/data
-      - anyclaw-logs:/var/log/anyclaw
+      - anyraven-data:/data
+      - anyraven-logs:/var/log/anyraven
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4100/api/health"]
       interval: 10s
@@ -46,5 +47,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  anyclaw-data:
-  anyclaw-logs:
+  anyraven-data:
+  anyraven-logs:

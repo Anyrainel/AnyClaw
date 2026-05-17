@@ -4,10 +4,10 @@
 
 **Goal:** Ship the five-skill agent prompt suite, the canonical Welcome page content (on top of Plan 1's frontend-template scaffold), the final locked `@theme` block, the user-facing `install.sh` one-command installer, and the Hetzner deployment guide.
 
-**Architecture:** Skills are authored once under `anyclaw-server/skills/raw/*.md` with YAML frontmatter and packaged per-agent (OpenClaw dir, Claude Code slash commands + CLAUDE.md, generic system prompt) by `package-skills.sh`. The Welcome page under `/data/dev/packages/frontend/src/_examples/welcome.tsx` is both the user's onboarding screen and the agent's canonical reference, demonstrating every style-guide pattern. Deployment pieces owned by Plan 1 (Dockerfile, supervisord.conf, init-data-layout.sh, download-pocketbase.sh, frontend-template package, tunnel-manager, app-backend, app-frontend, dispatch) are consumed here — Plan 6 adds the skills bundle into the image, ships the user-facing `install.sh`, and writes the Hetzner guide.
+**Architecture:** Skills are authored once under `anyraven-server/skills/raw/*.md` with YAML frontmatter and packaged per-agent (OpenClaw dir, Claude Code slash commands + CLAUDE.md, generic system prompt) by `package-skills.sh`. The Welcome page under `/data/dev/packages/frontend/src/_examples/welcome.tsx` is both the user's onboarding screen and the agent's canonical reference, demonstrating every style-guide pattern. Deployment pieces owned by Plan 1 (Dockerfile, supervisord.conf, init-data-layout.sh, download-pocketbase.sh, frontend-template package, tunnel-manager, app-backend, app-frontend, dispatch) are consumed here — Plan 6 adds the skills bundle into the image, ships the user-facing `install.sh`, and writes the Hetzner guide.
 
 **Division of ownership (binding):**
-- **Plan 1 owns:** `anyclaw-server/infra/Dockerfile`, `anyclaw-server/infra/supervisord.conf`, `anyclaw-server/scripts/init-data-layout.sh`, `anyclaw-server/scripts/download-pocketbase.sh`, the `frontend-template` package (Vite + Tailwind v4 scaffold with a PROVISIONAL `@theme` block), and the `tunnel-manager` / `app-backend` / `app-frontend` / `dispatch` packages.
+- **Plan 1 owns:** `anyraven-server/infra/Dockerfile`, `anyraven-server/infra/supervisord.conf`, `anyraven-server/scripts/init-data-layout.sh`, `anyraven-server/scripts/download-pocketbase.sh`, the `frontend-template` package (Vite + Tailwind v4 scaffold with a PROVISIONAL `@theme` block), and the `tunnel-manager` / `app-backend` / `app-frontend` / `dispatch` packages.
 - **Plan 6 owns:** skill source files, `package-skills.sh`, the user-facing `install.sh`, the Welcome page CONTENT (canonical example), the FINAL `@theme` block (locked through the visual checkpoint), and the Hetzner deployment guide.
 - **Plan 3 provides:** `POST /internal/api-keys` on port **4100** (used by `install.sh` at bootstrap time).
 
@@ -52,11 +52,11 @@ Tasks removed from earlier drafts (now owned by Plan 1): base Dockerfile authori
 **Rationale:** The design doc provides the full, verbatim text of all five skills. Copy them as-is; iteration happens at Task 8 after we see how a real agent behaves.
 
 **Files to create:**
-- `anyclaw-server/skills/raw/anyclaw-build-feature.md`
-- `anyclaw-server/skills/raw/anyclaw-style-guide.md`
-- `anyclaw-server/skills/raw/anyclaw-canonical-example.md`
-- `anyclaw-server/skills/raw/anyclaw-refactor.md`
-- `anyclaw-server/skills/raw/anyclaw-describe-version.md`
+- `anyraven-server/skills/raw/anyraven-build-feature.md`
+- `anyraven-server/skills/raw/anyraven-style-guide.md`
+- `anyraven-server/skills/raw/anyraven-canonical-example.md`
+- `anyraven-server/skills/raw/anyraven-refactor.md`
+- `anyraven-server/skills/raw/anyraven-describe-version.md`
 
 **Each file:**
 - Begins with YAML frontmatter:
@@ -69,15 +69,15 @@ Tasks removed from earlier drafts (now owned by Plan 1): base Dockerfile authori
 - Followed by the exact skill body from sections 2–6 of `docs/plan6-skills-deployment-design.md`. Do not paraphrase. Do not add a "Last updated" footer.
 
 **Acceptance:**
-- `ls anyclaw-server/skills/raw/*.md` returns 5 files.
+- `ls anyraven-server/skills/raw/*.md` returns 5 files.
 - Every file begins with `---\nskill_version:` on line 1.
-- `grep -c '^# anyclaw-' anyclaw-server/skills/raw/*.md` returns 1 per file.
+- `grep -c '^# anyraven-' anyraven-server/skills/raw/*.md` returns 1 per file.
 
 ---
 
 ## Task 2: Skill frontmatter parser + semver compatibility module (TDD)
 
-**Location:** `anyclaw-server/packages/dispatch/src/skills/frontmatter.ts` (new module in the `@anyclaw/dispatch` package from Plan 3).
+**Location:** `anyraven-server/packages/dispatch/src/skills/frontmatter.ts` (new module in the `@anyraven/dispatch` package from Plan 3).
 
 **API:**
 ```ts
@@ -118,12 +118,12 @@ Use the `semver` npm package for comparisons.
 
 ## Task 3: `package-skills.sh` — OpenClaw target (TDD)
 
-**Location:** `anyclaw-server/scripts/package-skills.sh`
+**Location:** `anyraven-server/scripts/package-skills.sh`
 
 **Contract:**
 ```
 package-skills.sh openclaw [--source DIR] [--dest DIR]
-  defaults: --source anyclaw-server/skills/raw --dest ~/.openclaw/skills
+  defaults: --source anyraven-server/skills/raw --dest ~/.openclaw/skills
 ```
 
 **Behavior:**
@@ -141,7 +141,7 @@ package-skills.sh openclaw [--source DIR] [--dest DIR]
 5. Pre-existing files in dest are overwritten.
 6. Frontmatter-stripping preserves the first `# heading` line.
 
-**Acceptance:** `bats anyclaw-server/scripts/test/package-skills.bats` green.
+**Acceptance:** `bats anyraven-server/scripts/test/package-skills.bats` green.
 
 ---
 
@@ -156,11 +156,11 @@ package-skills.sh claude-code [--project-dir DIR]
 ```
 
 **Behavior:**
-1. Copies each skill `.md` (frontmatter stripped) into `<project-dir>/.claude/commands/anyclaw-*.md` so they become slash commands.
+1. Copies each skill `.md` (frontmatter stripped) into `<project-dir>/.claude/commands/anyraven-*.md` so they become slash commands.
 2. Appends (or replaces between sentinel markers) an `## AnyRaven Agent Instructions` block in `<project-dir>/CLAUDE.md`. The block:
    - Lists the 5 slash commands and when to use each (build-feature for every task, style-guide for frontend, canonical-example before frontend, refactor every 5 deployments, describe-version on every deploy).
    - Lists the AnyRaven MCP tool set (deploy, rollback, snapshot_db, create_collection, ask_user, update_progress, list_versions) and states that file/shell tools are the agent's own.
-   - Is bounded by `<!-- anyclaw:begin -->` / `<!-- anyclaw:end -->` sentinels so re-runs are idempotent.
+   - Is bounded by `<!-- anyraven:begin -->` / `<!-- anyraven:end -->` sentinels so re-runs are idempotent.
 3. Creates `CLAUDE.md` if absent.
 
 **Tests:**
@@ -179,7 +179,7 @@ package-skills.sh claude-code [--project-dir DIR]
 **Contract:**
 ```
 package-skills.sh generic [--source DIR] [--out FILE]
-  defaults: --source anyclaw-server/skills/raw --out anyclaw-server/skills/raw/system-prompt.txt
+  defaults: --source anyraven-server/skills/raw --out anyraven-server/skills/raw/system-prompt.txt
 ```
 
 **Behavior:**
@@ -200,7 +200,7 @@ package-skills.sh generic [--source DIR] [--out FILE]
 
 ## Task 6: Dispatch `/api/version` endpoint + compatibility gate (TDD)
 
-**Location:** `anyclaw-server/packages/dispatch/src/routes/version.ts` + hook into task-dispatch flow. The `@anyclaw/dispatch` process listens on port **4100**.
+**Location:** `anyraven-server/packages/dispatch/src/routes/version.ts` + hook into task-dispatch flow. The `@anyraven/dispatch` process listens on port **4100**.
 
 **Endpoint:**
 ```
@@ -226,19 +226,19 @@ GET /api/version
 
 ## Task 7: Extend Plan 1's Dockerfile to bundle the skills directory (direct write)
 
-**Context:** Plan 1 already creates `anyclaw-server/infra/Dockerfile` and `anyclaw-server/infra/supervisord.conf`. Plan 1 also runs `anyclaw-server/scripts/download-pocketbase.sh` during the image build to fetch the 0.25.x PocketBase binary. **This task EXTENDS Plan 1's Dockerfile** — it does NOT re-create it.
+**Context:** Plan 1 already creates `anyraven-server/infra/Dockerfile` and `anyraven-server/infra/supervisord.conf`. Plan 1 also runs `anyraven-server/scripts/download-pocketbase.sh` during the image build to fetch the 0.25.x PocketBase binary. **This task EXTENDS Plan 1's Dockerfile** — it does NOT re-create it.
 
-**Edit:** Add these layers to Plan 1's `anyclaw-server/infra/Dockerfile`:
-1. `COPY anyclaw-server/skills/raw/ /.anyclaw/skills/raw/` (owned by `anyclaw-infra`).
-2. `COPY anyclaw-server/scripts/package-skills.sh /.anyclaw/scripts/package-skills.sh` (mode 0755).
-3. A build-time `RUN /.anyclaw/scripts/package-skills.sh generic --source /.anyclaw/skills/raw --out /.anyclaw/skills/system-prompt.txt` so the generic bundle is baked in.
+**Edit:** Add these layers to Plan 1's `anyraven-server/infra/Dockerfile`:
+1. `COPY anyraven-server/skills/raw/ /.anyraven/skills/raw/` (owned by `anyraven-infra`).
+2. `COPY anyraven-server/scripts/package-skills.sh /.anyraven/scripts/package-skills.sh` (mode 0755).
+3. A build-time `RUN /.anyraven/scripts/package-skills.sh generic --source /.anyraven/skills/raw --out /.anyraven/skills/system-prompt.txt` so the generic bundle is baked in.
 
 **Do NOT:**
 - Re-declare the base image or `apt-get install` block.
 - Re-declare the PocketBase download — Plan 1's `download-pocketbase.sh` already does that for 0.25.x.
 - Re-declare the supervisord copy — Plan 1 does that.
 
-**Acceptance:** `docker build -t anyclaw:test anyclaw-server/` succeeds from a clean checkout. `docker run --rm anyclaw:test ls /.anyclaw/skills/raw/` lists the 5 `.md` files. `docker run --rm anyclaw:test cat /.anyclaw/skills/system-prompt.txt` prints the concatenated bundle.
+**Acceptance:** `docker build -t anyraven:test anyraven-server/` succeeds from a clean checkout. `docker run --rm anyraven:test ls /.anyraven/skills/raw/` lists the 5 `.md` files. `docker run --rm anyraven:test cat /.anyraven/skills/system-prompt.txt` prints the concatenated bundle.
 
 ---
 
@@ -250,7 +250,7 @@ GET /api/version
 1. Spin up a local dispatch server with packaged skills (run Tasks 3–5 output).
 2. Use a real Claude Code or OpenClaw process to dispatch ONE canned feature request: `"Build me a daily mood tracker with a weekly chart."`
 3. Observe:
-   - Does the agent call `anyclaw_list_versions` first? (Step 0)
+   - Does the agent call `anyraven_list_versions` first? (Step 0)
    - Does the agent ask any "bad" detail questions (colors, names)?
    - Does the agent read `/data/dev/packages/frontend/src/_examples/welcome.tsx` before writing frontend code?
    - Does the agent run the full lint/typecheck/build/test cycle?
@@ -271,7 +271,7 @@ GET /api/version
 
 ## Task 9: `welcome.tsx` canonical component on Plan 1's frontend-template (TDD for logic)
 
-**Location:** `/data/dev/packages/frontend/src/_examples/welcome.tsx` AND `/data/dev/packages/frontend/src/pages/Home.tsx` (initial duplicate; `Home.tsx` may be overwritten by the first agent-built feature). Because `frontend-template` is the canonical source, the same files also land in `anyclaw-server/packages/frontend-template/src/_examples/welcome.tsx` so fresh installs get them.
+**Location:** `/data/dev/packages/frontend/src/_examples/welcome.tsx` AND `/data/dev/packages/frontend/src/pages/Home.tsx` (initial duplicate; `Home.tsx` may be overwritten by the first agent-built feature). Because `frontend-template` is the canonical source, the same files also land in `anyraven-server/packages/frontend-template/src/_examples/welcome.tsx` so fresh installs get them.
 
 **Note:** Plan 1's `frontend-template` already provides the Vite + Tailwind v4 scaffold, the entry points, and the provisional `app.css`. This task adds the welcome page CONTENT only.
 
@@ -303,7 +303,7 @@ GET /api/version
 
 ## Task 10: `usePreferences()` hook (TDD)
 
-**Location:** `anyclaw-server/packages/frontend-template/src/hooks/usePreferences.ts` + `anyclaw-server/packages/frontend-template/src/lib/pocketbase.ts` (uses the `pocketbase` JS SDK pinned to **0.25.x** to match the binary).
+**Location:** `anyraven-server/packages/frontend-template/src/hooks/usePreferences.ts` + `anyraven-server/packages/frontend-template/src/lib/pocketbase.ts` (uses the `pocketbase` JS SDK pinned to **0.25.x** to match the binary).
 
 **API:**
 ```ts
@@ -340,9 +340,9 @@ export function usePreferences(): Preferences;
 **Goal:** The welcome page reads from a `tips` collection (simpler, more self-contained than the `tasks` collection referenced in the design doc's sample code — tasks belong to the mobile app model, not the user's own data). The collection seeds with 3 example tips on fresh install.
 
 **Files:**
-- `anyclaw-server/scripts/seed-welcome-collection.js` — creates the `tips` collection via `anyclaw_create_collection` and inserts 3 rows, using the PocketBase JS SDK **0.25.x**.
-- `anyclaw-server/packages/frontend-template/src/_examples/README.md` — one-line explanation: "Read-only reference files for the agent. Do not modify."
-- `anyclaw-server/packages/frontend-template/src/_examples/.gitkeep`
+- `anyraven-server/scripts/seed-welcome-collection.js` — creates the `tips` collection via `anyraven_create_collection` and inserts 3 rows, using the PocketBase JS SDK **0.25.x**.
+- `anyraven-server/packages/frontend-template/src/_examples/README.md` — one-line explanation: "Read-only reference files for the agent. Do not modify."
+- `anyraven-server/packages/frontend-template/src/_examples/.gitkeep`
 
 **`tips` schema:**
 ```
@@ -387,17 +387,17 @@ tips (base)
 
 **STOP for human review.** Present screenshots at mobile + desktop, light + dark. Reviewer approves the FINAL `@theme` block or requests specific changes.
 
-**Exit criteria:** Reviewer sign-off on the welcome page look. FINAL `@theme` block LOCKED in `app.css` and back-ported into `anyclaw-server/packages/frontend-template/src/app.css` so fresh installs get it.
+**Exit criteria:** Reviewer sign-off on the welcome page look. FINAL `@theme` block LOCKED in `app.css` and back-ported into `anyraven-server/packages/frontend-template/src/app.css` so fresh installs get it.
 
 ---
 
 # PART C — Deployment
 
-> **Ownership reminder:** Plan 1 already ships `anyclaw-server/infra/Dockerfile`, `anyclaw-server/infra/supervisord.conf`, `anyclaw-server/scripts/init-data-layout.sh`, `anyclaw-server/scripts/download-pocketbase.sh`, and a `docker-compose.yml` for the base image. Plan 6 does NOT re-author these. Plan 6 ships the user-facing `install.sh` that drives them.
+> **Ownership reminder:** Plan 1 already ships `anyraven-server/infra/Dockerfile`, `anyraven-server/infra/supervisord.conf`, `anyraven-server/scripts/init-data-layout.sh`, `anyraven-server/scripts/download-pocketbase.sh`, and a `docker-compose.yml` for the base image. Plan 6 does NOT re-author these. Plan 6 ships the user-facing `install.sh` that drives them.
 
 ## Task 13: `install.sh` (TDD)
 
-**Location:** `anyclaw-server/install.sh` (served at `https://get.anyraven.com`).
+**Location:** `anyraven-server/install.sh` (served at `https://get.anyraven.com`).
 
 **Scope:** The user-facing one-command installer. It does NOT create the Dockerfile or supervisord.conf (bundled in the Plan 1 image) and it does NOT download the PocketBase binary (Plan 1's `download-pocketbase.sh` runs at image build time). It drives Plan 1's init scripts and talks to Plan 3's `/internal/api-keys` endpoint on port **4100**.
 
@@ -406,26 +406,26 @@ tips (base)
 #!/usr/bin/env bash
 set -euo pipefail
 
-ANYCLAW_VERSION="${ANYCLAW_VERSION:-latest}"
-INSTALL_DIR="${ANYCLAW_DIR:-$HOME/.anyclaw-host}"
+ANYRAVEN_VERSION="${ANYRAVEN_VERSION:-latest}"
+INSTALL_DIR="${ANYRAVEN_DIR:-$HOME/.anyraven-host}"
 
 echo "=== AnyRaven Installer ==="
 
 # [1/6] Prerequisites — OS check, cgroup v2 warning, RAM + disk warnings.
 # [2/6] Docker — install via get.docker.com on Linux if missing, verify daemon + compose v2.
 # [3/6] Install directory — mkdir $INSTALL_DIR, fetch the Plan 1 docker-compose.yml + env.template
-#       from the release URL. Generate ANYCLAW_USER_TOKEN into .env. Prompt for LLM provider
+#       from the release URL. Generate ANYRAVEN_USER_TOKEN into .env. Prompt for LLM provider
 #       (anthropic / openai) and API key (read -rsp, silent).
 # [4/6] Pull + start — docker compose pull, docker compose up -d.
-#       Run Plan 1's /.anyclaw/scripts/init-data-layout.sh inside the container (idempotent,
+#       Run Plan 1's /.anyraven/scripts/init-data-layout.sh inside the container (idempotent,
 #       creates /data tree with correct ownership). Wait for PocketBase /api/health.
 #       Bootstrap PocketBase superuser via the 0.25.x `_superusers` collection flow
 #       (pocketbase superuser create admin@local <password>; then POST
 #       /api/collections/_superusers/auth-with-password for the JWT; then
 #       /api/collections/_superusers/impersonate/<id> for the long-lived token).
-#       Store admin password + impersonation token at /data/.anyclaw/pb-admin and
-#       /data/.anyclaw/pb-token (mode 0600, owned anyclaw-infra).
-# [5/6] LLM key storage — generate /data/.anyclaw/master.key via `openssl rand -base64 32`
+#       Store admin password + impersonation token at /data/.anyraven/pb-admin and
+#       /data/.anyraven/pb-token (mode 0600, owned anyraven-infra).
+# [5/6] LLM key storage — generate /data/.anyraven/master.key via `openssl rand -base64 32`
 #       (mode 0600). POST the user-supplied LLM key to Plan 3's internal endpoint:
 #       `curl -fsS -X POST http://127.0.0.1:4100/internal/api-keys \
 #              -H 'Content-Type: application/json' \
@@ -433,7 +433,7 @@ echo "=== AnyRaven Installer ==="
 #       The dispatch process encrypts and stores it. install.sh never writes the raw LLM key
 #       to disk outside of that single curl body.
 # [6/6] Package skills — detect openclaw/claude binary on the host, exec the
-#       /.anyclaw/scripts/package-skills.sh inside the container accordingly (openclaw or
+#       /.anyraven/scripts/package-skills.sh inside the container accordingly (openclaw or
 #       claude-code target). Fall back to printing generic MCP URL instructions.
 
 # Final: print install dir, log command, stop command, "open the mobile app" banner.
@@ -468,18 +468,18 @@ echo "=== AnyRaven Installer ==="
 - Base OS: Ubuntu 24.04 LTS.
 - Install Docker via `get.docker.com`.
 - Install Caddy as a system package.
-- Create `/opt/anyclaw/` layout (from section 16, lines 1705–1718):
+- Create `/opt/anyraven/` layout (from section 16, lines 1705–1718):
   - `provisioner/docker-compose.yml`
   - `caddy/Caddyfile`
   - `users/user-<id>/docker-compose.yml` (templated per user)
 - Example `Caddyfile` that terminates TLS on `broker.anyraven.com` and reverse-proxies WSS to the broker process.
-- Per-user compose template: unique container name, unique volume, no host port bindings (all ingress via tunnel). Uses the Plan 1 image (`ghcr.io/anyclaw/anyclaw:latest`).
+- Per-user compose template: unique container name, unique volume, no host port bindings (all ingress via tunnel). Uses the Plan 1 image (`ghcr.io/anyraven/anyraven:latest`).
 - Provisioner responsibilities (lines 1729–1735):
-  - Allocate unique `ANYCLAW_USER_TOKEN` per user.
+  - Allocate unique `ANYRAVEN_USER_TOKEN` per user.
   - Create/start/stop/destroy containers.
   - Per-user resource limits: `cpus: 0.5`, `memory: 512M` baseline.
   - Idle shutdown after 30 min of tunnel inactivity; wake on broker message.
-- Backup: nightly `tar czf` of `/opt/anyclaw/users/*/data/pocketbase/pb_data` to offsite storage.
+- Backup: nightly `tar czf` of `/opt/anyraven/users/*/data/pocketbase/pb_data` to offsite storage.
 - Monitoring: `docker stats` + a simple cron that counts running containers.
 - Migration path to Phase 2 (microVMs / K8s Agent Sandbox): same image, different scheduler — one paragraph.
 - **Security:** only the tunnel manager talks outbound (WSS to broker). No public ports on the VPS except 443 for Caddy. `ufw` rules listed.
@@ -495,15 +495,15 @@ echo "=== AnyRaven Installer ==="
 **Procedure:**
 1. Spin up a clean Hetzner CX32 VPS (or a local Ubuntu 24.04 VM).
 2. Run `curl -fsSL https://get.anyraven.com | bash` (point the install script at a local release mirror during testing).
-3. Verify all 5 supervised processes are running: `docker compose exec anyclaw supervisorctl status`.
-4. Verify `/data/.anyclaw/pb-token` exists (0600, anyclaw-infra).
-5. Verify `/data/.anyclaw/master.key` exists (0600).
+3. Verify all 5 supervised processes are running: `docker compose exec anyraven supervisorctl status`.
+4. Verify `/data/.anyraven/pb-token` exists (0600, anyraven-infra).
+5. Verify `/data/.anyraven/master.key` exists (0600).
 6. Verify the `api_keys` collection in PocketBase contains one encrypted row for the chosen provider (written via the `POST /internal/api-keys` on port 4100 call).
 7. Verify the welcome page renders at `http://127.0.0.1:5173/`.
 8. Hit `GET http://127.0.0.1:4100/api/version` → version JSON from the dispatch process.
-9. Verify PocketBase is on the 0.25.x line: `docker compose exec anyclaw /usr/local/bin/pocketbase --version`.
+9. Verify PocketBase is on the 0.25.x line: `docker compose exec anyraven /usr/local/bin/pocketbase --version`.
 10. Dispatch a trivial task through the MCP endpoint and watch it complete: progress updates → deploy → version row.
-11. Roll the deploy back via `anyclaw_rollback` → prior version restored.
+11. Roll the deploy back via `anyraven_rollback` → prior version restored.
 12. `docker compose down` + `docker compose up -d` → everything comes back, no data loss.
 13. Follow the Hetzner guide (Task 14) to add a second user container; verify isolation (one user's `/data` is invisible to the other).
 
@@ -514,7 +514,7 @@ echo "=== AnyRaven Installer ==="
 ## Summary
 
 This plan delivers, in order:
-1. The five skill files (under `anyclaw-server/skills/raw/`), packaged three ways, with bidirectional semver gating via the `@anyclaw/dispatch` process on port 4100, and baked into Plan 1's image via a Dockerfile extension.
+1. The five skill files (under `anyraven-server/skills/raw/`), packaged three ways, with bidirectional semver gating via the `@anyraven/dispatch` process on port 4100, and baked into Plan 1's image via a Dockerfile extension.
 2. Welcome page content layered on top of Plan 1's `frontend-template` scaffold, reviewed at a visual checkpoint that also LOCKS the final `@theme` block (Plan 1 shipped a provisional one).
 3. The user-facing `install.sh` — driving Plan 1's init scripts, bootstrapping PocketBase 0.25.x via `_superusers`, and stashing the user's LLM key via Plan 3's `POST /internal/api-keys` on port 4100 — plus the Hetzner deployment guide and an end-to-end smoke test.
 

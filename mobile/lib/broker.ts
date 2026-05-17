@@ -1,7 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { AuthRequest, makeRedirectUri } from "expo-auth-session";
 
-const BROKER_BASE = "https://broker.anyclawapp.com";
+const BROKER_BASE = "https://broker.anyravenapp.com";
 
 /**
  * Authenticate with the broker using OAuth.
@@ -9,11 +9,11 @@ const BROKER_BASE = "https://broker.anyclawapp.com";
 export async function loginWithProvider(
   provider: "google" | "apple" | "github"
 ): Promise<void> {
-  const redirectUri = makeRedirectUri({ scheme: "anyclaw" });
+  const redirectUri = makeRedirectUri({ scheme: "anyraven" });
   const authUrl = `${BROKER_BASE}/auth/${provider}/start`;
 
   const request = new AuthRequest({
-    clientId: "anyclaw-mobile",
+    clientId: "anyraven-mobile",
     redirectUri,
     usePKCE: false,
     scopes: [],

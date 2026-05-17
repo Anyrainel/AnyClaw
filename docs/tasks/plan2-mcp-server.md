@@ -3,10 +3,10 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the AnyRaven MCP server package exposing 7 HTTP/SSE tools on `127.0.0.1:4100/mcp` with per-task bearer auth, backed by PocketBase and Plan 1 deploy/snapshot/version infrastructure.
-**Architecture:** A new `packages/mcp-server/` package inside the Plan 1 monorepo. Exports `mountMcp(app, ctx)` which the Plan 1 `@anyclaw/dispatch` entrypoint mounts on its shared Express app (same app as Plan 3's REST API and Plan 1's health endpoint, port 4100). The MCP server does NOT call `app.listen` itself. Tool handlers wrap Plan 1 managers (`DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore`) from `@anyclaw/shared` and an admin `PocketBase` client. Per-task bearer tokens are registered at task spawn, captured in a closure, and looked up on every request.
+**Architecture:** A new `packages/mcp-server/` package inside the Plan 1 monorepo. Exports `mountMcp(app, ctx)` which the Plan 1 `@anyraven/dispatch` entrypoint mounts on its shared Express app (same app as Plan 3's REST API and Plan 1's health endpoint, port 4100). The MCP server does NOT call `app.listen` itself. Tool handlers wrap Plan 1 managers (`DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore`) from `@anyraven/shared` and an admin `PocketBase` client. Per-task bearer tokens are registered at task spawn, captured in a closure, and looked up on every request.
 **Tech Stack:** @modelcontextprotocol/sdk ^1.12, express ^4.21, zod ^3.23, pocketbase ^0.25, vitest ^2.0, msw ^2.4, tsx, typescript ^5.6
-**Dependencies:** Plan 1 (Server Infrastructure Foundation) must be complete. This plan assumes `@anyclaw/shared` exports `DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore` with the signatures referenced below, that `/data/.anyclaw/pb-token` and `/data/.anyclaw/mcp-tokens/` exist, and that the npm workspaces monorepo already builds. The dispatch package `@anyclaw/dispatch` (scaffolded by Plan 1) will import and mount this package.
-**Plans that depend on this:** Plan 3 (Agent Dispatch) — will import `mountMcp`, `registerTaskToken`, `revokeTaskToken` from `@anyclaw/mcp-server` and call `mountMcp(app, ctx)` on the shared dispatch Express app.
+**Dependencies:** Plan 1 (Server Infrastructure Foundation) must be complete. This plan assumes `@anyraven/shared` exports `DeployManager`, `RollbackManager`, `SnapshotManager`, `VersionStore` with the signatures referenced below, that `/data/.anyraven/pb-token` and `/data/.anyraven/mcp-tokens/` exist, and that the npm workspaces monorepo already builds. The dispatch package `@anyraven/dispatch` (scaffolded by Plan 1) will import and mount this package.
+**Plans that depend on this:** Plan 3 (Agent Dispatch) — will import `mountMcp`, `registerTaskToken`, `revokeTaskToken` from `@anyraven/mcp-server` and call `mountMcp(app, ctx)` on the shared dispatch Express app.
 
 ---
 
@@ -21,13 +21,13 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 | 3 — PocketBase client | plan2 §4.1 |
 | 4 — PocketBase collections install | plan2 §4.2 |
 | 5 — Errors + wrapper | plan2 §10 |
-| 6 — `anyclaw_update_progress` | plan2 §6.2, §7.7 |
-| 7 — `anyclaw_list_versions` | plan2 §7.5 |
-| 8 — `anyclaw_snapshot_db` | plan2 §7.4 |
-| 9 — `anyclaw_create_collection` | plan2 §7.1 |
-| 10 — `anyclaw_ask_user` | plan2 §6.1, §7.6 |
-| 11 — `anyclaw_deploy` | plan2 §7.2, §8 |
-| 12 — `anyclaw_rollback` | plan2 §7.3, §9 |
+| 6 — `anyraven_update_progress` | plan2 §6.2, §7.7 |
+| 7 — `anyraven_list_versions` | plan2 §7.5 |
+| 8 — `anyraven_snapshot_db` | plan2 §7.4 |
+| 9 — `anyraven_create_collection` | plan2 §7.1 |
+| 10 — `anyraven_ask_user` | plan2 §6.1, §7.6 |
+| 11 — `anyraven_deploy` | plan2 §7.2, §8 |
+| 12 — `anyraven_rollback` | plan2 §7.3, §9 |
 | 13 — `mountMcp` HTTP/SSE wiring | plan2 §3.1 |
 | 14 — Task state + resume | plan2 §5 |
 | 15 — Integration test: deploy happy path | plan2 §12.2 |
@@ -37,16 +37,16 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 ## Global Rules
 
 - **Rigid TDD**: every task is `write failing test → run and confirm red → write impl → run and confirm green → commit`. Never skip the red step. Never commit red.
-- All commands assume `cwd = F:/Codes/AnyRaven/anyclaw-server/packages/mcp-server` unless noted.
-- Use Windows-friendly paths in commands (forward slashes in shell). Production paths like `/data/.anyclaw/...` appear in code but tests must use `process.env.ANYCLAW_DATA_ROOT` to override them to a tmp dir.
+- All commands assume `cwd = F:/Codes/AnyRaven/anyraven-server/packages/mcp-server` unless noted.
+- Use Windows-friendly paths in commands (forward slashes in shell). Production paths like `/data/.anyraven/...` appear in code but tests must use `process.env.ANYRAVEN_DATA_ROOT` to override them to a tmp dir.
 - Commit messages: `plan2/<task-id>: <short summary>`.
-- After each task: `npm run -w @anyclaw/mcp-server test` must be green.
+- After each task: `npm run -w @anyraven/mcp-server test` must be green.
 
 ---
 
 ## Task 1 — Package Scaffold
 
-- [ ] **1.1 Write failing test: package exists and builds.** Create `F:/Codes/AnyRaven/anyclaw-server/packages/mcp-server/src/__tests__/smoke.test.ts`:
+- [ ] **1.1 Write failing test: package exists and builds.** Create `F:/Codes/AnyRaven/anyraven-server/packages/mcp-server/src/__tests__/smoke.test.ts`:
   ```typescript
   import { describe, it, expect } from "vitest";
   import * as pkg from "../index.js";
@@ -59,13 +59,13 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
   ```
 - [ ] **1.2 Run test, confirm RED.** From repo root:
   ```
-  npm run -w @anyclaw/mcp-server test
+  npm run -w @anyraven/mcp-server test
   ```
   Expect: package not found / no such workspace.
 - [ ] **1.3 Create `packages/mcp-server/package.json`** exactly:
   ```json
   {
-    "name": "@anyclaw/mcp-server",
+    "name": "@anyraven/mcp-server",
     "version": "1.0.0",
     "private": true,
     "type": "module",
@@ -80,7 +80,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     },
     "dependencies": {
       "@modelcontextprotocol/sdk": "^1.12.0",
-      "@anyclaw/shared": "*",
+      "@anyraven/shared": "*",
       "pocketbase": "^0.25.0",
       "zod": "^3.23.0",
       "express": "^4.21.0"
@@ -129,18 +129,18 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 - [ ] **1.6 Create `src/env.ts`:**
   ```typescript
   import path from "node:path";
-  export const DATA_ROOT = process.env.ANYCLAW_DATA_ROOT ?? "/data";
+  export const DATA_ROOT = process.env.ANYRAVEN_DATA_ROOT ?? "/data";
   export const PATHS = {
-    anyclawDir:  path.join(DATA_ROOT, ".anyclaw"),
-    mcpTokens:   path.join(DATA_ROOT, ".anyclaw", "mcp-tokens"),
-    pbTokenFile: path.join(DATA_ROOT, ".anyclaw", "pb-token"),
+    anyravenDir:  path.join(DATA_ROOT, ".anyraven"),
+    mcpTokens:   path.join(DATA_ROOT, ".anyraven", "mcp-tokens"),
+    pbTokenFile: path.join(DATA_ROOT, ".anyraven", "pb-token"),
     devRoot:     path.join(DATA_ROOT, "dev"),
     prodRoot:    path.join(DATA_ROOT, "prod"),
     worktreeDir: path.join(DATA_ROOT, "dev", ".worktrees"),
-    snapshotDir: path.join(DATA_ROOT, ".anyclaw", "snapshots"),
+    snapshotDir: path.join(DATA_ROOT, ".anyraven", "snapshots"),
   } as const;
   export const POCKETBASE_URL = process.env.POCKETBASE_URL ?? "http://127.0.0.1:8090";
-  export const MCP_PORT = Number(process.env.ANYCLAW_MCP_PORT ?? 4100);
+  export const MCP_PORT = Number(process.env.ANYRAVEN_MCP_PORT ?? 4100);
   ```
 - [ ] **1.7 Create placeholder `src/index.ts`:**
   ```typescript
@@ -153,10 +153,10 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 - [ ] **1.8 Install deps at repo root, then run test:**
   ```
   npm install
-  npm run -w @anyclaw/mcp-server test
+  npm run -w @anyraven/mcp-server test
   ```
   Expect: GREEN (smoke test passes).
-- [ ] **1.9 Commit:** `plan2/task1: scaffold @anyclaw/mcp-server package`
+- [ ] **1.9 Commit:** `plan2/task1: scaffold @anyraven/mcp-server package`
 
 ---
 
@@ -180,14 +180,14 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 
   let tmp: string;
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyclaw-auth-"));
-    process.env.ANYCLAW_DATA_ROOT = tmp;
-    fs.mkdirSync(path.join(tmp, ".anyclaw", "mcp-tokens"), { recursive: true });
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyraven-auth-"));
+    process.env.ANYRAVEN_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, ".anyraven", "mcp-tokens"), { recursive: true });
     __resetTokenRegistryForTests();
   });
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
-    delete process.env.ANYCLAW_DATA_ROOT;
+    delete process.env.ANYRAVEN_DATA_ROOT;
   });
 
   function makeApp() {
@@ -221,14 +221,14 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     });
     it("writes token file with 0640 (best-effort)", () => {
       registerTaskToken("t1", "tok-abc");
-      const p = path.join(tmp, ".anyclaw", "mcp-tokens", "task-t1.token");
+      const p = path.join(tmp, ".anyraven", "mcp-tokens", "task-t1.token");
       expect(fs.readFileSync(p, "utf8")).toBe("tok-abc");
     });
   });
   ```
 - [ ] **2.2 Install `supertest`:**
   ```
-  npm install -D -w @anyclaw/mcp-server supertest @types/supertest
+  npm install -D -w @anyraven/mcp-server supertest @types/supertest
   ```
 - [ ] **2.3 Run test, confirm RED.**
 - [ ] **2.4 Create `src/auth.ts`:**
@@ -260,7 +260,7 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     } catch { /* ignore */ }
   }
 
-  const TOKEN_KEY = Symbol("anyclawToken");
+  const TOKEN_KEY = Symbol("anyravenToken");
 
   export function requireBearerToken(req: Request, res: Response, next: NextFunction): void {
     const header = req.header("authorization") ?? "";
@@ -280,19 +280,19 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
     return id;
   }
   ```
-  Note: `PATHS` is evaluated once at import. Because tests reset `ANYCLAW_DATA_ROOT` per test, re-import is needed OR switch `PATHS` to a getter. Simpler: re-export a function `tokensDir()` that reads `process.env` each call.
+  Note: `PATHS` is evaluated once at import. Because tests reset `ANYRAVEN_DATA_ROOT` per test, re-import is needed OR switch `PATHS` to a getter. Simpler: re-export a function `tokensDir()` that reads `process.env` each call.
 - [ ] **2.5 Update `env.ts`** to also export a live helper:
   ```typescript
   export function currentPaths() {
-    const root = process.env.ANYCLAW_DATA_ROOT ?? "/data";
+    const root = process.env.ANYRAVEN_DATA_ROOT ?? "/data";
     return {
-      anyclawDir:  `${root}/.anyclaw`,
-      mcpTokens:   `${root}/.anyclaw/mcp-tokens`,
-      pbTokenFile: `${root}/.anyclaw/pb-token`,
+      anyravenDir:  `${root}/.anyraven`,
+      mcpTokens:   `${root}/.anyraven/mcp-tokens`,
+      pbTokenFile: `${root}/.anyraven/pb-token`,
       devRoot:     `${root}/dev`,
       prodRoot:    `${root}/prod`,
       worktreeDir: `${root}/dev/.worktrees`,
-      snapshotDir: `${root}/.anyclaw/snapshots`,
+      snapshotDir: `${root}/.anyraven/snapshots`,
     };
   }
   ```
@@ -314,15 +314,15 @@ Every task in this plan maps to a section of the design docs. Re-read the releva
 
   let tmp: string;
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyclaw-pb-"));
-    process.env.ANYCLAW_DATA_ROOT = tmp;
-    fs.mkdirSync(path.join(tmp, ".anyclaw"), { recursive: true });
-    fs.writeFileSync(path.join(tmp, ".anyclaw", "pb-token"), "file-token-xyz");
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyraven-pb-"));
+    process.env.ANYRAVEN_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, ".anyraven"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, ".anyraven", "pb-token"), "file-token-xyz");
     __resetPbClientForTests();
   });
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
-    delete process.env.ANYCLAW_DATA_ROOT;
+    delete process.env.ANYRAVEN_DATA_ROOT;
     delete process.env.PB_ADMIN_TOKEN;
     delete process.env.POCKETBASE_URL;
   });
@@ -640,14 +640,14 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
 ---
 
-## Task 6 — `anyclaw_update_progress`
+## Task 6 — `anyraven_update_progress`
 
 - [ ] **6.1 Write failing test:** `src/tools/__tests__/update-progress.test.ts`:
   ```typescript
   import { describe, it, expect, vi } from "vitest";
   import { makeUpdateProgressHandler } from "../update-progress.js";
 
-  describe("anyclaw_update_progress", () => {
+  describe("anyraven_update_progress", () => {
     it("writes progress record and returns delivered=true", async () => {
       const create = vi.fn().mockResolvedValue({ id: "rec1" });
       const pb = { collection: () => ({ create }) };
@@ -711,7 +711,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerUpdateProgress(server: any, ctx: Ctx) {
     server.registerTool(
-      "anyclaw_update_progress",
+      "anyraven_update_progress",
       {
         title: "Update Progress",
         description:
@@ -724,11 +724,11 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   }
   ```
 - [ ] **6.4 Run test, confirm GREEN.**
-- [ ] **6.5 Commit:** `plan2/task6: anyclaw_update_progress tool`
+- [ ] **6.5 Commit:** `plan2/task6: anyraven_update_progress tool`
 
 ---
 
-## Task 7 — `anyclaw_list_versions`
+## Task 7 — `anyraven_list_versions`
 
 - [ ] **7.1 Write failing test:** `src/tools/__tests__/list-versions.test.ts`:
   ```typescript
@@ -740,7 +740,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     { version: "v1.0.0", description: "init",  created: "2026-04-04T00:00:00Z", gitCommit: "bbb", dbSnapshotId: null },
   ];
 
-  describe("anyclaw_list_versions", () => {
+  describe("anyraven_list_versions", () => {
     it("returns mapped rows", async () => {
       const getList = vi.fn().mockResolvedValue({ items: rows });
       const pb = { collection: () => ({ getList }) };
@@ -803,25 +803,25 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerListVersions(server: any) {
     server.registerTool(
-      "anyclaw_list_versions",
+      "anyraven_list_versions",
       { title: "List Versions", description: "Show deployment history.", inputSchema: listVersionsInput, outputSchema: listVersionsOutput },
       (input: any) => makeListVersionsHandler()(input),
     );
   }
   ```
 - [ ] **7.4 Run test, confirm GREEN.**
-- [ ] **7.5 Commit:** `plan2/task7: anyclaw_list_versions tool`
+- [ ] **7.5 Commit:** `plan2/task7: anyraven_list_versions tool`
 
 ---
 
-## Task 8 — `anyclaw_snapshot_db`
+## Task 8 — `anyraven_snapshot_db`
 
 - [ ] **8.1 Write failing test:** `src/tools/__tests__/snapshot-db.test.ts`:
   ```typescript
   import { describe, it, expect, vi } from "vitest";
   import { makeSnapshotDbHandler, snapshotDbInput } from "../snapshot-db.js";
 
-  describe("anyclaw_snapshot_db", () => {
+  describe("anyraven_snapshot_db", () => {
     it("calls snapshotManager.create with label and returns structured content", async () => {
       const snap = { snapshotId: "s1", sizeBytes: 123, path: "/tmp/s1.gz" };
       const mgr = { create: vi.fn().mockResolvedValue(snap) };
@@ -861,8 +861,8 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   });
 
   let defaultMgr: () => SnapshotManagerLike = () => {
-    // Lazy import to keep @anyclaw/shared optional for unit tests.
-    const { snapshotManager } = require("@anyclaw/shared") as { snapshotManager: SnapshotManagerLike };
+    // Lazy import to keep @anyraven/shared optional for unit tests.
+    const { snapshotManager } = require("@anyraven/shared") as { snapshotManager: SnapshotManagerLike };
     return snapshotManager;
   };
 
@@ -878,7 +878,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerSnapshotDb(server: any) {
     server.registerTool(
-      "anyclaw_snapshot_db",
+      "anyraven_snapshot_db",
       {
         title: "Snapshot Database",
         description: "Create a compressed SQLite snapshot. Called automatically before schema migrations.",
@@ -890,11 +890,11 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   }
   ```
 - [ ] **8.4 Run test, confirm GREEN.**
-- [ ] **8.5 Commit:** `plan2/task8: anyclaw_snapshot_db tool`
+- [ ] **8.5 Commit:** `plan2/task8: anyraven_snapshot_db tool`
 
 ---
 
-## Task 9 — `anyclaw_create_collection`
+## Task 9 — `anyraven_create_collection`
 
 - [ ] **9.1 Write failing test:** `src/tools/__tests__/create-collection.test.ts`:
   ```typescript
@@ -910,7 +910,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     ],
   };
 
-  describe("anyclaw_create_collection", () => {
+  describe("anyraven_create_collection", () => {
     it("snapshots then creates and returns structured content", async () => {
       const snap = { snapshotId: "snap-1", sizeBytes: 1, path: "/x" };
       const snapMgr = { create: vi.fn().mockResolvedValue(snap) };
@@ -977,7 +977,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     snapshotId: z.string(),
   });
 
-  let defaultSnap: () => SnapshotManagerLike = () => (require("@anyclaw/shared") as any).snapshotManager;
+  let defaultSnap: () => SnapshotManagerLike = () => (require("@anyraven/shared") as any).snapshotManager;
 
   export function makeCreateCollectionHandler(
     snapFactory: () => SnapshotManagerLike = defaultSnap,
@@ -1014,7 +1014,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerCreateCollection(server: any) {
     server.registerTool(
-      "anyclaw_create_collection",
+      "anyraven_create_collection",
       {
         title: "Create Collection",
         description: "Create a new PocketBase collection. Automatically snapshots the database before the schema change.",
@@ -1027,11 +1027,11 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   }
   ```
 - [ ] **9.4 Run test, confirm GREEN.**
-- [ ] **9.5 Commit:** `plan2/task9: anyclaw_create_collection tool`
+- [ ] **9.5 Commit:** `plan2/task9: anyraven_create_collection tool`
 
 ---
 
-## Task 10 — `anyclaw_ask_user`
+## Task 10 — `anyraven_ask_user`
 
 - [ ] **10.1 Write failing test:** `src/tools/__tests__/ask-user.test.ts`:
   ```typescript
@@ -1053,7 +1053,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     };
   }
 
-  describe("anyclaw_ask_user", () => {
+  describe("anyraven_ask_user", () => {
     it("resolves with the answer record when a matching answer arrives", async () => {
       const pb = fakePb();
       const h = makeAskUserHandler(() => pb as any);
@@ -1132,7 +1132,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
         let unsub: (() => void) | null = null;
         const timer = setTimeout(() => {
           try { unsub?.(); } catch { /* ignore */ }
-          reject(new ToolError("anyclaw_ask_user timed out waiting for user response", { timedOut: true, questionId: (q as any).id }));
+          reject(new ToolError("anyraven_ask_user timed out waiting for user response", { timedOut: true, questionId: (q as any).id }));
         }, input.timeoutMs);
 
         const cb = (e: any) => {
@@ -1162,7 +1162,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerAskUser(server: any, ctx: Ctx) {
     server.registerTool(
-      "anyclaw_ask_user",
+      "anyraven_ask_user",
       {
         title: "Ask User",
         description: "Post a clarifying question to the mobile app and wait for the user's answer.",
@@ -1174,11 +1174,11 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   }
   ```
 - [ ] **10.4 Run test, confirm GREEN.**
-- [ ] **10.5 Commit:** `plan2/task10: anyclaw_ask_user with realtime subscribe + timeout`
+- [ ] **10.5 Commit:** `plan2/task10: anyraven_ask_user with realtime subscribe + timeout`
 
 ---
 
-## Task 11 — `anyclaw_deploy`
+## Task 11 — `anyraven_deploy`
 
 - [ ] **11.1 Write failing test:** `src/tools/__tests__/deploy.test.ts`:
   ```typescript
@@ -1193,7 +1193,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     validationResults: { lint: true, typecheck: true, build: true, smokeTests: true },
   };
 
-  describe("anyclaw_deploy", () => {
+  describe("anyraven_deploy", () => {
     it("delegates to DeployManager.run and returns structured content", async () => {
       const mgr = { run: vi.fn().mockResolvedValue(happy) };
       const h = makeDeployHandler(() => mgr as any);
@@ -1244,7 +1244,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     }),
   });
 
-  let defaultMgr: () => DeployManagerLike = () => (require("@anyclaw/shared") as any).deployManager;
+  let defaultMgr: () => DeployManagerLike = () => (require("@anyraven/shared") as any).deployManager;
 
   export function makeDeployHandler(factory: () => DeployManagerLike = defaultMgr) {
     return withErrorHandling(async (
@@ -1265,7 +1265,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerDeploy(server: any, ctx: { taskId: string }) {
     server.registerTool(
-      "anyclaw_deploy",
+      "anyraven_deploy",
       {
         title: "Deploy to Production",
         description: "Validate, snapshot, commit, merge to main, promote, restart app backend. REQUIRES a version description a non-technical user can understand.",
@@ -1278,18 +1278,18 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   }
   ```
 - [ ] **11.4 Run test, confirm GREEN.**
-- [ ] **11.5 Commit:** `plan2/task11: anyclaw_deploy tool delegating to DeployManager`
+- [ ] **11.5 Commit:** `plan2/task11: anyraven_deploy tool delegating to DeployManager`
 
 ---
 
-## Task 12 — `anyclaw_rollback`
+## Task 12 — `anyraven_rollback`
 
 - [ ] **12.1 Write failing test:** `src/tools/__tests__/rollback.test.ts`:
   ```typescript
   import { describe, it, expect, vi } from "vitest";
   import { makeRollbackHandler } from "../rollback.js";
 
-  describe("anyclaw_rollback", () => {
+  describe("anyraven_rollback", () => {
     it("delegates to RollbackManager.run", async () => {
       const mgr = { run: vi.fn().mockResolvedValue({ rolledBackTo: "v1.0.0", safetySnapshotId: "snap-2", gitCommit: "abc" }) };
       const h = makeRollbackHandler(() => mgr as any);
@@ -1324,7 +1324,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
     gitCommit: z.string(),
   });
 
-  let defaultMgr: () => RollbackManagerLike = () => (require("@anyclaw/shared") as any).rollbackManager;
+  let defaultMgr: () => RollbackManagerLike = () => (require("@anyraven/shared") as any).rollbackManager;
 
   export function makeRollbackHandler(factory: () => RollbackManagerLike = defaultMgr) {
     return withErrorHandling(async (input: z.infer<typeof rollbackInput>) => {
@@ -1338,7 +1338,7 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
 
   export function registerRollback(server: any) {
     server.registerTool(
-      "anyclaw_rollback",
+      "anyraven_rollback",
       {
         title: "Rollback to Version",
         description: "Revert production code and database to a specific version. Snapshots current state first.",
@@ -1351,13 +1351,13 @@ Note on `_deployments` population (simpler approach): Plan 1's `DeployManager.ru
   }
   ```
 - [ ] **12.4 Run test, confirm GREEN.**
-- [ ] **12.5 Commit:** `plan2/task12: anyclaw_rollback tool delegating to RollbackManager`
+- [ ] **12.5 Commit:** `plan2/task12: anyraven_rollback tool delegating to RollbackManager`
 
 ---
 
 ## Task 13 — `mountMcp` HTTP/SSE Wiring
 
-Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Express app. It does NOT call `app.listen`. Plan 1's `@anyclaw/dispatch` entrypoint owns the Express app and the single `listen(4100)` call; it imports `mountMcp` from `@anyclaw/mcp-server` and calls it before starting the server. Plan 3's REST API routes mount onto the same app.
+Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Express app. It does NOT call `app.listen`. Plan 1's `@anyraven/dispatch` entrypoint owns the Express app and the single `listen(4100)` call; it imports `mountMcp` from `@anyraven/mcp-server` and calls it before starting the server. Plan 3's REST API routes mount onto the same app.
 
 - [ ] **13.1 Write failing test:** `src/__tests__/mount-mcp.test.ts`:
   ```typescript
@@ -1372,14 +1372,14 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
 
   let tmp: string;
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyclaw-mount-"));
-    process.env.ANYCLAW_DATA_ROOT = tmp;
-    fs.mkdirSync(path.join(tmp, ".anyclaw", "mcp-tokens"), { recursive: true });
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyraven-mount-"));
+    process.env.ANYRAVEN_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, ".anyraven", "mcp-tokens"), { recursive: true });
     __resetTokenRegistryForTests();
   });
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
-    delete process.env.ANYCLAW_DATA_ROOT;
+    delete process.env.ANYRAVEN_DATA_ROOT;
   });
 
   describe("mountMcp", () => {
@@ -1389,7 +1389,7 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
       const res = await request(app).post("/mcp").send({ jsonrpc: "2.0", method: "tools/list", id: 1 });
       expect(res.status).toBe(401);
     });
-    it("tools/list returns the seven anyclaw tools", async () => {
+    it("tools/list returns the seven anyraven tools", async () => {
       registerTaskToken("tA", "tok-A");
       const app = express();
       app.use(express.json());
@@ -1417,13 +1417,13 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
         : list.body;
       const names = (body.result?.tools ?? []).map((t: any) => t.name).sort();
       expect(names).toEqual([
-        "anyclaw_ask_user",
-        "anyclaw_create_collection",
-        "anyclaw_deploy",
-        "anyclaw_list_versions",
-        "anyclaw_rollback",
-        "anyclaw_snapshot_db",
-        "anyclaw_update_progress",
+        "anyraven_ask_user",
+        "anyraven_create_collection",
+        "anyraven_deploy",
+        "anyraven_list_versions",
+        "anyraven_rollback",
+        "anyraven_snapshot_db",
+        "anyraven_update_progress",
       ]);
     });
   });
@@ -1461,8 +1461,8 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
 
   const INSTRUCTIONS = [
     "AnyRaven MCP server. Use your own native file and shell tools for everything in the dev worktree.",
-    "Use AnyRaven MCP tools only for production operations: anyclaw_deploy, anyclaw_rollback, anyclaw_snapshot_db, anyclaw_create_collection.",
-    "Use anyclaw_ask_user to clarify requirements and anyclaw_update_progress to keep the user informed.",
+    "Use AnyRaven MCP tools only for production operations: anyraven_deploy, anyraven_rollback, anyraven_snapshot_db, anyraven_create_collection.",
+    "Use anyraven_ask_user to clarify requirements and anyraven_update_progress to keep the user informed.",
     "A version description of at least 10 characters is required for every deployment.",
   ].join(" ");
 
@@ -1473,7 +1473,7 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
       try {
         const taskId = resolveTaskFromToken(req);
         const server = new McpServer(
-          { name: "anyclaw", version: "1.0.0" },
+          { name: "anyraven", version: "1.0.0" },
           { instructions: INSTRUCTIONS },
         );
         registerAllTools(server, { taskId });
@@ -1574,7 +1574,7 @@ Note: `mountMcp(app, ctx)` attaches MCP routes at `/mcp/*` onto a passed-in Expr
         await repo.notifyFailure(row.taskId, "server_restart");
       }
       // queued / clarifying: leave for dispatcher. If a question is pending we simply
-      // do nothing; the dispatcher will re-subscribe via anyclaw_ask_user resume.
+      // do nothing; the dispatcher will re-subscribe via anyraven_ask_user resume.
     }
   }
 
@@ -1630,8 +1630,8 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
   import { Client } from "@modelcontextprotocol/sdk/client/index.js";
   import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-  // Stub @anyclaw/shared before importing the server module.
-  vi.mock("@anyclaw/shared", () => ({
+  // Stub @anyraven/shared before importing the server module.
+  vi.mock("@anyraven/shared", () => ({
     deployManager: {
       run: vi.fn().mockResolvedValue({
         version: "v1.0.1",
@@ -1650,9 +1650,9 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
   let tmp: string;
 
   beforeAll(async () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyclaw-int-"));
-    process.env.ANYCLAW_DATA_ROOT = tmp;
-    fs.mkdirSync(path.join(tmp, ".anyclaw", "mcp-tokens"), { recursive: true });
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "anyraven-int-"));
+    process.env.ANYRAVEN_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, ".anyraven", "mcp-tokens"), { recursive: true });
 
     const { mountMcp, registerTaskToken } = await import("../../src/index.js");
     const { __resetTokenRegistryForTests } = await import("../../src/auth.js");
@@ -1675,24 +1675,24 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
   });
 
   describe("integration: deploy happy path", () => {
-    it("calls anyclaw_deploy through the MCP client and returns structured content", async () => {
+    it("calls anyraven_deploy through the MCP client and returns structured content", async () => {
       const client = new Client({ name: "test", version: "1.0.0" }, { capabilities: {} });
       const transport = new StreamableHTTPClientTransport(new URL(baseUrl), {
         requestInit: { headers: { Authorization: "Bearer int-tok" } },
       });
       await client.connect(transport);
       const tools = await client.listTools();
-      expect(tools.tools.map(t => t.name).sort()).toContain("anyclaw_deploy");
+      expect(tools.tools.map(t => t.name).sort()).toContain("anyraven_deploy");
 
       const res = await client.callTool({
-        name: "anyclaw_deploy",
+        name: "anyraven_deploy",
         arguments: { versionDescription: "adds mood tracking feature", skipDbSnapshot: true },
       });
       expect(res.isError).toBeFalsy();
       expect((res.structuredContent as any).version).toBe("v1.0.1");
       expect((res.structuredContent as any).validationResults.lint).toBe(true);
 
-      const { deployManager } = await import("@anyclaw/shared");
+      const { deployManager } = await import("@anyraven/shared");
       expect((deployManager as any).run).toHaveBeenCalledWith({
         taskId: "int-task",
         versionDescription: "adds mood tracking feature",
@@ -1717,18 +1717,18 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
       };
       registerAllTools(fakeServer as any, { taskId: "x" });
       expect(names.sort()).toEqual([
-        "anyclaw_ask_user",
-        "anyclaw_create_collection",
-        "anyclaw_deploy",
-        "anyclaw_list_versions",
-        "anyclaw_rollback",
-        "anyclaw_snapshot_db",
-        "anyclaw_update_progress",
+        "anyraven_ask_user",
+        "anyraven_create_collection",
+        "anyraven_deploy",
+        "anyraven_list_versions",
+        "anyraven_rollback",
+        "anyraven_snapshot_db",
+        "anyraven_update_progress",
       ]);
     });
   });
   ```
-- [ ] **15.5 Run full suite:** `npm run -w @anyclaw/mcp-server test`. All green.
+- [ ] **15.5 Run full suite:** `npm run -w @anyraven/mcp-server test`. All green.
 - [ ] **15.6 Commit:** `plan2/task15: end-to-end deploy happy path integration test + tool-count guard`
 
 ---
@@ -1736,17 +1736,17 @@ This task tests `mountMcp` end-to-end against a stubbed `DeployManager` (we do n
 ## Completion Checklist
 
 - [ ] All 15 tasks committed, each with red → green → commit.
-- [ ] `npm run -w @anyclaw/mcp-server test` passes with all unit + integration tests green.
-- [ ] `npm run -w @anyclaw/mcp-server build` succeeds (typecheck clean).
+- [ ] `npm run -w @anyraven/mcp-server test` passes with all unit + integration tests green.
+- [ ] `npm run -w @anyraven/mcp-server build` succeeds (typecheck clean).
 - [ ] The package exports `mountMcp`, `registerTaskToken`, `revokeTaskToken`, `ensureInternalCollections`, `resumeTasksOnStartup`, and `pocketBaseTasksRepo` for consumption by Plan 3's dispatch server.
 - [ ] All 7 tools are registered and gated by the per-task bearer middleware.
 - [ ] The six collections (`_tasks`, `_agent_messages`, `_versions`, `_user_preferences`, `_api_keys`, `_deployments`) can be bootstrapped by calling `ensureInternalCollections(pb)` during install.
 
 ## Hand-off Notes for Plan 3
 
-Plan 1's `@anyclaw/dispatch` package owns the Express app and the single `app.listen(4100, '127.0.0.1')` call. Plan 3 (Agent Dispatch) will:
-1. In the dispatch entrypoint, `import { mountMcp } from '@anyclaw/mcp-server'` and call `mountMcp(app, ctx)` on the shared dispatch Express app BEFORE `app.listen`. Plan 3's REST API routes mount onto the same app. The health endpoint from Plan 1 also lives on the same app.
-2. On task spawn, call `registerTaskToken(taskId, crypto.randomUUID())` and inject the token into the agent subprocess via `ANYCLAW_MCP_TOKEN`.
+Plan 1's `@anyraven/dispatch` package owns the Express app and the single `app.listen(4100, '127.0.0.1')` call. Plan 3 (Agent Dispatch) will:
+1. In the dispatch entrypoint, `import { mountMcp } from '@anyraven/mcp-server'` and call `mountMcp(app, ctx)` on the shared dispatch Express app BEFORE `app.listen`. Plan 3's REST API routes mount onto the same app. The health endpoint from Plan 1 also lives on the same app.
+2. On task spawn, call `registerTaskToken(taskId, crypto.randomUUID())` and inject the token into the agent subprocess via `ANYRAVEN_MCP_TOKEN`.
 3. On task terminate, call `revokeTaskToken(taskId)`.
 4. On startup, instantiate `pocketBaseTasksRepo(pb)` and call `resumeTasksOnStartup(repo)` before accepting new work.
 5. On install/first-run, call `ensureInternalCollections(getPocketBaseAdmin())`.

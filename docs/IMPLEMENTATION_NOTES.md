@@ -15,7 +15,7 @@ This document accumulates technical decisions and observations made during imple
 **Action needed:** None. The build works fine. Just be aware the version isn't literally 5.4.x.
 
 ### Q1.3 — Root tsconfig.json added (not in plan)
-**Decision made:** Added `anyclaw-server/tsconfig.json` (root LSP config) and added `"types": ["node"]` to `tsconfig.base.json`.
+**Decision made:** Added `anyraven-server/tsconfig.json` (root LSP config) and added `"types": ["node"]` to `tsconfig.base.json`.
 **Why:** Without these, the LSP couldn't find `node:fs`, `node:path`, etc. for test files (test/ wasn't included in any package's tsconfig because composite + rootDir=src excludes it).
 **Impact:** Cleaner LSP experience. The `tsc -b` build path is unaffected.
 **Action needed:** None.
@@ -37,7 +37,7 @@ This document accumulates technical decisions and observations made during imple
 
 ### Q1.7 — Docker build not attempted on Windows
 **Observation:** Plan 1's Dockerfile was written verbatim but not built (no Docker on the dev host). The Dockerfile will need to be tested in CI or on a Linux host before we can deliver a real container.
-**Action needed:** Run `docker build -f anyclaw-server/infra/Dockerfile anyclaw-server/` on a machine with Docker before relying on the image. Probably best done as part of Plan 6's CI/CD.
+**Action needed:** Run `docker build -f anyraven-server/infra/Dockerfile anyraven-server/` on a machine with Docker before relying on the image. Probably best done as part of Plan 6's CI/CD.
 
 ## Plan 2: MCP Server (in progress)
 
@@ -46,7 +46,7 @@ This document accumulates technical decisions and observations made during imple
 **Action needed:** None — consistent with rest of monorepo.
 
 ### Q2.2 — `require()` shim in ESM modules
-**Subagent decision:** Plan 2 uses bare `require("@anyclaw/shared")` for lazy loading in some tools. Since mcp-server is `"type": "module"` with NodeNext, bare `require` isn't available. Subagent used `createRequire(import.meta.url)`.
+**Subagent decision:** Plan 2 uses bare `require("@anyraven/shared")` for lazy loading in some tools. Since mcp-server is `"type": "module"` with NodeNext, bare `require` isn't available. Subagent used `createRequire(import.meta.url)`.
 **Action needed:** Review whether `await import()` would be cleaner. Currently the lazy loader is never exercised in tests (factories are injected).
 
 ### Q2.3 — Test reset helpers exported from production code
@@ -56,14 +56,14 @@ This document accumulates technical decisions and observations made during imple
 ## Process: Parallel Subagent Dispatch
 
 ### Q-PROCESS — Cross-contamination from `git add -A`
-**Issue:** Two subagents working in different subdirectories of the same git repo (anyclaw-server/ and broker/) collided when one ran `git add -A` and swept up uncommitted files from the other's working tree into a wrong-named commit.
+**Issue:** Two subagents working in different subdirectories of the same git repo (anyraven-server/ and broker/) collided when one ran `git add -A` and swept up uncommitted files from the other's working tree into a wrong-named commit.
 **Resolution:** Going forward, dispatching subagents serially (one at a time) to avoid the issue. The slight loss of parallelism is worth the safety. Alternative would be git worktrees per subagent, but that adds setup overhead.
 **Recovery:** The cross-contaminated commit was apparently rewritten to drop the foreign files; create-collection.ts ended up untracked locally and was committed properly under the correct Plan 2 Task 9 message.
 **Action needed:** Consider git worktrees if parallelism becomes important later.
 
-### Q2.4 — anyclaw_ask_user clarification timeout mode
+### Q2.4 — anyraven_ask_user clarification timeout mode
 **Subagent observation:** Plan 2 spec only implements simple `timeoutMs` reject behavior. The Product Principles specify user-configurable "best judgment after 5min OR pause indefinitely" via `_user_preferences`. The plan didn't extend Task 10 to read from `_user_preferences`, so the simple timeout was implemented per-spec.
-**Action needed:** Either extend `anyclaw_ask_user` later (small follow-up) to read `_user_preferences.clarification_timeout_mode`, OR have Plan 3's REST API mediate by passing the resolved timeout to the agent via the MCP context. The latter is probably cleaner. Address before launch.
+**Action needed:** Either extend `anyraven_ask_user` later (small follow-up) to read `_user_preferences.clarification_timeout_mode`, OR have Plan 3's REST API mediate by passing the resolved timeout to the agent via the MCP context. The latter is probably cleaner. Address before launch.
 
 ## Plan 4: Connection Broker (in progress)
 
@@ -76,7 +76,7 @@ This document accumulates technical decisions and observations made during imple
 **Action needed:** Write DB-backed E2E tests once testcontainers are available. The routes file itself exercises real SQL, so it needs Docker to validate the upsertUser and session queries at runtime.
 
 ### Q4.3 — Factory injection for McpContext (Plan 2 fix)
-**Decision made:** Extended `McpContext` in mcp-server to carry optional `deployManagerFactory`, `rollbackManagerFactory`, `snapshotManagerFactory`. `mountMcp` threads these through `registerAllTools` to the individual tool register functions. Replaces the broken default `require(@anyclaw/shared).deployManager` pattern (ESM namespaces are immutable so the test's module-mutation approach failed).
+**Decision made:** Extended `McpContext` in mcp-server to carry optional `deployManagerFactory`, `rollbackManagerFactory`, `snapshotManagerFactory`. `mountMcp` threads these through `registerAllTools` to the individual tool register functions. Replaces the broken default `require(@anyraven/shared).deployManager` pattern (ESM namespaces are immutable so the test's module-mutation approach failed).
 **Impact:** Clean DI — Plan 3's dispatch server will wire real managers via these factories at startup. Tests inject mocks the same way.
 **Action needed:** None — cleaner than the original design.
 
@@ -99,7 +99,7 @@ This document accumulates technical decisions and observations made during imple
 | Plan 5: Mobile App | Not started | — | — |
 | Plan 6: Skills + Deployment | Not started | — | — |
 
-**anyclaw-server monorepo:** 171 tests across 54 files. tsc clean.
+**anyraven-server monorepo:** 171 tests across 54 files. tsc clean.
 **broker monorepo:** 58 tests + 5 Docker-skipped across 13 files. tsc clean.
 **Total passing tests:** 229 (+ 5 deferred)
 
@@ -151,19 +151,19 @@ Repo pushed to GitHub as Anyrainel/AnyRaven (public). No CI existed before this 
 Added PocketBase SSE subscription module: `initPocketBase`, `subscribeToTask`, `subscribeToAgentMessages`, `subscribeToDeployments`. All subscriptions decrypt NaCl-boxed envelopes via pairing keys from `loadPairingKeys`.
 
 ### Docs restructured
-- `docs/superpowers/specs/2026-04-04-anyclaw-design.md` → `docs/design.md`
+- `docs/superpowers/specs/2026-04-04-anyraven-design.md` → `docs/design.md`
 - `docs/superpowers/plans/plan1–6` → `docs/tasks/plan1–6` (completed task checklists, preserved for reference)
 - Created `docs/plan1-server-infrastructure-design.md` (was missing — restored from implementation)
 - `docs/superpowers/` namespace removed
 
 ### READMEs added
-Root `README.md` plus per-module READMEs for: broker, mobile, anyclaw-server, shared, dispatch, mcp-server, tunnel-manager, app-backend, app-frontend, frontend-template.
+Root `README.md` plus per-module READMEs for: broker, mobile, anyraven-server, shared, dispatch, mcp-server, tunnel-manager, app-backend, app-frontend, frontend-template.
 
 ### CLAUDE.md added
-Project-level agent guidance: repo layout, test commands, TypeScript strictness conventions, key patterns (ANYCLAW_DATA_ROOT, libsodium pin, deploy flow, MCP token lifecycle), commit conventions, WIP status.
+Project-level agent guidance: repo layout, test commands, TypeScript strictness conventions, key patterns (ANYRAVEN_DATA_ROOT, libsodium pin, deploy flow, MCP token lifecycle), commit conventions, WIP status.
 
 ### CI pipeline added
-`.github/workflows/ci.yml` — three parallel jobs (anyclaw-server / broker / mobile), each runs typecheck then tests. Broker job uses ubuntu-latest (Docker available for testcontainers).
+`.github/workflows/ci.yml` — three parallel jobs (anyraven-server / broker / mobile), each runs typecheck then tests. Broker job uses ubuntu-latest (Docker available for testcontainers).
 
 ### Git hooks added
 - `.githooks/pre-commit` — typecheck + tests scoped to staged modules; broker gets typecheck-only (testcontainers too slow)
@@ -172,6 +172,6 @@ Project-level agent guidance: repo layout, test commands, TypeScript strictness 
 
 ### Critical remaining items (for next machine / session)
 1. **Tunnel integration** — `tunnel-manager` has reconnect stub only. Real WSS handshake with broker (frame relay, service routing per plan4 design) must be implemented and validated with both sides running. Requires Docker environment.
-2. **Docker build** — `infra/Dockerfile` has never been built on Linux. First task on new machine: `docker build -f anyclaw-server/infra/Dockerfile anyclaw-server/` and validate all 5 supervisord processes boot.
+2. **Docker build** — `infra/Dockerfile` has never been built on Linux. First task on new machine: `docker build -f anyraven-server/infra/Dockerfile anyraven-server/` and validate all 5 supervisord processes boot.
 3. **Broker E2E tests** — 7 testcontainers-based broker tests are currently skipped on Windows. Run `cd broker && npm test` on Linux with Docker to confirm green.
 4. **End-to-end smoke test** — No test exercises the full path: mobile → broker → tunnel → dispatch → agent → deploy → version in mobile. Write after tunnel integration is complete.

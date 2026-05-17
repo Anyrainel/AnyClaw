@@ -2,12 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development for every task below. Each task is a self-contained TDD cycle with explicit checkbox steps: write the failing test, run it and confirm it fails for the right reason, implement the minimum code to pass, run it and confirm it passes, then commit. Do not batch tasks. Do not skip the "confirm fail" step. If a test passes before implementation, the test is wrong — fix it first.
 
-**Goal:** Extend the `@anyclaw/dispatch` package (scaffolded by Plan 1) with the pluggable agent-dispatch layer that translates mobile-app task requests into running coding-agent sessions (OpenClaw, Claude Code, or webhook), manages the task lifecycle in isolated git worktrees with exactly-once semantics, and exposes the REST API the mobile app drives. Mount the Plan 2 MCP router onto the same Express app so MCP and REST share port 4100 in a single process.
+**Goal:** Extend the `@anyraven/dispatch` package (scaffolded by Plan 1) with the pluggable agent-dispatch layer that translates mobile-app task requests into running coding-agent sessions (OpenClaw, Claude Code, or webhook), manages the task lifecycle in isolated git worktrees with exactly-once semantics, and exposes the REST API the mobile app drives. Mount the Plan 2 MCP router onto the same Express app so MCP and REST share port 4100 in a single process.
 
-**Architecture:** Plan 1 already created `packages/dispatch/` as an Express app on port 4100 with a `/health` endpoint. Plan 2 exports `mountMcp(app, ctx)` from `@anyclaw/mcp-server`. This plan adds, inside the existing `@anyclaw/dispatch` package, the REST routers, the adapter system, the `AdapterManager`, and the process entry point that (a) calls `mountMcp` on the shared Express app, (b) mounts all REST routers, (c) runs the startup sweep, and (d) listens on `127.0.0.1:4100`. `WorktreeManager` is imported from `@anyclaw/shared` — Plan 3 does NOT re-implement it.
+**Architecture:** Plan 1 already created `packages/dispatch/` as an Express app on port 4100 with a `/health` endpoint. Plan 2 exports `mountMcp(app, ctx)` from `@anyraven/mcp-server`. This plan adds, inside the existing `@anyraven/dispatch` package, the REST routers, the adapter system, the `AdapterManager`, and the process entry point that (a) calls `mountMcp` on the shared Express app, (b) mounts all REST routers, (c) runs the startup sweep, and (d) listens on `127.0.0.1:4100`. `WorktreeManager` is imported from `@anyraven/shared` — Plan 3 does NOT re-implement it.
 
-**Tech Stack:** Express (from Plan 1), `ws`, `simple-git` (from `@anyclaw/shared`), `child_process`, `zod`, `vitest`.
-**Workspace tool:** npm workspaces. Every test command is `npm run -w @anyclaw/dispatch test`.
+**Tech Stack:** Express (from Plan 1), `ws`, `simple-git` (from `@anyraven/shared`), `child_process`, `zod`, `vitest`.
+**Workspace tool:** npm workspaces. Every test command is `npm run -w @anyraven/dispatch test`.
 **Dependencies:** Plan 1 (shared lib + dispatch scaffold), Plan 2 (`mountMcp`, internal collections, `registerTaskToken`/`revokeTaskToken`).
 **Plans that depend on this:** Plan 5 (Mobile App), Plan 6 (Install/Skills Deployment — uses `POST /internal/api-keys`).
 
@@ -18,7 +18,7 @@
 1. **Exactly-once, never lost.** Client-generated UUIDs + idempotent upsert + startup sweep. A retried submission is always safe; a dropped submission is always visible to the user as `failed`.
 2. **Isolation by default.** Every task runs in its own git worktree. Failure never touches `main`. Future parallelization is a scheduler change, not a rewrite.
 3. **Agent-agnostic surface.** The `AgentAdapter` interface is small enough that a new agent (Codex, Aider, Gemini CLI) is a single new file.
-4. **Control plane is unkillable.** The dispatch server lives under `/data/.anyclaw/` outside the agent's writable path. Agents cannot edit the process that supervises them.
+4. **Control plane is unkillable.** The dispatch server lives under `/data/.anyraven/` outside the agent's writable path. Agents cannot edit the process that supervises them.
 5. **No silent waits.** Every blocking operation (clarification, dispatch, subprocess wait) has an `AbortSignal` and a persisted state so the mobile app always sees ground truth.
 6. **One process, one port.** MCP (Plan 2) and REST (Plan 3) share a single Express app bound to `127.0.0.1:4100`.
 
@@ -29,7 +29,7 @@
 Plan 1 already created `packages/dispatch/package.json`, `tsconfig.json`, `src/index.ts` (with `createApp()` and `/health`), and `test/health.test.ts`. This plan ADDS files under `src/` and `test/` inside that existing package — it does NOT create a new package.
 
 ```
-anyclaw-server/packages/dispatch/
+anyraven-server/packages/dispatch/
 ├── src/
 │   ├── index.ts                     # EXTENDED: mount MCP + REST, run sweep, listen
 │   ├── app.ts                       # EXTENDED by Plan 3 with REST routers
@@ -66,39 +66,39 @@ anyclaw-server/packages/dispatch/
 ├── test/
 │   ├── unit/                        # NEW
 │   └── integration/                 # NEW
-├── package.json                     # EXTENDED (add deps: ws, zod, @anyclaw/mcp-server, simple-git)
+├── package.json                     # EXTENDED (add deps: ws, zod, @anyraven/mcp-server, simple-git)
 └── vitest.config.ts                 # (already exists from Plan 1)
 ```
 
-All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionStore`, `SnapshotManager`, `AnyClawPaths` come from `@anyclaw/shared`. All imports of `mountMcp`, `registerTaskToken`, `revokeTaskToken`, `ensureInternalCollections` come from `@anyclaw/mcp-server`.
+All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionStore`, `SnapshotManager`, `AnyRavenPaths` come from `@anyraven/shared`. All imports of `mountMcp`, `registerTaskToken`, `revokeTaskToken`, `ensureInternalCollections` come from `@anyraven/mcp-server`.
 
 ---
 
-## Task 0: Extend the `@anyclaw/dispatch` scaffold with Plan 3 dependencies
+## Task 0: Extend the `@anyraven/dispatch` scaffold with Plan 3 dependencies
 
-**Context:** Plan 1 created `packages/dispatch/` with `express`, `@anyclaw/shared`, `vitest`, `typescript`, and the `/health` route. This task adds the additional deps Plan 3 needs and wires the smoke test that asserts the new deps resolve.
+**Context:** Plan 1 created `packages/dispatch/` with `express`, `@anyraven/shared`, `vitest`, `typescript`, and the `/health` route. This task adds the additional deps Plan 3 needs and wires the smoke test that asserts the new deps resolve.
 
 **Files to create/modify:**
-- Modify: `anyclaw-server/packages/dispatch/package.json`
-- Create: `anyclaw-server/packages/dispatch/test/unit/smoke.test.ts`
+- Modify: `anyraven-server/packages/dispatch/package.json`
+- Create: `anyraven-server/packages/dispatch/test/unit/smoke.test.ts`
 
 - [ ] **Step 1: Write the failing test** — create `test/unit/smoke.test.ts`:
   ```ts
   import { describe, it, expect } from "vitest";
   describe("dispatch package Plan 3 deps", () => {
-    it("resolves ws, zod, simple-git, @anyclaw/mcp-server, @anyclaw/shared", async () => {
+    it("resolves ws, zod, simple-git, @anyraven/mcp-server, @anyraven/shared", async () => {
       await expect(import("ws")).resolves.toBeDefined();
       await expect(import("zod")).resolves.toBeDefined();
       await expect(import("simple-git")).resolves.toBeDefined();
-      await expect(import("@anyclaw/shared")).resolves.toBeDefined();
-      await expect(import("@anyclaw/mcp-server")).resolves.toBeDefined();
+      await expect(import("@anyraven/shared")).resolves.toBeDefined();
+      await expect(import("@anyraven/mcp-server")).resolves.toBeDefined();
     });
   });
   ```
-- [ ] **Step 2: Run the test and confirm it fails** — `npm run -w @anyclaw/dispatch test -- smoke` must fail because `ws`/`zod`/`simple-git`/`@anyclaw/mcp-server` are not yet in `dependencies`.
-- [ ] **Step 3: Extend `package.json`** — add to `dependencies`: `"ws": "^8.18.0"`, `"zod": "^3.23.8"`, `"simple-git": "^3.25.0"`, `"@anyclaw/mcp-server": "*"`. Add to `devDependencies`: `"@types/ws": "^8.5.12"`, `"supertest": "^7.0.0"`, `"@types/supertest": "^6.0.2"`. Run `npm install` from the monorepo root to refresh the lockfile.
-- [ ] **Step 4: Run the test and confirm it passes** — `npm run -w @anyclaw/dispatch test -- smoke`.
-- [ ] **Step 5: Commit** — `plan3(task0): extend @anyclaw/dispatch deps for agent dispatch layer`.
+- [ ] **Step 2: Run the test and confirm it fails** — `npm run -w @anyraven/dispatch test -- smoke` must fail because `ws`/`zod`/`simple-git`/`@anyraven/mcp-server` are not yet in `dependencies`.
+- [ ] **Step 3: Extend `package.json`** — add to `dependencies`: `"ws": "^8.18.0"`, `"zod": "^3.23.8"`, `"simple-git": "^3.25.0"`, `"@anyraven/mcp-server": "*"`. Add to `devDependencies`: `"@types/ws": "^8.5.12"`, `"supertest": "^7.0.0"`, `"@types/supertest": "^6.0.2"`. Run `npm install` from the monorepo root to refresh the lockfile.
+- [ ] **Step 4: Run the test and confirm it passes** — `npm run -w @anyraven/dispatch test -- smoke`.
+- [ ] **Step 5: Commit** — `plan3(task0): extend @anyraven/dispatch deps for agent dispatch layer`.
 
 ---
 
@@ -268,9 +268,9 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
 
 ---
 
-## Task 4: Import `WorktreeManager` from `@anyclaw/shared`
+## Task 4: Import `WorktreeManager` from `@anyraven/shared`
 
-> **Note:** Plan 1 already implements `WorktreeManager` in `@anyclaw/shared` with `create(taskId)`, `mergeAndRemove(taskId)`, and `discard(taskId)` methods over a temp git repo. Plan 3 does NOT re-implement it. This task writes a small re-export shim so the rest of Plan 3 can import it from a single local path AND add a thin integration test confirming the shared implementation is wired in.
+> **Note:** Plan 1 already implements `WorktreeManager` in `@anyraven/shared` with `create(taskId)`, `mergeAndRemove(taskId)`, and `discard(taskId)` methods over a temp git repo. Plan 3 does NOT re-implement it. This task writes a small re-export shim so the rest of Plan 3 can import it from a single local path AND add a thin integration test confirming the shared implementation is wired in.
 
 **Files to create:**
 - Create: `packages/dispatch/src/worktrees.ts`
@@ -280,7 +280,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
   ```ts
   import { describe, it, expect } from "vitest";
   import { WorktreeManager as Local } from "../../src/worktrees.js";
-  import { WorktreeManager as Shared } from "@anyclaw/shared";
+  import { WorktreeManager as Shared } from "@anyraven/shared";
   describe("worktrees re-export", () => {
     it("exposes the shared WorktreeManager (same class reference)", () => {
       expect(Local).toBe(Shared);
@@ -290,12 +290,12 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
 - [ ] **Step 2: Run and confirm fail.**
 - [ ] **Step 3: Implement** `src/worktrees.ts`:
   ```ts
-  export { WorktreeManager } from "@anyclaw/shared";
-  export type { Worktree } from "@anyclaw/shared";
+  export { WorktreeManager } from "@anyraven/shared";
+  export type { Worktree } from "@anyraven/shared";
   ```
-  Throughout the rest of Plan 3, import `WorktreeManager` from `"./worktrees.js"` (or directly from `"@anyclaw/shared"` — both are fine; pick one and be consistent).
+  Throughout the rest of Plan 3, import `WorktreeManager` from `"./worktrees.js"` (or directly from `"@anyraven/shared"` — both are fine; pick one and be consistent).
 - [ ] **Step 4: Run and confirm pass.**
-- [ ] **Step 5: Commit** — `plan3(task4): re-export WorktreeManager from @anyclaw/shared`.
+- [ ] **Step 5: Commit** — `plan3(task4): re-export WorktreeManager from @anyraven/shared`.
 
 ---
 
@@ -553,7 +553,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
           sock.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { runId: "run-xyz" } }));
           setTimeout(() => {
             sock.send(JSON.stringify({ type: "event", event: "session.tool",
-              payload: { type: "tool_call", tool: "anyclaw_ask_user", args: { question: "Which DB?" } } }));
+              payload: { type: "tool_call", tool: "anyraven_ask_user", args: { question: "Which DB?" } } }));
             sock.send(JSON.stringify({ type: "event", event: "session.message",
               payload: { type: "run_complete", status: "success", summary: "Added" } }));
           }, 20);
@@ -671,7 +671,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
     private mapEventToStatus(frame: any): TaskStatus | null {
       const now = new Date().toISOString();
       const seq = ++((this.queues.get(frame.payload?.metadata?.anyClawTaskId!) as any)?.lastSeq || 0);
-      if (frame.event === "session.tool" && frame.payload?.tool === "anyclaw_ask_user") {
+      if (frame.event === "session.tool" && frame.payload?.tool === "anyraven_ask_user") {
         return { state: "clarifying", seq, updatedAt: now, question: frame.payload.args.question };
       }
       if (frame.event === "session.message" && frame.payload?.type === "run_complete") {
@@ -733,7 +733,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
   process.stdout.write(JSON.stringify({ type: "system", session_id: "sess-42" }) + "\n");
   process.stdout.write(JSON.stringify({
     type: "assistant",
-    message: { content: [{ type: "tool_use", name: "anyclaw_ask_user", input: { question: "DB?" } }] }
+    message: { content: [{ type: "tool_use", name: "anyraven_ask_user", input: { question: "DB?" } }] }
   }) + "\n");
   process.stdout.write(JSON.stringify({ type: "result", result: "done description" }) + "\n");
   process.exit(0);
@@ -770,8 +770,8 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
       };
       const h = await a.dispatch("t1", "build it", ctx, AbortSignal.timeout(10_000));
       const cfg = JSON.parse(await readFile(ctx.mcpConfigPath, "utf8"));
-      expect(cfg.mcpServers.anyclaw.url).toBe(ctx.mcpEndpointUrl);
-      expect(cfg.mcpServers.anyclaw.headers["x-anyclaw-task-id"]).toBe("t1");
+      expect(cfg.mcpServers.anyraven.url).toBe(ctx.mcpEndpointUrl);
+      expect(cfg.mcpServers.anyraven.headers["x-anyraven-task-id"]).toBe("t1");
       expect(h.taskId).toBe("t1");
       const states: string[] = [];
       for await (const s of a.subscribe("t1", AbortSignal.timeout(10_000))) {
@@ -813,10 +813,10 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
     async dispatch(taskId: string, request: string, ctx: SystemContext, signal: AbortSignal): Promise<TaskHandle> {
       await writeFile(ctx.mcpConfigPath, JSON.stringify({
         mcpServers: {
-          anyclaw: {
+          anyraven: {
             type: "streamable-http",
             url: ctx.mcpEndpointUrl,
-            headers: { authorization: `Bearer ${ctx.mcpBearerToken}`, "x-anyclaw-task-id": taskId },
+            headers: { authorization: `Bearer ${ctx.mcpBearerToken}`, "x-anyraven-task-id": taskId },
           },
         },
       }, null, 2));
@@ -870,7 +870,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
       const now = new Date().toISOString();
       const seq = ++(queue as any).lastSeq;
       if (evt.type === "assistant") {
-        const tool = evt.message?.content?.find?.((c: any) => c.type === "tool_use" && c.name === "anyclaw_ask_user");
+        const tool = evt.message?.content?.find?.((c: any) => c.type === "tool_use" && c.name === "anyraven_ask_user");
         if (tool) return { state: "clarifying", seq, updatedAt: now, question: tool.input?.question };
         return { state: "working", seq, updatedAt: now };
       }
@@ -1082,7 +1082,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
   ```ts
   import { isTerminal, type AgentAdapter, type SystemContext, type TaskStatus, type DispatchConfig } from "./types.js";
   import type { TasksRepo } from "../persistence/tasks-repo.js";
-  import type { WorktreeManager } from "@anyclaw/shared";
+  import type { WorktreeManager } from "@anyraven/shared";
   import type { ResourceLimits } from "../resource-limits/types.js";
 
   export interface AdapterManagerDeps {
@@ -1387,11 +1387,11 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
 - Create: `packages/dispatch/src/rest/internal-api-keys.ts`
 - Create: `packages/dispatch/test/integration/rest-internal-api-keys.test.ts`
 
-> Called by Plan 6's install script (running on the same host as the dispatch server) to seal an LLM API key with the master key at `/data/.anyclaw/master.key` and store the sealed box in `_api_keys` (created by Plan 2). Exposed under `/internal/` and bound in Task 21 to `127.0.0.1` only — never reachable from the tunnel.
+> Called by Plan 6's install script (running on the same host as the dispatch server) to seal an LLM API key with the master key at `/data/.anyraven/master.key` and store the sealed box in `_api_keys` (created by Plan 2). Exposed under `/internal/` and bound in Task 21 to `127.0.0.1` only — never reachable from the tunnel.
 
 - [ ] **Step 1: Write the failing test**
   - Write a mock master key (32 random bytes) to a temp file and pass its path as `masterKeyPath`.
-  - `POST /internal/api-keys` with `{ name: "anthropic", plaintext: "sk-..." }` encrypts with the master key (using `nacl.secretbox` from `@anyclaw/shared`'s crypto helpers) and writes a row to `_api_keys` with `{ name: "anthropic", sealed: <base64> }`; returns 204.
+  - `POST /internal/api-keys` with `{ name: "anthropic", plaintext: "sk-..." }` encrypts with the master key (using `nacl.secretbox` from `@anyraven/shared`'s crypto helpers) and writes a row to `_api_keys` with `{ name: "anthropic", sealed: <base64> }`; returns 204.
   - A second request with the same `name` overwrites the row (upsert by `name`).
   - Request without the correct loopback header / binding is rejected with 403 when the mounted router's middleware sees a non-loopback `req.ip` (simulate via `X-Forwarded-For` being ignored; trust proxy off).
   - Missing master key file returns 500 with `error: "master_key_missing"`.
@@ -1401,7 +1401,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
   import { Router } from "express";
   import { z } from "zod";
   import { readFile } from "fs/promises";
-  import { seal } from "@anyclaw/shared"; // sealed-box helper from Plan 1
+  import { seal } from "@anyraven/shared"; // sealed-box helper from Plan 1
   import type PocketBase from "pocketbase";
 
   const Body = z.object({ name: z.string().min(1).max(64), plaintext: z.string().min(1) });
@@ -1436,7 +1436,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
     return r;
   }
   ```
-  The `seal` helper comes from `@anyclaw/shared` (Plan 1's crypto module). If the exact export name differs, use the equivalent one-shot NaCl secretbox helper from Plan 1 — it is not re-implemented here.
+  The `seal` helper comes from `@anyraven/shared` (Plan 1's crypto module). If the exact export name differs, use the equivalent one-shot NaCl secretbox helper from Plan 1 — it is not re-implemented here.
 - [ ] **Step 4: Run and confirm pass.**
 - [ ] **Step 5: Commit** — `plan3(task20): internal /internal/api-keys endpoint sealed with master key`.
 
@@ -1447,7 +1447,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
 **Files to create:**
 - Create: `packages/dispatch/test/integration/task-lifecycle.test.ts`
 
-- [ ] **Step 1: Write the failing test** — uses a `MockAdapter` (from Task 11) that drives the lifecycle via a controllable script, a real `WorktreeManager` (imported from `@anyclaw/shared`) over a temp git repo, a real `TasksRepo` over the fake PB, a real `AdapterManager`, and the full REST router mounted by `buildApp`. Asserts:
+- [ ] **Step 1: Write the failing test** — uses a `MockAdapter` (from Task 11) that drives the lifecycle via a controllable script, a real `WorktreeManager` (imported from `@anyraven/shared`) over a temp git repo, a real `TasksRepo` over the fake PB, a real `AdapterManager`, and the full REST router mounted by `buildApp`. Asserts:
   - `queued -> working -> clarifying -> working -> deploying -> done` walks the full state machine.
   - The worktree is created after dispatch.
   - `POST /api/tasks/:id/answer` unblocks the adapter (the mock reads the answer back through the repo).
@@ -1486,7 +1486,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
       await new Promise<void>((r) => server.close(() => r()));
     });
 
-    it("mounts the MCP route from @anyclaw/mcp-server on the same app", async () => {
+    it("mounts the MCP route from @anyraven/mcp-server on the same app", async () => {
       const { server } = await buildServer({ config: testConfig });
       await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
       const addr = server.address() as any;
@@ -1508,8 +1508,8 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
   ```ts
   import http from "http";
   import express from "express";
-  import { mountMcp } from "@anyclaw/mcp-server";
-  import { WorktreeManager } from "@anyclaw/shared";
+  import { mountMcp } from "@anyraven/mcp-server";
+  import { WorktreeManager } from "@anyraven/shared";
   import { getPocketBase } from "./persistence/pocketbase-client.js";
   import { ensureDispatchCollections } from "./persistence/collections-bootstrap.js";
   import { TasksRepo } from "./persistence/tasks-repo.js";
@@ -1562,7 +1562,7 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
     }
   }
   ```
-  `buildApp(app, deps)` mounts `/api/health`, `/api/tasks`, `/api/tasks/:id/answer`, `/api/tasks/:id/cancel`, `/api/settings`, `/api/device/register`, `/api/rollback`, `/api/restart-app`, `/api/versions`, `/api/adapter/config`, `/api/adapter/health`, `/api/webhook/callback`, and `/internal/api-keys`. MCP is mounted by `mountMcp(app, ctx)` from `@anyclaw/mcp-server` — Plan 3 does not implement it.
+  `buildApp(app, deps)` mounts `/api/health`, `/api/tasks`, `/api/tasks/:id/answer`, `/api/tasks/:id/cancel`, `/api/settings`, `/api/device/register`, `/api/rollback`, `/api/restart-app`, `/api/versions`, `/api/adapter/config`, `/api/adapter/health`, `/api/webhook/callback`, and `/internal/api-keys`. MCP is mounted by `mountMcp(app, ctx)` from `@anyraven/mcp-server` — Plan 3 does not implement it.
 - [ ] **Step 4: Run and confirm pass.**
 - [ ] **Step 5: Commit** — `plan3(task22): dispatch entry point mounts MCP + REST on shared Express app`.
 
@@ -1571,15 +1571,15 @@ All imports of `WorktreeManager`, `DeployManager`, `RollbackManager`, `VersionSt
 ## Done criteria
 
 - All 22 tasks committed, each with its test(s) passing.
-- `npm run -w @anyclaw/dispatch test` runs green end-to-end (unit + integration).
-- `npm run -w @anyclaw/dispatch build` succeeds (TypeScript strict, no errors).
+- `npm run -w @anyraven/dispatch test` runs green end-to-end (unit + integration).
+- `npm run -w @anyraven/dispatch build` succeeds (TypeScript strict, no errors).
 - The dispatch server boots, runs the startup sweep, exposes `/api/health`, and can be driven by a mock adapter through the full `queued → working → clarifying → working → deploying → done` cycle.
 - Worktree isolation verified: a failed task never modifies `main` in the integration test's temp repo.
 - Exactly-once verified: duplicate `POST /api/tasks` with the same UUID never creates a second row.
 - Single-port verified: both `/mcp` (Plan 2) and `/api/*` (Plan 3) respond on the same `http.Server` instance returned by `buildServer` — the Plan 2 MCP router is mounted on the same Express app as the Plan 3 REST routers.
-- `WorktreeManager` is imported from `@anyclaw/shared` — no duplicate implementation lives in `@anyclaw/dispatch`.
+- `WorktreeManager` is imported from `@anyraven/shared` — no duplicate implementation lives in `@anyraven/dispatch`.
 - The four REST endpoints Plan 5 depends on (`GET /api/health`, `GET/PATCH /api/settings`, `POST /api/device/register`) all respond successfully.
-- The internal endpoint `POST /internal/api-keys` is reachable only from loopback and seals keys with the master key at `/data/.anyclaw/master.key` before writing them to `_api_keys`.
+- The internal endpoint `POST /internal/api-keys` is reachable only from loopback and seals keys with the master key at `/data/.anyraven/master.key` before writing them to `_api_keys`.
 - Three additional internal collections are created by `ensureDispatchCollections`: `_task_clarifications`, `_devices`, `_deployments`.
 
 ## Hand-off to downstream plans

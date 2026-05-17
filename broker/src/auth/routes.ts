@@ -54,7 +54,7 @@ export interface AuthRoutesOptions {
   google: GoogleConfig;
   apple: AppleConfig;
   github: GithubConfig;
-  /** Deep-link scheme for the mobile app. Default: 'anyclaw://auth/success'. */
+  /** Deep-link scheme for the mobile app. Default: 'anyraven://auth/success'. */
   mobileRedirect?: string;
 }
 
@@ -117,7 +117,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 ) => {
   const states = new Map<string, StateEntry>();
   const exchanges = new Map<string, ExchangeEntry>();
-  const mobileRedirect = opts.mobileRedirect ?? 'anyclaw://auth/success';
+  const mobileRedirect = opts.mobileRedirect ?? 'anyraven://auth/success';
 
   function purgeExpired(): void {
     const now = Date.now();

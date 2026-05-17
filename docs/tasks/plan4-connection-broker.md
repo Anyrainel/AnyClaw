@@ -26,7 +26,7 @@
 
 ## Repository Layout
 
-This plan scaffolds a **new standalone monorepo** at `F:/Codes/AnyRaven/broker/`, separate from `anyclaw-server`. It is its own deployable.
+This plan scaffolds a **new standalone monorepo** at `F:/Codes/AnyRaven/broker/`, separate from `anyraven-server`. It is its own deployable.
 
 ```
 F:/Codes/AnyRaven/broker/
@@ -41,7 +41,7 @@ F:/Codes/AnyRaven/broker/
 ├── docker-compose.yml
 ├── docker-compose.dev.yml        # postgres only, for local dev
 ├── systemd/
-│   └── anyclaw-broker.service
+│   └── anyraven-broker.service
 ├── src/
 │   ├── index.ts
 │   ├── config.ts
@@ -115,7 +115,7 @@ F:/Codes/AnyRaven/broker/
 
 ```json
 {
-  "name": "@anyclaw/broker",
+  "name": "@anyraven/broker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -989,15 +989,15 @@ export async function mintAccess(cfg: JwtConfig, userId: string, sessionId: stri
     .setSubject(userId)
     .setIssuedAt()
     .setExpirationTime(`${cfg.accessTtlSeconds}s`)
-    .setIssuer('anyclaw-broker')
-    .setAudience('anyclaw-mobile')
+    .setIssuer('anyraven-broker')
+    .setAudience('anyraven-mobile')
     .sign(key(cfg));
 }
 
 export async function verifyAccess(cfg: JwtConfig, token: string): Promise<{ sub: string; sid: string }> {
   const { payload } = await jwtVerify(token, key(cfg), {
-    issuer: 'anyclaw-broker',
-    audience: 'anyclaw-mobile',
+    issuer: 'anyraven-broker',
+    audience: 'anyraven-mobile',
   });
   if (typeof payload.sub !== 'string' || typeof payload.sid !== 'string') {
     throw new Error('invalid jwt claims');
@@ -1303,7 +1303,7 @@ export async function exchangeCode(cfg: GithubConfig, code: string): Promise<Git
   if (!tokRes.ok) throw new Error(`github token exchange failed: ${tokRes.status}`);
   const { access_token } = await tokRes.json() as { access_token: string };
 
-  const h = { authorization: `Bearer ${access_token}`, 'user-agent': 'anyclaw-broker' };
+  const h = { authorization: `Bearer ${access_token}`, 'user-agent': 'anyraven-broker' };
   const userRes = await fetch('https://api.github.com/user', { headers: h });
   if (!userRes.ok) throw new Error(`github /user failed: ${userRes.status}`);
   const user = await userRes.json() as { id: number; name: string | null; avatar_url: string | null };
@@ -1348,7 +1348,7 @@ Mock Apple JWKS with a locally-generated ES256 keypair so the JWT verification a
 **Files:** `src/auth/routes.ts` — a Fastify plugin exposing:
 
 - `GET /auth/oauth/:provider/start` — generates `state`, stores `(state, verifier)` in a short-lived in-memory map (5 min TTL), returns 302 to provider URL.
-- `GET /auth/oauth/:provider/callback` (Google, GitHub) and `POST /auth/oauth/apple/callback` (Apple uses `form_post`) — exchanges code, upserts `users` + `oauth_accounts`, creates a one-time exchange code (16 random bytes, 60s TTL), redirects to `anyclaw://auth/success#code=...`.
+- `GET /auth/oauth/:provider/callback` (Google, GitHub) and `POST /auth/oauth/apple/callback` (Apple uses `form_post`) — exchanges code, upserts `users` + `oauth_accounts`, creates a one-time exchange code (16 random bytes, 60s TTL), redirects to `anyraven://auth/success#code=...`.
 - `POST /auth/exchange` — trades the one-time code for `{ access_token, refresh_token, access_token_expires_in }`, creates a row in `sessions`.
 - `POST /auth/refresh` — validates the refresh token, touches the session, mints a new access JWT. Does NOT rotate the refresh token (design §4.5).
 - `POST /auth/logout` — revokes the current session.
@@ -1864,7 +1864,7 @@ services:
     ports: ['5432:5432']
 ```
 
-`F:/Codes/AnyRaven/broker/systemd/anyclaw-broker.service` (non-Docker deployment):
+`F:/Codes/AnyRaven/broker/systemd/anyraven-broker.service` (non-Docker deployment):
 
 ```ini
 [Unit]
@@ -1874,10 +1874,10 @@ Wants=postgresql.service
 
 [Service]
 Type=simple
-User=anyclaw-broker
-Group=anyclaw-broker
-WorkingDirectory=/opt/anyclaw-broker/current
-EnvironmentFile=/etc/anyclaw-broker/env
+User=anyraven-broker
+Group=anyraven-broker
+WorkingDirectory=/opt/anyraven-broker/current
+EnvironmentFile=/etc/anyraven-broker/env
 ExecStartPre=/usr/bin/node dist/db/migrate.js
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
@@ -1885,7 +1885,7 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/log/anyclaw-broker
+ReadWritePaths=/var/log/anyraven-broker
 PrivateTmp=yes
 
 [Install]
@@ -1895,7 +1895,7 @@ WantedBy=multi-user.target
 **Verify:**
 
 ```bash
-docker build -t anyclaw-broker:test F:/Codes/AnyRaven/broker
+docker build -t anyraven-broker:test F:/Codes/AnyRaven/broker
 docker compose -f F:/Codes/AnyRaven/broker/docker-compose.dev.yml up -d
 ```
 
@@ -2029,7 +2029,7 @@ cd F:/Codes/AnyRaven/broker
 pnpm install
 pnpm typecheck
 pnpm test                                   # every unit + integration + e2e test green
-docker build -t anyclaw-broker:test .       # image builds
+docker build -t anyraven-broker:test .       # image builds
 docker compose -f docker-compose.dev.yml up -d
 DATABASE_URL=postgres://broker:broker@localhost:5432/broker \
   JWT_SECRET=$(openssl rand -base64 32) \

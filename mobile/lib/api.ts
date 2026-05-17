@@ -52,7 +52,7 @@ export class ApiClient {
       headers: {
         ...(method !== "GET" && { "content-type": "application/x-nacl-box" }),
         authorization: `Bearer ${this.config.sessionToken}`,
-        "x-anyclaw-client-pk": clientPkBase64,
+        "x-anyraven-client-pk": clientPkBase64,
       },
       ...(method !== "GET" && {
         body: JSON.stringify(

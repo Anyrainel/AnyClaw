@@ -19,8 +19,8 @@ export async function mintAccess(
     .setSubject(userId)
     .setIssuedAt()
     .setExpirationTime(`${cfg.accessTtlSeconds}s`)
-    .setIssuer('anyclaw-broker')
-    .setAudience('anyclaw-mobile')
+    .setIssuer('anyraven-broker')
+    .setAudience('anyraven-mobile')
     .sign(key(cfg));
 }
 
@@ -29,8 +29,8 @@ export async function verifyAccess(
   token: string,
 ): Promise<{ sub: string; sid: string }> {
   const { payload } = await jwtVerify(token, key(cfg), {
-    issuer: 'anyclaw-broker',
-    audience: 'anyclaw-mobile',
+    issuer: 'anyraven-broker',
+    audience: 'anyraven-mobile',
   });
   if (typeof payload.sub !== 'string' || typeof payload.sid !== 'string') {
     throw new Error('invalid jwt claims');

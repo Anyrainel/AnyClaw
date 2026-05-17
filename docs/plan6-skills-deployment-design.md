@@ -12,44 +12,44 @@
 
 ### 1. Overview of Skills
 
-Skills are Markdown prompts that teach a coding agent how to work inside AnyRaven. They are authored once in `/.anyclaw/skills/` and packaged differently per agent platform (OpenClaw skills directory, Claude Code slash commands, or a concatenated system prompt for generic agents).
+Skills are Markdown prompts that teach a coding agent how to work inside AnyRaven. They are authored once in `/.anyraven/skills/` and packaged differently per agent platform (OpenClaw skills directory, Claude Code slash commands, or a concatenated system prompt for generic agents).
 
 The five skills:
 
 | Skill | Purpose | When used |
 |---|---|---|
-| `anyclaw-build-feature` | End-to-end workflow for turning a feature request into a deployed version | Every user task |
-| `anyclaw-style-guide` | Tailwind v4 tokens, component patterns, file layout, state management, voice & tone | Any frontend work |
-| `anyclaw-canonical-example` | Points the agent at `dev/_examples/welcome.tsx` as the authoritative example before any new code is written | Every task that writes frontend code |
-| `anyclaw-refactor` | Cleanup pass: extract duplication, remove dead code, tighten types | Periodic / on trigger |
-| `anyclaw-describe-version` | Non-technical version descriptions for the user's history screen | Every deploy |
+| `anyraven-build-feature` | End-to-end workflow for turning a feature request into a deployed version | Every user task |
+| `anyraven-style-guide` | Tailwind v4 tokens, component patterns, file layout, state management, voice & tone | Any frontend work |
+| `anyraven-canonical-example` | Points the agent at `dev/_examples/welcome.tsx` as the authoritative example before any new code is written | Every task that writes frontend code |
+| `anyraven-refactor` | Cleanup pass: extract duplication, remove dead code, tighten types | Periodic / on trigger |
+| `anyraven-describe-version` | Non-technical version descriptions for the user's history screen | Every deploy |
 
 **Core philosophy (decisions #5 and #23):** the agent uses its own built-in file and shell tools to read, write, edit, and run commands. AnyRaven MCP tools are reserved for operations that need server-side guarantees:
 
-- `anyclaw_deploy`
-- `anyclaw_rollback`
-- `anyclaw_snapshot_db`
-- `anyclaw_create_collection`
-- `anyclaw_ask_user`
-- `anyclaw_update_progress`
-- `anyclaw_list_versions`
+- `anyraven_deploy`
+- `anyraven_rollback`
+- `anyraven_snapshot_db`
+- `anyraven_create_collection`
+- `anyraven_ask_user`
+- `anyraven_update_progress`
+- `anyraven_list_versions`
 
-There are no `anyclaw_read_file`, `anyclaw_write_file`, `anyclaw_run_command`, `anyclaw_create_page`, or `anyclaw_create_api_route` tools. The agent uses its native equivalents for those.
+There are no `anyraven_read_file`, `anyraven_write_file`, `anyraven_run_command`, `anyraven_create_page`, or `anyraven_create_api_route` tools. The agent uses its native equivalents for those.
 
 The agent's workspace is a per-task git worktree under `/data/dev/.worktrees/task-<id>/` (decision #36). Each task runs in its own isolated worktree; on success the branch merges to `main` and the worktree is deleted. The skills treat "the workspace" and "cwd" as synonymous — the agent never walks out of its worktree.
 
 ---
 
-### 2. Skill: anyclaw-build-feature
+### 2. Skill: anyraven-build-feature
 
-The entire text of the skill as shipped in `/.anyclaw/skills/anyclaw-build-feature.md`:
+The entire text of the skill as shipped in `/.anyraven/skills/anyraven-build-feature.md`:
 
 ```markdown
 ---
 skill_version: "1.0.0"
 min_server_version: "0.1.0"
 ---
-# anyclaw-build-feature
+# anyraven-build-feature
 
 You are building a feature for a personal web application running on AnyRaven
 infrastructure. The app uses PocketBase (SQLite with auto-generated REST API),
@@ -62,18 +62,18 @@ files or shell — you already have those.
 
 AnyRaven MCP tools are only for operations that require server-side guarantees:
 
-- `anyclaw_deploy` — validate, snapshot, commit, promote dev to prod atomically
-- `anyclaw_rollback` — restore a specific version (code + DB snapshot together)
-- `anyclaw_snapshot_db` — take a DB snapshot before risky schema changes
-- `anyclaw_create_collection` — create a PocketBase collection via admin API
-- `anyclaw_ask_user` — post a clarifying question to the mobile app and wait
-- `anyclaw_update_progress` — post a progress update to the mobile app task card
-- `anyclaw_list_versions` — read deployment history
+- `anyraven_deploy` — validate, snapshot, commit, promote dev to prod atomically
+- `anyraven_rollback` — restore a specific version (code + DB snapshot together)
+- `anyraven_snapshot_db` — take a DB snapshot before risky schema changes
+- `anyraven_create_collection` — create a PocketBase collection via admin API
+- `anyraven_ask_user` — post a clarifying question to the mobile app and wait
+- `anyraven_update_progress` — post a progress update to the mobile app task card
+- `anyraven_list_versions` — read deployment history
 
 Your working directory is your task's git worktree, provided in the environment
-variable `ANYCLAW_WORKTREE` (something like `/data/dev/.worktrees/task-abc123/`).
+variable `ANYRAVEN_WORKTREE` (something like `/data/dev/.worktrees/task-abc123/`).
 Read, write, and run commands there. Do not `cd` out of it. The infrastructure
-code in `/.anyclaw/` is read-only and must never be modified.
+code in `/.anyraven/` is read-only and must never be modified.
 
 Follow this workflow exactly. Do not skip steps.
 
@@ -83,12 +83,12 @@ Before you ask the user anything or write any code, read the history. The
 user cannot see your code, so the only signal you have about their
 preferences is what you and previous agent runs have already done and said.
 
-1. Call `anyclaw_list_versions` and read the descriptions of recent
+1. Call `anyraven_list_versions` and read the descriptions of recent
    deployments. They tell you what kinds of features the user has built,
    what language they use to describe things, and what defaults they have
    already accepted.
 2. Read the `clarifications` collection in PocketBase for any prior
-   `anyclaw_ask_user` exchanges. If a question was already answered once,
+   `anyraven_ask_user` exchanges. If a question was already answered once,
    do not ask it again — apply the answer.
 3. Read `user_preferences` from PocketBase (theme, font, accent, language).
    These are NOT optional. Every UI you build adapts to them via the
@@ -96,7 +96,7 @@ preferences is what you and previous agent runs have already done and said.
 4. Read `dev/_examples/welcome.tsx`. This is the canonical example —
    the file structure, theme tokens, data fetching shape, error handling,
    loading and empty states demonstrated there are how AnyRaven code should
-   look. See the `anyclaw-canonical-example` skill.
+   look. See the `anyraven-canonical-example` skill.
 
 ## Step 1: Understand the Request
 
@@ -124,7 +124,7 @@ the version description so the user can adjust later):
   version description)
 - "How many items per page?" (pick 20)
 
-Do NOT ask more than 3 questions in a single round. Use `anyclaw_ask_user`
+Do NOT ask more than 3 questions in a single round. Use `anyraven_ask_user`
 only when you genuinely cannot pick a default that the user could later
 change with one sentence. Always check the past clarification history
 first — if the same question was already answered, reuse the answer.
@@ -143,13 +143,13 @@ Before writing code, decide which of these components are needed:
 - **Pages and components:** which UI screens are needed?
 - **Navigation:** where does this feature appear?
 
-Post your plan via `anyclaw_update_progress`:
+Post your plan via `anyraven_update_progress`:
 "Planning: [name] needs N collections, N routes, N pages, N jobs. Building now."
 
 ## Step 3: Implement — Database Layer
 
 Collections first. For each one:
-1. Call `anyclaw_create_collection` with the full schema.
+1. Call `anyraven_create_collection` with the full schema.
 2. Verify by reading back the returned schema.
 3. Create dependencies before dependents.
 
@@ -168,7 +168,7 @@ Update progress: "Implementing backend for [feature]..."
 
 Before writing a single component, re-read `dev/_examples/welcome.tsx`.
 Match its file structure, its data fetching pattern, its error and loading
-and empty state shapes. Follow the `anyclaw-style-guide` skill for all
+and empty state shapes. Follow the `anyraven-style-guide` skill for all
 CSS, component conventions, voice & tone, and the `usePreferences()` hook.
 
 Pages in `packages/frontend/src/pages/`, shared components in
@@ -223,17 +223,17 @@ Skipping any step is not allowed, even if the change "looks safe." The
 user cannot see the code — robustness comes from this cycle.
 
 Do NOT proceed to deploy if any step fails. Iterate until clean. After
-three failed attempts on the same error, use `anyclaw_ask_user` to explain
+three failed attempts on the same error, use `anyraven_ask_user` to explain
 the problem in plain language and ask for guidance.
 
 ## Step 7: Write Version Description
 
-Use the `anyclaw-describe-version` skill to write a short, non-technical
+Use the `anyraven-describe-version` skill to write a short, non-technical
 description of what the user can now do.
 
 ## Step 8: Deploy
 
-Call `anyclaw_deploy` with your version description. The deploy tool:
+Call `anyraven_deploy` with your version description. The deploy tool:
 1. Runs the full validation suite authoritatively (server-side)
 2. Snapshots the database if schema changed
 3. Commits the worktree branch and merges it to main
@@ -247,8 +247,8 @@ Update progress: "Deployed! [feature] is live."
 
 ## Rules
 
-- NEVER edit files under `/data/prod/` or `/.anyclaw/`.
-- NEVER edit PocketBase internals. Use `anyclaw_create_collection`.
+- NEVER edit files under `/data/prod/` or `/.anyraven/`.
+- NEVER edit PocketBase internals. Use `anyraven_create_collection`.
 - NEVER deploy without passing all validation steps (lint, typecheck,
   build, tests, smoke test).
 - NEVER delete existing collections unless the user explicitly asks.
@@ -259,8 +259,8 @@ Update progress: "Deployed! [feature] is live."
   the clarification history first.
 - ALWAYS read `dev/_examples/welcome.tsx` before writing any new
   frontend code.
-- ALWAYS snapshot before risky schema changes (`anyclaw_deploy` does this
-  automatically; call `anyclaw_snapshot_db` for manual experiments).
+- ALWAYS snapshot before risky schema changes (`anyraven_deploy` does this
+  automatically; call `anyraven_snapshot_db` for manual experiments).
 - ALWAYS post progress updates so the user sees what's happening.
 - ALWAYS write loading, error, and empty states for every screen.
 - If you need a new npm package, install it in the appropriate workspace.
@@ -270,16 +270,16 @@ Update progress: "Deployed! [feature] is live."
 
 ---
 
-### 3. Skill: anyclaw-style-guide
+### 3. Skill: anyraven-style-guide
 
-The full text shipped in `/.anyclaw/skills/anyclaw-style-guide.md`:
+The full text shipped in `/.anyraven/skills/anyraven-style-guide.md`:
 
 ````markdown
 ---
 skill_version: "1.0.0"
 min_server_version: "0.1.0"
 ---
-# anyclaw-style-guide
+# anyraven-style-guide
 
 You are building the frontend UI for an AnyRaven personal web app. This guide
 defines exact conventions for all React components, CSS, and any text the
@@ -355,7 +355,7 @@ Do NOT use:
 - `tailwind.config.ts` (Tailwind v4 doesn't use one)
 
 You may NOT add new `@theme` tokens without user approval via
-`anyclaw_ask_user`. Use the existing tokens only.
+`anyraven_ask_user`. Use the existing tokens only.
 
 ## The @theme block (already in app.css)
 
@@ -668,16 +668,16 @@ import { Plus, Trash2, Settings, ChevronRight } from "lucide-react";
 
 ---
 
-### 4. Skill: anyclaw-refactor
+### 4. Skill: anyraven-refactor
 
-Shipped as `/.anyclaw/skills/anyclaw-refactor.md`:
+Shipped as `/.anyraven/skills/anyraven-refactor.md`:
 
 ```markdown
 ---
 skill_version: "1.0.0"
 min_server_version: "0.1.0"
 ---
-# anyclaw-refactor
+# anyraven-refactor
 
 You are cleaning up the codebase of an AnyRaven personal web app. This skill
 runs either on a schedule (after every 5th deployment) or proactively when
@@ -732,16 +732,16 @@ Examples:
 
 ---
 
-### 5. Skill: anyclaw-describe-version
+### 5. Skill: anyraven-describe-version
 
-Shipped as `/.anyclaw/skills/anyclaw-describe-version.md`:
+Shipped as `/.anyraven/skills/anyraven-describe-version.md`:
 
 ```markdown
 ---
 skill_version: "1.0.0"
 min_server_version: "0.1.0"
 ---
-# anyclaw-describe-version
+# anyraven-describe-version
 
 You are writing a version description for a deployment of an AnyRaven
 personal web app. This appears in the user's version history. The user is
@@ -811,16 +811,16 @@ Bug fix:
 
 ---
 
-### 6. Skill: anyclaw-canonical-example
+### 6. Skill: anyraven-canonical-example
 
-Shipped as `/.anyclaw/skills/anyclaw-canonical-example.md`:
+Shipped as `/.anyraven/skills/anyraven-canonical-example.md`:
 
 ```markdown
 ---
 skill_version: "1.0.0"
 min_server_version: "0.1.0"
 ---
-# anyclaw-canonical-example
+# anyraven-canonical-example
 
 There is one file in this codebase that is the authoritative example of
 how AnyRaven frontend code should look: `dev/_examples/welcome.tsx`.
@@ -860,32 +860,32 @@ home screen with their first real feature. It is read-only reference
 material for you. Do not modify it.
 
 If `dev/_examples/welcome.tsx` is missing, that is a bug in the install
-— stop and report it via `anyclaw_ask_user`.
+— stop and report it via `anyraven_ask_user`.
 ```
 
 ---
 
 ### 7. Skill Packaging
 
-Skills are authored once in `/.anyclaw/skills/` and packaged into three formats at install time by `/.anyclaw/scripts/package-skills.sh`.
+Skills are authored once in `/.anyraven/skills/` and packaged into three formats at install time by `/.anyraven/scripts/package-skills.sh`.
 
 **Source layout:**
 ```
-/.anyclaw/skills/
-  anyclaw-build-feature.md
-  anyclaw-style-guide.md
-  anyclaw-canonical-example.md
-  anyclaw-refactor.md
-  anyclaw-describe-version.md
+/.anyraven/skills/
+  anyraven-build-feature.md
+  anyraven-style-guide.md
+  anyraven-canonical-example.md
+  anyraven-refactor.md
+  anyraven-describe-version.md
 ```
 
 **OpenClaw:** copy `.md` files (frontmatter stripped) into `~/.openclaw/skills/`. OpenClaw loads them via its normal skill discovery (`skillsDir` in `~/.openclaw/config.json`).
 
 **Claude Code:** two mechanisms.
-1. Append an `## AnyRaven Agent Instructions` block to `CLAUDE.md` telling the agent to follow `/anyclaw-build-feature` for all feature work, `/anyclaw-style-guide` for all frontend code, `/anyclaw-refactor` every 5 deployments, and `/anyclaw-describe-version` for version descriptions. The block also lists the MCP tool set so the agent knows not to expect file/shell MCP tools.
+1. Append an `## AnyRaven Agent Instructions` block to `CLAUDE.md` telling the agent to follow `/anyraven-build-feature` for all feature work, `/anyraven-style-guide` for all frontend code, `/anyraven-refactor` every 5 deployments, and `/anyraven-describe-version` for version descriptions. The block also lists the MCP tool set so the agent knows not to expect file/shell MCP tools.
 2. Copy the `.md` files to `.claude/commands/` so they become slash commands.
 
-**Generic agents (system prompt):** the packaging script concatenates all four skill bodies into `/.anyclaw/skills/system-prompt.txt`. The generic webhook adapter passes this as the system prompt when dispatching work.
+**Generic agents (system prompt):** the packaging script concatenates all four skill bodies into `/.anyraven/skills/system-prompt.txt`. The generic webhook adapter passes this as the system prompt when dispatching work.
 
 In all three packages, YAML frontmatter is stripped from the content before delivery — it only exists for versioning metadata (next section).
 
@@ -941,17 +941,17 @@ Inside one container (or one host), the supervisor runs:
 | Process | Restart | Source location | Purpose |
 |---|---|---|---|
 | `pocketbase` | always | `/usr/local/bin/pocketbase` | Data layer. SQLite + REST + Realtime SSE on :8090. |
-| `tunnel-manager` | always | `/.anyclaw/tunnel/` | Persistent WSS to the broker. Survives every other crash. |
-| `dispatch-mcp` | always | `/.anyclaw/dispatch/` | Task dispatch API + MCP HTTP/SSE + emergency rollback + restart-logic. Agent-read-only. |
+| `tunnel-manager` | always | `/.anyraven/tunnel/` | Persistent WSS to the broker. Survives every other crash. |
+| `dispatch-mcp` | always | `/.anyraven/dispatch/` | Task dispatch API + MCP HTTP/SSE + emergency rollback + restart-logic. Agent-read-only. |
 | `app-backend` | on-failure | `/data/prod/app-backend/` | Agent-modifiable Node app backend. Custom routes + jobs. |
-| `app-frontend` | always | `/.anyclaw/app-frontend/` | Express server for `/data/prod/app-frontend/`. |
+| `app-frontend` | always | `/.anyraven/app-frontend/` | Express server for `/data/prod/app-frontend/`. |
 
 Transient (not supervised):
 
 - **Agent subprocess:** spawned per task by the dispatch server with `cwd=/data/dev/.worktrees/task-<id>/`. Resource-limited at spawn time (decision #26 — no-op `ResourceLimits` interface for MVP, populated later).
 - **Vite dev server:** spawned by the agent inside its worktree during the build/test cycle. Dies when the task finishes.
 
-The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owned by `anyclaw-agent`. The agent subprocess runs as `anyclaw-agent`, so ordinary Unix permissions prevent it from touching infrastructure code. The dispatch server additionally sandboxes any MCP tool invocations that shell out so the agent cannot trick them into reading or writing outside the worktree.
+The `/.anyraven/` tree is owned by the `anyraven-infra` user; `/data/dev/` is owned by `anyraven-agent`. The agent subprocess runs as `anyraven-agent`, so ordinary Unix permissions prevent it from touching infrastructure code. The dispatch server additionally sandboxes any MCP tool invocations that shell out so the agent cannot trick them into reading or writing outside the worktree.
 
 ---
 
@@ -962,7 +962,7 @@ The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owne
   pocketbase/                       # PocketBase data (SQLite, uploads)
     pb_data/
     pb_migrations/
-  dev/                              # Agent workspace (owned by anyclaw-agent)
+  dev/                              # Agent workspace (owned by anyraven-agent)
     .git/                           # Source of truth; main branch
     .worktrees/
       task-abc123/                  # One per active task (decision #36)
@@ -980,29 +980,29 @@ The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owne
   snapshots/                        # Compressed DB snapshots for rollback
     2026-04-06T12-00-00Z.sqlite.gz
     ...
-  .anyclaw/                         # Per-instance secrets (owned anyclaw-infra, 0600)
+  .anyraven/                         # Per-instance secrets (owned anyraven-infra, 0600)
     master.key                      # AES-256-GCM master encryption key (#48)
     pb-token                        # Long-lived PocketBase API token (#47)
 
-/.anyclaw/                          # Infrastructure code (read-only to agent)
+/.anyraven/                          # Infrastructure code (read-only to agent)
   dispatch/                         # Dispatch + MCP server source
   tunnel/                           # Tunnel manager source
   app-frontend/                      # Express static server source
   skills/                           # Skill .md files
-    anyclaw-build-feature.md
-    anyclaw-style-guide.md
-    anyclaw-refactor.md
-    anyclaw-describe-version.md
+    anyraven-build-feature.md
+    anyraven-style-guide.md
+    anyraven-refactor.md
+    anyraven-describe-version.md
   scripts/
     package-skills.sh
     store-api-key.js
     bootstrap-pocketbase.sh
   systemd/                          # Unit files (native install)
-    anyclaw-pocketbase.service
-    anyclaw-tunnel.service
-    anyclaw-dispatch.service
-    anyclaw-logic.service
-    anyclaw-app-frontend.service
+    anyraven-pocketbase.service
+    anyraven-tunnel.service
+    anyraven-dispatch.service
+    anyraven-logic.service
+    anyraven-app-frontend.service
   supervisord.conf                  # Container install
 ```
 
@@ -1012,9 +1012,9 @@ The path split is the security boundary that replaces the old sandbox container.
 
 ### 11. systemd Unit Files (native install, user mode)
 
-Decision #25: systemd in user mode is preferred for native installs. Files live at `~/.config/systemd/user/` (copied from `/.anyclaw/systemd/`).
+Decision #25: systemd in user mode is preferred for native installs. Files live at `~/.config/systemd/user/` (copied from `/.anyraven/systemd/`).
 
-**`anyclaw-pocketbase.service`:**
+**`anyraven-pocketbase.service`:**
 ```ini
 [Unit]
 Description=AnyRaven PocketBase
@@ -1025,14 +1025,14 @@ Type=simple
 ExecStart=/usr/local/bin/pocketbase serve --http=127.0.0.1:8090 --dir=/data/pocketbase/pb_data
 Restart=always
 RestartSec=2
-StandardOutput=append:/data/.anyclaw/logs/pocketbase.log
-StandardError=append:/data/.anyclaw/logs/pocketbase.err
+StandardOutput=append:/data/.anyraven/logs/pocketbase.log
+StandardError=append:/data/.anyraven/logs/pocketbase.err
 
 [Install]
 WantedBy=default.target
 ```
 
-**`anyclaw-tunnel.service`:**
+**`anyraven-tunnel.service`:**
 ```ini
 [Unit]
 Description=AnyRaven Tunnel Manager
@@ -1040,50 +1040,50 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/.anyclaw/tunnel
-ExecStart=/usr/bin/node /.anyclaw/tunnel/index.js
-EnvironmentFile=/data/.anyclaw/tunnel.env
+WorkingDirectory=/.anyraven/tunnel
+ExecStart=/usr/bin/node /.anyraven/tunnel/index.js
+EnvironmentFile=/data/.anyraven/tunnel.env
 Restart=always
 RestartSec=2
-StandardOutput=append:/data/.anyclaw/logs/tunnel.log
-StandardError=append:/data/.anyclaw/logs/tunnel.err
+StandardOutput=append:/data/.anyraven/logs/tunnel.log
+StandardError=append:/data/.anyraven/logs/tunnel.err
 
 [Install]
 WantedBy=default.target
 ```
 
-**`anyclaw-dispatch.service`:**
+**`anyraven-dispatch.service`:**
 ```ini
 [Unit]
 Description=AnyRaven Dispatch + MCP Server
-After=anyclaw-pocketbase.service
-Wants=anyclaw-pocketbase.service
+After=anyraven-pocketbase.service
+Wants=anyraven-pocketbase.service
 
 [Service]
 Type=simple
-WorkingDirectory=/.anyclaw/dispatch
-ExecStart=/usr/bin/node /.anyclaw/dispatch/index.js
+WorkingDirectory=/.anyraven/dispatch
+ExecStart=/usr/bin/node /.anyraven/dispatch/index.js
 Environment=POCKETBASE_URL=http://127.0.0.1:8090
 Environment=DEV_WORKSPACE=/data/dev
 Environment=PROD_WORKSPACE=/data/prod
 Environment=SNAPSHOTS_DIR=/data/snapshots
-Environment=INFRA_DIR=/.anyclaw
-EnvironmentFile=/data/.anyclaw/dispatch.env
+Environment=INFRA_DIR=/.anyraven
+EnvironmentFile=/data/.anyraven/dispatch.env
 Restart=always
 RestartSec=2
-StandardOutput=append:/data/.anyclaw/logs/dispatch.log
-StandardError=append:/data/.anyclaw/logs/dispatch.err
+StandardOutput=append:/data/.anyraven/logs/dispatch.log
+StandardError=append:/data/.anyraven/logs/dispatch.err
 
 [Install]
 WantedBy=default.target
 ```
 
-**`anyclaw-logic.service`** (agent-modifiable; restart on failure, not on clean exit):
+**`anyraven-logic.service`** (agent-modifiable; restart on failure, not on clean exit):
 ```ini
 [Unit]
 Description=AnyRaven Logic Service (agent-built)
-After=anyclaw-pocketbase.service
-Wants=anyclaw-pocketbase.service
+After=anyraven-pocketbase.service
+Wants=anyraven-pocketbase.service
 
 [Service]
 Type=simple
@@ -1091,18 +1091,18 @@ WorkingDirectory=/data/prod/app-backend
 ExecStart=/usr/bin/node /data/prod/app-backend/index.js
 Environment=POCKETBASE_URL=http://127.0.0.1:8090
 Environment=NODE_ENV=production
-EnvironmentFile=/data/.anyclaw/logic.env
+EnvironmentFile=/data/.anyraven/logic.env
 Restart=on-failure
 RestartSec=3
 SuccessExitStatus=0
-StandardOutput=append:/data/.anyclaw/logs/logic.log
-StandardError=append:/data/.anyclaw/logs/logic.err
+StandardOutput=append:/data/.anyraven/logs/logic.log
+StandardError=append:/data/.anyraven/logs/logic.err
 
 [Install]
 WantedBy=default.target
 ```
 
-**`anyclaw-app-frontend.service`:**
+**`anyraven-app-frontend.service`:**
 ```ini
 [Unit]
 Description=AnyRaven Prod Static Server
@@ -1110,14 +1110,14 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/.anyclaw/app-frontend
-ExecStart=/usr/bin/node /.anyclaw/app-frontend/server.js
+WorkingDirectory=/.anyraven/app-frontend
+ExecStart=/usr/bin/node /.anyraven/app-frontend/server.js
 Environment=APP_FRONTEND=/data/prod/app-frontend
 Environment=PORT=5173
 Restart=always
 RestartSec=2
-StandardOutput=append:/data/.anyclaw/logs/app-frontend.log
-StandardError=append:/data/.anyclaw/logs/app-frontend.err
+StandardOutput=append:/data/.anyraven/logs/app-frontend.log
+StandardError=append:/data/.anyraven/logs/app-frontend.err
 
 [Install]
 WantedBy=default.target
@@ -1126,20 +1126,20 @@ WantedBy=default.target
 **Operational commands:**
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable anyclaw-pocketbase anyclaw-tunnel anyclaw-dispatch \
-                        anyclaw-logic anyclaw-app-frontend
-systemctl --user start  anyclaw-pocketbase anyclaw-tunnel anyclaw-dispatch \
-                        anyclaw-logic anyclaw-app-frontend
+systemctl --user enable anyraven-pocketbase anyraven-tunnel anyraven-dispatch \
+                        anyraven-logic anyraven-app-frontend
+systemctl --user start  anyraven-pocketbase anyraven-tunnel anyraven-dispatch \
+                        anyraven-logic anyraven-app-frontend
 ```
 
-Decision #28: after a successful deploy, the dispatch server shells out `systemctl --user restart anyclaw-logic` (or the supervisord equivalent inside a container) to swap the logic process onto the new prod build.
+Decision #28: after a successful deploy, the dispatch server shells out `systemctl --user restart anyraven-logic` (or the supervisord equivalent inside a container) to swap the logic process onto the new prod build.
 
 For the container path, the equivalent `supervisord.conf`:
 
 ```ini
 [supervisord]
 nodaemon=true
-logfile=/var/log/anyclaw/supervisord.log
+logfile=/var/log/anyraven/supervisord.log
 pidfile=/var/run/supervisord.pid
 user=root
 
@@ -1147,27 +1147,27 @@ user=root
 command=/usr/local/bin/pocketbase serve --http=127.0.0.1:8090 --dir=/data/pocketbase/pb_data
 autorestart=true
 startretries=10
-user=anyclaw-infra
-stdout_logfile=/var/log/anyclaw/pocketbase.log
-stderr_logfile=/var/log/anyclaw/pocketbase.err
+user=anyraven-infra
+stdout_logfile=/var/log/anyraven/pocketbase.log
+stderr_logfile=/var/log/anyraven/pocketbase.err
 
 [program:tunnel-manager]
-command=/usr/bin/node /.anyclaw/tunnel/index.js
+command=/usr/bin/node /.anyraven/tunnel/index.js
 autorestart=true
 startretries=10
-user=anyclaw-infra
-environment=BROKER_URL="%(ENV_BROKER_URL)s",ANYCLAW_USER_TOKEN="%(ENV_ANYCLAW_USER_TOKEN)s"
-stdout_logfile=/var/log/anyclaw/tunnel.log
-stderr_logfile=/var/log/anyclaw/tunnel.err
+user=anyraven-infra
+environment=BROKER_URL="%(ENV_BROKER_URL)s",ANYRAVEN_USER_TOKEN="%(ENV_ANYRAVEN_USER_TOKEN)s"
+stdout_logfile=/var/log/anyraven/tunnel.log
+stderr_logfile=/var/log/anyraven/tunnel.err
 
 [program:dispatch-mcp]
-command=/usr/bin/node /.anyclaw/dispatch/index.js
+command=/usr/bin/node /.anyraven/dispatch/index.js
 autorestart=true
 startretries=10
-user=anyclaw-infra
-environment=POCKETBASE_URL="http://127.0.0.1:8090",DEV_WORKSPACE="/data/dev",PROD_WORKSPACE="/data/prod",SNAPSHOTS_DIR="/data/snapshots",INFRA_DIR="/.anyclaw"
-stdout_logfile=/var/log/anyclaw/dispatch.log
-stderr_logfile=/var/log/anyclaw/dispatch.err
+user=anyraven-infra
+environment=POCKETBASE_URL="http://127.0.0.1:8090",DEV_WORKSPACE="/data/dev",PROD_WORKSPACE="/data/prod",SNAPSHOTS_DIR="/data/snapshots",INFRA_DIR="/.anyraven"
+stdout_logfile=/var/log/anyraven/dispatch.log
+stderr_logfile=/var/log/anyraven/dispatch.err
 
 [program:app-backend]
 command=/usr/bin/node /data/prod/app-backend/index.js
@@ -1175,19 +1175,19 @@ directory=/data/prod/app-backend
 autorestart=unexpected
 exitcodes=0
 startretries=5
-user=anyclaw-infra
+user=anyraven-infra
 environment=POCKETBASE_URL="http://127.0.0.1:8090",NODE_ENV="production"
-stdout_logfile=/var/log/anyclaw/logic.log
-stderr_logfile=/var/log/anyclaw/logic.err
+stdout_logfile=/var/log/anyraven/logic.log
+stderr_logfile=/var/log/anyraven/logic.err
 
 [program:app-frontend]
-command=/usr/bin/node /.anyclaw/app-frontend/server.js
+command=/usr/bin/node /.anyraven/app-frontend/server.js
 autorestart=true
 startretries=10
-user=anyclaw-infra
+user=anyraven-infra
 environment=APP_FRONTEND="/data/prod/app-frontend",PORT="5173"
-stdout_logfile=/var/log/anyclaw/app-frontend.log
-stderr_logfile=/var/log/anyclaw/app-frontend.err
+stdout_logfile=/var/log/anyraven/app-frontend.log
+stderr_logfile=/var/log/anyraven/app-frontend.err
 ```
 
 ---
@@ -1221,16 +1221,16 @@ RUN curl -fsSL -o /tmp/pb.zip \
  && chmod +x /usr/local/bin/pocketbase
 
 # Non-root users (decision #29)
-RUN groupadd --system anyclaw-infra \
- && useradd  --system --gid anyclaw-infra --home /.anyclaw --shell /usr/sbin/nologin anyclaw-infra \
- && groupadd --system anyclaw-agent \
- && useradd  --system --gid anyclaw-agent --home /data/dev --shell /bin/bash anyclaw-agent
+RUN groupadd --system anyraven-infra \
+ && useradd  --system --gid anyraven-infra --home /.anyraven --shell /usr/sbin/nologin anyraven-infra \
+ && groupadd --system anyraven-agent \
+ && useradd  --system --gid anyraven-agent --home /data/dev --shell /bin/bash anyraven-agent
 
 # Infrastructure code (agent-read-only)
-COPY --chown=anyclaw-infra:anyclaw-infra infra/ /.anyclaw/
-RUN cd /.anyclaw/dispatch    && npm ci --omit=dev \
- && cd /.anyclaw/tunnel      && npm ci --omit=dev \
- && cd /.anyclaw/app-frontend && npm ci --omit=dev
+COPY --chown=anyraven-infra:anyraven-infra infra/ /.anyraven/
+RUN cd /.anyraven/dispatch    && npm ci --omit=dev \
+ && cd /.anyraven/tunnel      && npm ci --omit=dev \
+ && cd /.anyraven/app-frontend && npm ci --omit=dev
 
 # Data directories
 RUN mkdir -p /data/pocketbase/pb_data \
@@ -1238,22 +1238,22 @@ RUN mkdir -p /data/pocketbase/pb_data \
              /data/prod/app-frontend \
              /data/prod/app-backend \
              /data/snapshots \
-             /data/.anyclaw/logs \
-             /var/log/anyclaw \
+             /data/.anyraven/logs \
+             /var/log/anyraven \
              /var/run \
- && chown -R anyclaw-infra:anyclaw-infra /data/pocketbase /data/prod /data/snapshots \
-                                          /data/.anyclaw  /var/log/anyclaw \
- && chown -R anyclaw-agent:anyclaw-agent /data/dev \
- && chmod 0750 /data/.anyclaw
+ && chown -R anyraven-infra:anyraven-infra /data/pocketbase /data/prod /data/snapshots \
+                                          /data/.anyraven  /var/log/anyraven \
+ && chown -R anyraven-agent:anyraven-agent /data/dev \
+ && chmod 0750 /data/.anyraven
 
 # Supervisord config
-COPY infra/supervisord.conf /etc/supervisor/conf.d/anyclaw.conf
+COPY infra/supervisord.conf /etc/supervisor/conf.d/anyraven.conf
 
 EXPOSE 8090 5173
 VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyclaw.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyraven.conf"]
 ```
 
 ---
@@ -1262,18 +1262,18 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyclaw.conf"]
 
 ```yaml
 services:
-  anyclaw:
-    image: ghcr.io/anyclaw/anyclaw:latest
-    container_name: anyclaw
+  anyraven:
+    image: ghcr.io/anyraven/anyraven:latest
+    container_name: anyraven
     restart: unless-stopped
     ports:
       - "127.0.0.1:8090:8090"   # PocketBase, loopback only
-      - "127.0.0.1:5173:5173"   # Prod static, loopback only
+      - "127.0.0.1:5173:5173"   # app-frontend, loopback only
     volumes:
-      - anyclaw_data:/data
+      - anyraven_data:/data
     environment:
       - BROKER_URL=${BROKER_URL:-https://broker.anyraven.com}
-      - ANYCLAW_USER_TOKEN=${ANYCLAW_USER_TOKEN}
+      - ANYRAVEN_USER_TOKEN=${ANYRAVEN_USER_TOKEN}
     deploy:
       resources:
         limits:
@@ -1281,7 +1281,7 @@ services:
           memory: 4G
 
 volumes:
-  anyclaw_data:
+  anyraven_data:
     driver: local
 ```
 
@@ -1306,8 +1306,8 @@ set -euo pipefail
 # AnyRaven Standalone Installer
 # ============================================================
 
-ANYCLAW_VERSION="${ANYCLAW_VERSION:-latest}"
-INSTALL_DIR="${ANYCLAW_DIR:-$HOME/.anyclaw-host}"
+ANYRAVEN_VERSION="${ANYRAVEN_VERSION:-latest}"
+INSTALL_DIR="${ANYRAVEN_DIR:-$HOME/.anyraven-host}"
 
 echo "=== AnyRaven Installer ==="
 
@@ -1363,9 +1363,9 @@ echo "[3/6] Setting up install directory..."
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-curl -fsSL "https://releases.anyraven.com/$ANYCLAW_VERSION/docker-compose.yml" \
+curl -fsSL "https://releases.anyraven.com/$ANYRAVEN_VERSION/docker-compose.yml" \
   -o docker-compose.yml
-curl -fsSL "https://releases.anyraven.com/$ANYCLAW_VERSION/env.template" \
+curl -fsSL "https://releases.anyraven.com/$ANYRAVEN_VERSION/env.template" \
   -o .env.template
 
 # ----------------------------------------------------------
@@ -1377,8 +1377,8 @@ if [ ! -f .env ]; then
   cp .env.template .env
 
   # Broker user identity token
-  ANYCLAW_USER_TOKEN=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)
-  sed -i.bak "s|ANYCLAW_USER_TOKEN=.*|ANYCLAW_USER_TOKEN=$ANYCLAW_USER_TOKEN|" .env
+  ANYRAVEN_USER_TOKEN=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)
+  sed -i.bak "s|ANYRAVEN_USER_TOKEN=.*|ANYRAVEN_USER_TOKEN=$ANYRAVEN_USER_TOKEN|" .env
   rm -f .env.bak
 
   echo
@@ -1405,7 +1405,7 @@ docker compose up -d
 # Wait for PocketBase health
 echo "Waiting for PocketBase..."
 TIMEOUT=120; ELAPSED=0
-until docker compose exec -T anyclaw \
+until docker compose exec -T anyraven \
         wget -q --spider http://127.0.0.1:8090/api/health 2>/dev/null; do
   sleep 2; ELAPSED=$((ELAPSED+2))
   [ $ELAPSED -ge $TIMEOUT ] && { echo "PocketBase failed to start"; exit 1; }
@@ -1413,28 +1413,28 @@ done
 
 # Bootstrap PocketBase admin + API token (decision #47)
 # This script runs inside the container:
-#   1. Creates a superuser with a random password (stored in /data/.anyclaw/pb-admin)
+#   1. Creates a superuser with a random password (stored in /data/.anyraven/pb-admin)
 #   2. Authenticates as superuser via the admin API
 #   3. Creates a long-lived impersonation API token
-#   4. Writes the token to /data/.anyclaw/pb-token (mode 0600, anyclaw-infra)
+#   4. Writes the token to /data/.anyraven/pb-token (mode 0600, anyraven-infra)
 echo "Bootstrapping PocketBase admin + API token..."
-docker compose exec -T anyclaw /.anyclaw/scripts/bootstrap-pocketbase.sh
+docker compose exec -T anyraven /.anyraven/scripts/bootstrap-pocketbase.sh
 
 # Generate master encryption key (decision #48)
 echo "Generating master encryption key..."
-docker compose exec -T anyclaw sh -c '
-  if [ ! -f /data/.anyclaw/master.key ]; then
-    head -c 32 /dev/urandom | base64 > /data/.anyclaw/master.key
-    chmod 0600 /data/.anyclaw/master.key
-    chown anyclaw-infra:anyclaw-infra /data/.anyclaw/master.key
+docker compose exec -T anyraven sh -c '
+  if [ ! -f /data/.anyraven/master.key ]; then
+    head -c 32 /dev/urandom | base64 > /data/.anyraven/master.key
+    chmod 0600 /data/.anyraven/master.key
+    chown anyraven-infra:anyraven-infra /data/.anyraven/master.key
   fi
 '
 
 # Store LLM key encrypted in PocketBase (decision #49: AES-256-GCM)
 if [ -n "$BOOTSTRAP_LLM_KEY" ]; then
   echo "Storing LLM API key (encrypted) in PocketBase..."
-  docker compose exec -T -e LLM_KEY="$BOOTSTRAP_LLM_KEY" anyclaw \
-    node /.anyclaw/scripts/store-api-key.js \
+  docker compose exec -T -e LLM_KEY="$BOOTSTRAP_LLM_KEY" anyraven \
+    node /.anyraven/scripts/store-api-key.js \
       --provider "$BOOTSTRAP_LLM_PROVIDER"
   unset BOOTSTRAP_LLM_KEY
 fi
@@ -1451,15 +1451,15 @@ fi
 
 case "$AGENT" in
   openclaw)
-    docker compose exec anyclaw /.anyclaw/scripts/package-skills.sh openclaw
+    docker compose exec anyraven /.anyraven/scripts/package-skills.sh openclaw
     echo "OpenClaw skills installed in ~/.openclaw/skills/"
     ;;
   claude-code)
-    docker compose exec anyclaw /.anyclaw/scripts/package-skills.sh claude-code
+    docker compose exec anyraven /.anyraven/scripts/package-skills.sh claude-code
     echo "Claude Code slash commands installed in .claude/commands/"
     echo
     echo "Add to your Claude Code MCP config:"
-    echo '  { "mcpServers": { "anyclaw": { "url": "http://localhost:3002/mcp" } } }'
+    echo '  { "mcpServers": { "anyraven": { "url": "http://localhost:3002/mcp" } } }'
     ;;
   *)
     echo "No recognized local agent found. Any MCP agent can connect at:"
@@ -1478,20 +1478,20 @@ echo "Open the AnyRaven mobile app and sign in to connect."
 
 **`bootstrap-pocketbase.sh`** (decision #47) runs inside the container and:
 
-1. Checks if `/data/.anyclaw/pb-token` already exists; exits 0 if so (idempotent).
-2. Generates a random 32-char password, writes `/data/.anyclaw/pb-admin` (mode 0600).
+1. Checks if `/data/.anyraven/pb-token` already exists; exits 0 if so (idempotent).
+2. Generates a random 32-char password, writes `/data/.anyraven/pb-admin` (mode 0600).
 3. Runs `pocketbase superuser create admin@local "<password>"` non-interactively.
 4. POSTs to `http://127.0.0.1:8090/api/admins/auth-with-password` using the generated credentials to get a superuser JWT.
 5. POSTs to `/api/collections/_superusers/impersonate/<id>` to mint a long-lived impersonation token (configurable duration, default 100 years).
-6. Writes the token to `/data/.anyclaw/pb-token` (mode 0600, owned `anyclaw-infra`).
-7. The dispatch server reads `/data/.anyclaw/pb-token` on startup and authenticates every PocketBase call with it.
+6. Writes the token to `/data/.anyraven/pb-token` (mode 0600, owned `anyraven-infra`).
+7. The dispatch server reads `/data/.anyraven/pb-token` on startup and authenticates every PocketBase call with it.
 
-**`store-api-key.js`** reads `/data/.anyclaw/master.key`, AES-256-GCM-encrypts `LLM_KEY` from env, and upserts into the PocketBase `api_keys` collection (fields: `provider`, `ciphertext`, `iv`, `auth_tag`) via the dispatch server's internal endpoint.
+**`store-api-key.js`** reads `/data/.anyraven/master.key`, AES-256-GCM-encrypts `LLM_KEY` from env, and upserts into the PocketBase `api_keys` collection (fields: `provider`, `ciphertext`, `iv`, `auth_tag`) via the dispatch server's internal endpoint.
 
 Key properties:
 - One service in the compose file.
 - PocketBase uses API-token auth (decision #20), not email/password from the dispatch server.
-- The master encryption key lives at `/data/.anyclaw/master.key` with 0600 permissions (decision #48).
+- The master encryption key lives at `/data/.anyraven/master.key` with 0600 permissions (decision #48).
 - LLM API keys live **only** in PocketBase as ciphertext (decision #21, #49). The `.env` file contains no application secrets — only the `BROKER_URL` and a broker-identity token.
 - Skills are packaged via a script inside the container so the agent's local config is updated atomically with the server.
 
@@ -1509,7 +1509,7 @@ splash screen — it is a working page that does three jobs at once:
    layout, theme tokens, `usePreferences()`, PocketBase data fetching,
    loading state, error state, empty state, voice & tone. Anything an
    agent might need to write later is shown here in working form.
-3. **Is the canonical example for the agent.** The `anyclaw-canonical-example`
+3. **Is the canonical example for the agent.** The `anyraven-canonical-example`
    skill points the agent at this exact file. Every future task reads it
    before writing new code.
 
@@ -1702,14 +1702,14 @@ A single Hetzner CX32 VPS (4 vCPU, 8GB RAM, 80GB disk, US East via Ashburn — d
 
 **VPS layout:**
 ```
-/opt/anyclaw/
+/opt/anyraven/
   provisioner/               # Node provisioner + broker API glue
     docker-compose.yml
   caddy/
     Caddyfile                # TLS + WSS routing to the broker
   users/
     user-abc123/
-      docker-compose.yml     # single `anyclaw` service, unique volume
+      docker-compose.yml     # single `anyraven` service, unique volume
       data/                  # bind-mounted to /data inside
     user-def456/
       docker-compose.yml
@@ -1726,7 +1726,7 @@ Each user's container has its own `/data` volume and its own supervisord supervi
 - Migration to per-user microVMs (Phase 2) is a straight substitution.
 
 **Provisioner responsibilities:**
-- Allocate a unique `ANYCLAW_USER_TOKEN` per user at signup.
+- Allocate a unique `ANYRAVEN_USER_TOKEN` per user at signup.
 - Template a per-user `docker-compose.yml` with unique container name, unique volume name, no host port bindings (all ingress goes through the tunnel manager).
 - Set per-user resource limits (`cpus: 0.5`, `memory: 512M` baseline; bursts allowed via overcommit).
 - Lifecycle: create, start, stop, destroy.
@@ -1764,7 +1764,7 @@ Supports $12–15/month pricing with healthy margins; BYOK users drop COGS to ~$
 
 Cloud-hosted users who choose OpenClaw as their agent get their own OpenClaw instance — not a shared one. The one-container-per-user model (decision #22) makes this clean:
 
-- **Each user's AnyRaven container also runs OpenClaw** as one of the transient processes it spawns on demand. When the dispatch server handles a task and the user has selected OpenClaw as their adapter, it spawns OpenClaw with the worktree path as CWD. OpenClaw runs inside the same container, as the `anyclaw-agent` user, with access only to `/data/dev/.worktrees/task-<id>/` and the MCP endpoint at `http://127.0.0.1:3002/mcp`.
+- **Each user's AnyRaven container also runs OpenClaw** as one of the transient processes it spawns on demand. When the dispatch server handles a task and the user has selected OpenClaw as their adapter, it spawns OpenClaw with the worktree path as CWD. OpenClaw runs inside the same container, as the `anyraven-agent` user, with access only to `/data/dev/.worktrees/task-<id>/` and the MCP endpoint at `http://127.0.0.1:3002/mcp`.
 - **Claude Code users** get the same model, except the dispatch server spawns `claude -p` instead (decision #3).
 - **There is no shared OpenClaw across users.** Each container is its own tenant boundary; cross-tenant state bleed is structurally impossible.
 - **Self-hosted plugin mode** is unchanged: the user's existing OpenClaw or Claude Code installation is packaged with AnyRaven skills by the install script, and the AnyRaven container exposes its MCP endpoint on loopback for the local agent to use.
@@ -1777,4 +1777,4 @@ For self-hosted standalone mode, the install script detects whether OpenClaw or 
 
 Part A ships four skill files authored once and packaged per-agent by a single script. Skills use YAML frontmatter for bidirectional semver compatibility checks against the dispatch server's `/api/version` endpoint. The agent uses its own file and shell tools; MCP is reserved for deploy, rollback, snapshot, create_collection, ask_user, update_progress, and list_versions.
 
-Part B ships one Docker image (or a native systemd-user install) running five supervised processes plus a transient agent subprocess per task. Self-hosted is one container via docker-compose. Cloud Phase 1 is one container per user on a Hetzner VPS fronted by Caddy. Cloud Phase 2 is a straight port to microVMs or Kubernetes with the same container internals. Each cloud user gets their own OpenClaw/Claude Code instance inside their own container — no shared agent state across tenants. All persistent secrets (PocketBase API token, master encryption key, encrypted LLM API keys) live under `/data/.anyclaw/` or inside PocketBase as AES-256-GCM ciphertexts; nothing sensitive ends up in `.env`.
+Part B ships one Docker image (or a native systemd-user install) running five supervised processes plus a transient agent subprocess per task. Self-hosted is one container via docker-compose. Cloud Phase 1 is one container per user on a Hetzner VPS fronted by Caddy. Cloud Phase 2 is a straight port to microVMs or Kubernetes with the same container internals. Each cloud user gets their own OpenClaw/Claude Code instance inside their own container — no shared agent state across tenants. All persistent secrets (PocketBase API token, master encryption key, encrypted LLM API keys) live under `/data/.anyraven/` or inside PocketBase as AES-256-GCM ciphertexts; nothing sensitive ends up in `.env`.

@@ -36,7 +36,7 @@ export async function exchangeCode(cfg: GithubConfig, code: string): Promise<Git
 
   const h = {
     authorization: `Bearer ${access_token}`,
-    'user-agent': 'anyclaw-broker',
+    'user-agent': 'anyraven-broker',
     accept: 'application/vnd.github+json',
   };
   const userRes = await fetch('https://api.github.com/user', { headers: h });

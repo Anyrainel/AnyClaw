@@ -2,7 +2,7 @@
  * Architecture boundary tests for the mobile app.
  *
  * Rules:
- *   - No file imports @anyclaw/* packages (mobile is standalone)
+ *   - No file imports @anyraven/* packages (mobile is standalone)
  *   - lib/ does not import from app/ (lib must remain framework-agnostic
  *     and usable outside of Expo Router context)
  */
@@ -39,19 +39,19 @@ function importsMatching(files: string[], pattern: RegExp): Record<string, strin
 
 // ─── external package boundaries ────────────────────────────────────────────
 
-describe("mobile — standalone, no @anyclaw/* imports", () => {
-  it("lib/ has no @anyclaw/* imports", () => {
+describe("mobile — standalone, no @anyraven/* imports", () => {
+  it("lib/ has no @anyraven/* imports", () => {
     const violations = importsMatching(
       walkTs(LIB),
-      /from ["'](@anyclaw\/[^"']+)["']/g
+      /from ["'](@anyraven\/[^"']+)["']/g
     );
     expect(violations).toEqual({});
   });
 
-  it("app/ has no @anyclaw/* imports", () => {
+  it("app/ has no @anyraven/* imports", () => {
     const violations = importsMatching(
       walkTs(APP),
-      /from ["'](@anyclaw\/[^"']+)["']/g
+      /from ["'](@anyraven\/[^"']+)["']/g
     );
     expect(violations).toEqual({});
   });

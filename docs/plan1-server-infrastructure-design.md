@@ -4,12 +4,12 @@
 
 The server infrastructure is the foundation every other AnyRaven plan builds on. It delivers:
 
-- **`@anyclaw/shared`** — the shared library consumed by all packages: NaCl crypto, gzip SQLite snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager, and the `AnyClawPaths` resolver.
-- **`@anyclaw/dispatch`** — a single Express app on `:4100` that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes and agent adapters onto. Plan 1 scaffolds the app factory and the `/health` endpoint.
-- **`@anyclaw/tunnel-manager`** — persistent WSS connection to the broker with an in-memory routing table and exponential-backoff reconnection.
-- **`@anyclaw/app-backend`** — supervises the agent-built app backend from `/data/prod/app-backend/` on `:3000`. Provides a 503 fallback when no app backend is deployed.
-- **`@anyclaw/app-frontend`** — serves `/data/prod/app-frontend/` on `:5173` with SPA fallback.
-- **`@anyclaw/frontend-template`** — a Vite + React + Tailwind v4 seed project copied into `/data/dev/` on first run by `init-data-layout.sh`.
+- **`@anyraven/shared`** — the shared library consumed by all packages: NaCl crypto, gzip SQLite snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager, and the `AnyRavenPaths` resolver.
+- **`@anyraven/dispatch`** — a single Express app on `:4100` that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes and agent adapters onto. Plan 1 scaffolds the app factory and the `/health` endpoint.
+- **`@anyraven/tunnel-manager`** — persistent WSS connection to the broker with an in-memory routing table and exponential-backoff reconnection.
+- **`@anyraven/app-backend`** — supervises the agent-built app backend from `/data/prod/app-backend/` on `:3000`. Provides a 503 fallback when no app backend is deployed.
+- **`@anyraven/app-frontend`** — serves `/data/prod/app-frontend/` on `:5173` with SPA fallback.
+- **`@anyraven/frontend-template`** — a Vite + React + Tailwind v4 seed project copied into `/data/dev/` on first run by `init-data-layout.sh`.
 - **Infrastructure** — `supervisord.conf` managing 5 supervised processes, a `Dockerfile` bundling everything, and shell scripts for PocketBase download and `/data` layout initialization.
 
 The guiding principle is **single host, single container**. There is no three-container split, no sandbox container. Everything runs in one cloud VM or one Docker container. This minimizes operational complexity while keeping process boundaries clear through `supervisord`.
@@ -41,26 +41,26 @@ Docker container (or single host)
 ### 2.2 Package Dependency Graph
 
 ```
-@anyclaw/shared
+@anyraven/shared
     ↑           ↑           ↑               ↑
-@anyclaw/   @anyclaw/   @anyclaw/       @anyclaw/
+@anyraven/   @anyraven/   @anyraven/       @anyraven/
 dispatch  tunnel-mgr  app-backend    app-frontend
     ↑
-@anyclaw/mcp-server   (Plan 2, mounted onto dispatch app)
-@anyclaw/dispatch     (Plan 3, REST routes + adapters)
+@anyraven/mcp-server   (Plan 2, mounted onto dispatch app)
+@anyraven/dispatch     (Plan 3, REST routes + adapters)
 ```
 
-`@anyclaw/frontend-template` is a standalone Vite project; it does not import `@anyclaw/shared`.
+`@anyraven/frontend-template` is a standalone Vite project; it does not import `@anyraven/shared`.
 
 ### 2.3 The Dispatch App is a Shared Express Instance
 
-`@anyclaw/dispatch` exports `createApp()` which returns a plain Express app. It does **not** call `app.listen()` itself — the entry point `packages/dispatch/src/index.ts` calls `createApp()`, then mounts are applied by Plan 2 (`mountMcp`) and Plan 3 (`mountDispatch`), and finally `app.listen(4100)` is called once. This means the MCP server, REST API, and health endpoint all share one HTTP server on `:4100`.
+`@anyraven/dispatch` exports `createApp()` which returns a plain Express app. It does **not** call `app.listen()` itself — the entry point `packages/dispatch/src/index.ts` calls `createApp()`, then mounts are applied by Plan 2 (`mountMcp`) and Plan 3 (`mountDispatch`), and finally `app.listen(4100)` is called once. This means the MCP server, REST API, and health endpoint all share one HTTP server on `:4100`.
 
 ---
 
 ## 3. Filesystem Layout
 
-All persistent state is rooted at `/data`. The `ANYCLAW_DATA_ROOT` environment variable overrides this for tests.
+All persistent state is rooted at `/data`. The `ANYRAVEN_DATA_ROOT` environment variable overrides this for tests.
 
 ```
 /data/
@@ -80,29 +80,29 @@ All persistent state is rooted at `/data`. The `ANYCLAW_DATA_ROOT` environment v
 ├── snapshots/                     gzip SQLite snapshots
 │   └── <iso-timestamp>.sqlite.gz
 │
-└── .anyclaw/                      secrets and config (0750, owned by anyclaw-infra)
+└── .anyraven/                      secrets and config (0750, owned by anyraven-infra)
     └── logs/
 ```
 
-`AnyClawPaths` (in `@anyclaw/shared`) is the single source of truth for these paths. Every package constructs an `AnyClawPaths(process.env.ANYCLAW_DATA_ROOT ?? "/data")` instance rather than hardcoding path strings.
+`AnyRavenPaths` (in `@anyraven/shared`) is the single source of truth for these paths. Every package constructs an `AnyRavenPaths(process.env.ANYRAVEN_DATA_ROOT ?? "/data")` instance rather than hardcoding path strings.
 
 ---
 
-## 4. `@anyclaw/shared` — Module Reference
+## 4. `@anyraven/shared` — Module Reference
 
-### 4.1 `AnyClawPaths`
+### 4.1 `AnyRavenPaths`
 
-Resolves all well-known filesystem paths from a configurable data root. Used by every package to avoid hardcoded strings and to allow test overrides via `ANYCLAW_DATA_ROOT`.
+Resolves all well-known filesystem paths from a configurable data root. Used by every package to avoid hardcoded strings and to allow test overrides via `ANYRAVEN_DATA_ROOT`.
 
 ```typescript
-const paths = new AnyClawPaths("/data");
+const paths = new AnyRavenPaths("/data");
 paths.dev           // "/data/dev"
 paths.devWorktrees  // "/data/dev/.worktrees"
 paths.prod          // "/data/prod"
 paths.prodFrontend  // "/data/prod/app-frontend"
 paths.prodLogic     // "/data/prod/app-backend"
 paths.snapshots     // "/data/snapshots"
-paths.secrets       // "/data/.anyclaw"
+paths.secrets       // "/data/.anyraven"
 paths.worktreeFor(taskId)           // "/data/dev/.worktrees/<taskId>"
 paths.snapshotFile(isoStamp)        // "/data/snapshots/<isoStamp>.sqlite.gz"
 ```
@@ -173,7 +173,7 @@ The container exposes ports `4100` (dispatch), `5173` (app-frontend), and `8090`
 
 ### 5.3 `init-data-layout.sh`
 
-Creates the `/data` directory tree and copies `@anyclaw/frontend-template` into `/data/dev/` on first run. Initializes the git repo in `/data/dev/` with an initial commit. Idempotent — safe to run again if `/data` already exists.
+Creates the `/data` directory tree and copies `@anyraven/frontend-template` into `/data/dev/` on first run. Initializes the git repo in `/data/dev/` with an initial commit. Idempotent — safe to run again if `/data` already exists.
 
 ---
 
@@ -189,7 +189,7 @@ Creates the `/data` directory tree and copies `@anyclaw/frontend-template` into 
 | Git operations | simple-git | Worktrees, commit, tag, checkout |
 | HTTP | Express 4.x | Dispatch scaffold; app-frontend |
 | WebSockets | ws | Tunnel manager |
-| File watching | chokidar | Logic runner |
+| File watching | chokidar | app-backend |
 | PocketBase | 0.25 binary + JS SDK 0.25 | Database + realtime |
 | Frontend seed | Vite 5 + React 18 + Tailwind v4 + lucide-react | frontend-template only |
 | Process supervision | supervisord | Inside Docker |

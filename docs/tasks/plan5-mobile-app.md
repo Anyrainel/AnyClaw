@@ -26,7 +26,7 @@ Create the Expo managed-workflow project at the repo root under `mobile/` with T
 - Prune the generated tabs; we rebuild routing in Task 3.
 - Install: `expo-router expo-secure-store expo-notifications expo-auth-session expo-web-browser expo-haptics expo-device expo-constants expo-localization react-native-webview react-native-reanimated react-native-safe-area-context react-native-gesture-handler zustand pocketbase@^0.25.0 libsodium-wrappers tweetnacl-util date-fns`
 - Dev deps: `jest-expo @testing-library/react-native @testing-library/jest-native @types/libsodium-wrappers`
-- Configure `app.json` exactly as the design doc section 3 specifies (scheme `anyclaw`, iOS deploymentTarget 15.1, Android minSdkVersion 28, plugins `expo-router` + `expo-secure-store`).
+- Configure `app.json` exactly as the design doc section 3 specifies (scheme `anyraven`, iOS deploymentTarget 15.1, Android minSdkVersion 28, plugins `expo-router` + `expo-secure-store`).
 - Configure `tsconfig.json` with strict mode and the `@/*` path alias → `./`.
 - Configure `jest-expo` preset in `package.json` with `setupFilesAfterEach` for `@testing-library/jest-native`.
 - Create the folder skeleton from section 4 of the design doc (`app/`, `components/`, `lib/`, `stores/`, `types/`) with empty `.gitkeep` placeholders.
@@ -44,7 +44,7 @@ Write `lib/crypto.ts` and `lib/crypto-storage.ts` implementing:
 
 - `initCrypto()` awaiting `sodium.ready`, idempotent.
 - `generatePairingKeypair(): Promise<{ publicKey, secretKey }>`
-- `verificationCode(clientPk, serverPk): string[]` deterministic 4-word BIP39 code derived via `crypto_generichash(8, "anyclaw-pair", clientPk || serverPk)`, reading from a bundled `lib/bip39-english.ts` wordlist (2048 words).
+- `verificationCode(clientPk, serverPk): string[]` deterministic 4-word BIP39 code derived via `crypto_generichash(8, "anyraven-pair", clientPk || serverPk)`, reading from a bundled `lib/bip39-english.ts` wordlist (2048 words).
 - `encryptJSON(plain, theirPk, mySk): Envelope` and `decryptJSON<T>(env, theirPk, mySk): T` using `crypto_box_easy`.
 - `storePairingKeys(serverId, keys)` and `loadPairingKeys(serverId)` in `lib/crypto-storage.ts` backed by `expo-secure-store`, serializing via `sodium.to_base64`/`from_base64`.
 
@@ -161,7 +161,7 @@ Implement `lib/broker.ts` per design doc §9.1:
 Implement `lib/api.ts` per design doc §10.
 
 - `ApiClient` class with `configure({ baseUrl, sessionToken, serverId, debug })`, `get<T>(path)`, `post<T>(path, body)`. `baseUrl` always points at the dispatch REST API root (`/api/*`, port 4100 on the host; in the paired-over-broker case, requests go to `https://broker.anyraven.com/relay/client` and are routed via the in-envelope `service` tag). The full host surface the app talks to: `POST /api/tasks`, `POST /api/tasks/:id/answer`, `POST /api/tasks/:id/cancel`, `POST /api/rollback`, `POST /api/restart-app`, `GET /api/versions`, `GET /api/health`, `GET /api/settings`, `PATCH /api/settings`, `POST /api/device/register`.
-- POST wraps body in `encryptJSON` under the loaded pairing keys, sends with headers `content-type: application/x-nacl-box`, `authorization: Bearer ...`, `x-anyclaw-client-pk: <base64>`, and decrypts the response.
+- POST wraps body in `encryptJSON` under the loaded pairing keys, sends with headers `content-type: application/x-nacl-box`, `authorization: Bearer ...`, `x-anyraven-client-pk: <base64>`, and decrypts the response.
 - GET sends no body, decrypts the response envelope.
 - Non-2xx responses throw `Error("HTTP ${status}")`.
 - Debug mode (from `useSettingsStore.debugEncryptedTraffic`) routes plaintext through a `lib/log-buffer.ts` ring buffer (last 500 entries) — **never** to the network.

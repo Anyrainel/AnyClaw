@@ -94,7 +94,7 @@ describe("preferences store", () => {
       accent_color: "#ff0000",
       onboarding_completed_at: "2024-01-01",
     };
-    mockSecureStore["anyclaw_preferences"] = JSON.stringify(cached);
+    mockSecureStore["anyraven_preferences"] = JSON.stringify(cached);
 
     await usePreferencesStore.getState().hydrate();
 
@@ -114,7 +114,7 @@ describe("preferences store", () => {
       accent_color: "#000",
       onboarding_completed_at: null,
     };
-    mockSecureStore["anyclaw_preferences"] = JSON.stringify(localPrefs);
+    mockSecureStore["anyraven_preferences"] = JSON.stringify(localPrefs);
 
     const remotePrefs: Preferences = {
       theme: "dark",
@@ -142,7 +142,7 @@ describe("preferences store", () => {
     expect(state.prefs.language).toBe("ja-JP");
 
     // Verify it was written back to SecureStore
-    const stored = JSON.parse(mockSecureStore["anyclaw_preferences"]);
+    const stored = JSON.parse(mockSecureStore["anyraven_preferences"]);
     expect(stored.theme).toBe("dark");
   });
 
@@ -155,7 +155,7 @@ describe("preferences store", () => {
       accent_color: "#123",
       onboarding_completed_at: null,
     };
-    mockSecureStore["anyclaw_preferences"] = JSON.stringify(localPrefs);
+    mockSecureStore["anyraven_preferences"] = JSON.stringify(localPrefs);
 
     const pbInstance = {
       collection: () => mockPbCollection,
@@ -180,7 +180,7 @@ describe("preferences store", () => {
     await usePreferencesStore.getState().set({ theme: "dark" });
 
     expect(SecureStore.setItemAsync).toHaveBeenCalled();
-    const stored = JSON.parse(mockSecureStore["anyclaw_preferences"]);
+    const stored = JSON.parse(mockSecureStore["anyraven_preferences"]);
     expect(stored.theme).toBe("dark");
   });
 
@@ -210,7 +210,7 @@ describe("preferences store", () => {
       accent_color: "#ff0000",
       onboarding_completed_at: "2024-01-01",
     };
-    mockSecureStore["anyclaw_preferences"] = JSON.stringify(cached);
+    mockSecureStore["anyraven_preferences"] = JSON.stringify(cached);
 
     await usePreferencesStore.getState().hydrate();
     expect(usePreferencesStore.getState().prefs.onboarding_completed_at).toBe("2024-01-01");

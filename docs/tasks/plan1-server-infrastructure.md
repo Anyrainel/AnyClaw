@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Scaffold the AnyRaven server monorepo as the comprehensive foundation for every other plan. Plan 1 delivers: the shared library (`@anyclaw/shared` — NaCl crypto, snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager), the dispatch scaffold (`@anyclaw/dispatch` — the single Express app on port 4100 that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes + adapters onto), the tunnel manager package (`@anyclaw/tunnel-manager` — routing table + reconnection stub for Plan 4), the logic runner (`@anyclaw/app-backend` — supervises the agent-built app backend), the app-frontend server (`@anyclaw/app-frontend` — serves built frontend), the frontend template (`@anyclaw/frontend-template` — seed project copied into `/data/dev/` on first run), the `/data` filesystem layout scripts, the pinned PocketBase 0.25 binary, the full 5-process `supervisord` config, and the Dockerfile bundling all of it.
+**Goal:** Scaffold the AnyRaven server monorepo as the comprehensive foundation for every other plan. Plan 1 delivers: the shared library (`@anyraven/shared` — NaCl crypto, snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager), the dispatch scaffold (`@anyraven/dispatch` — the single Express app on port 4100 that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes + adapters onto), the tunnel manager package (`@anyraven/tunnel-manager` — routing table + reconnection stub for Plan 4), the logic runner (`@anyraven/app-backend` — supervises the agent-built app backend), the app-frontend server (`@anyraven/app-frontend` — serves built frontend), the frontend template (`@anyraven/frontend-template` — seed project copied into `/data/dev/` on first run), the `/data` filesystem layout scripts, the pinned PocketBase 0.25 binary, the full 5-process `supervisord` config, and the Dockerfile bundling all of it.
 
-**Architecture:** TypeScript monorepo under `anyclaw-server/` using npm workspaces. All shared code lives in `packages/shared/` (imported as `@anyclaw/shared`) and is consumed by every other package. `packages/dispatch/` is a single Express app listening on port 4100 — Plan 1 creates the scaffold (app factory + `/health`), Plan 2 mounts MCP routes, Plan 3 mounts REST routes and agent adapters. `packages/tunnel-manager/`, `packages/app-backend/`, `packages/app-frontend/` are independently supervised Node services. `packages/frontend-template/` is a Vite + React + TS + Tailwind v4 source tree that is copied into `/data/dev/` by `init-data-layout.sh` on first run. All persistent state is rooted at `/data` (PocketBase, dev, prod, snapshots, `.anyclaw`). Process supervision runs via `supervisord` inside a single Docker container with 5 supervised programs: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`.
+**Architecture:** TypeScript monorepo under `anyraven-server/` using npm workspaces. All shared code lives in `packages/shared/` (imported as `@anyraven/shared`) and is consumed by every other package. `packages/dispatch/` is a single Express app listening on port 4100 — Plan 1 creates the scaffold (app factory + `/health`), Plan 2 mounts MCP routes, Plan 3 mounts REST routes and agent adapters. `packages/tunnel-manager/`, `packages/app-backend/`, `packages/app-frontend/` are independently supervised Node services. `packages/frontend-template/` is a Vite + React + TS + Tailwind v4 source tree that is copied into `/data/dev/` by `init-data-layout.sh` on first run. All persistent state is rooted at `/data` (PocketBase, dev, prod, snapshots, `.anyraven`). Process supervision runs via `supervisord` inside a single Docker container with 5 supervised programs: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`.
 
 **Tech Stack:** Node.js 20, TypeScript 5.4, npm workspaces, vitest, libsodium-wrappers, better-sqlite3 (schema-inspection only for snapshot tests), simple-git, express (dispatch scaffold + app-frontend), ws (tunnel-manager), chokidar (app-backend file watch), Vite 5 + React 18 + Tailwind v4 + lucide-react + pocketbase JS SDK 0.25 (frontend-template), supervisord, PocketBase 0.25 binary.
 
@@ -17,7 +17,7 @@
 ## File Structure
 
 ```
-anyclaw-server/
+anyraven-server/
   package.json                       # root workspace
   tsconfig.base.json                 # shared compiler options
   .gitignore
@@ -28,7 +28,7 @@ anyclaw-server/
       tsconfig.json
       src/
         index.ts                     # barrel
-        paths.ts                     # AnyClawPaths resolver
+        paths.ts                     # AnyRavenPaths resolver
         crypto.ts                    # NaCl box wrapper
         snapshots.ts                 # gzip SQLite snapshot mgr
         versionStore.ts              # git commit / tag / list / checkout
@@ -55,7 +55,7 @@ anyclaw-server/
       tsconfig.json
       src/
         index.ts
-        config.ts                    # loads /data/.anyclaw/server-token + device-keys.json
+        config.ts                    # loads /data/.anyraven/server-token + device-keys.json
         router.ts                    # in-envelope service -> local port map
         reconnect.ts                 # exp-backoff loop (logging stub in Plan 1)
       test/
@@ -105,17 +105,17 @@ anyclaw-server/
 ### Task 1: Initialize monorepo root
 
 **Files:**
-- Create: `anyclaw-server/package.json`
-- Create: `anyclaw-server/tsconfig.base.json`
-- Create: `anyclaw-server/.gitignore`
-- Create: `anyclaw-server/vitest.config.ts`
-- Create: `anyclaw-server/README.md`
+- Create: `anyraven-server/package.json`
+- Create: `anyraven-server/tsconfig.base.json`
+- Create: `anyraven-server/.gitignore`
+- Create: `anyraven-server/vitest.config.ts`
+- Create: `anyraven-server/README.md`
 
 - [ ] **Step 1: Create root `package.json`**
 
 ```json
 {
-  "name": "anyclaw-server",
+  "name": "anyraven-server",
   "private": true,
   "version": "0.1.0",
   "workspaces": ["packages/*"],
@@ -188,9 +188,9 @@ export default defineConfig({
 - [ ] **Step 5: Create minimal `README.md`**
 
 ```md
-# anyclaw-server
+# anyraven-server
 
-Server-side monorepo for AnyRaven. See docs/superpowers/specs/2026-04-04-anyclaw-design.md.
+Server-side monorepo for AnyRaven. See docs/superpowers/specs/2026-04-04-anyraven-design.md.
 
 Packages:
 - `shared` — crypto, snapshots, version store, worktrees, deploy manager, rollback manager
@@ -203,19 +203,19 @@ Packages:
 
 - [ ] **Step 6: Install and verify**
 
-Run: `cd anyclaw-server && npm install`
+Run: `cd anyraven-server && npm install`
 Expected: creates `node_modules/`, no errors.
 
-Run: `cd anyclaw-server && npx tsc --version`
+Run: `cd anyraven-server && npx tsc --version`
 Expected: `Version 5.4.x`
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add anyclaw-server/package.json anyclaw-server/tsconfig.base.json \
-        anyclaw-server/.gitignore anyclaw-server/vitest.config.ts \
-        anyclaw-server/README.md
-git commit -m "feat(plan1): init anyclaw-server monorepo root"
+git add anyraven-server/package.json anyraven-server/tsconfig.base.json \
+        anyraven-server/.gitignore anyraven-server/vitest.config.ts \
+        anyraven-server/README.md
+git commit -m "feat(plan1): init anyraven-server monorepo root"
 ```
 
 ---
@@ -223,17 +223,17 @@ git commit -m "feat(plan1): init anyclaw-server monorepo root"
 ### Task 2: Create `shared` package skeleton and `paths.ts` (TDD)
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/package.json`
-- Create: `anyclaw-server/packages/shared/tsconfig.json`
-- Create: `anyclaw-server/packages/shared/src/index.ts`
-- Create: `anyclaw-server/packages/shared/src/paths.ts`
-- Create: `anyclaw-server/packages/shared/test/paths.test.ts`
+- Create: `anyraven-server/packages/shared/package.json`
+- Create: `anyraven-server/packages/shared/tsconfig.json`
+- Create: `anyraven-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/paths.ts`
+- Create: `anyraven-server/packages/shared/test/paths.test.ts`
 
 - [ ] **Step 1: Create `packages/shared/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/shared",
+  "name": "@anyraven/shared",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -276,38 +276,38 @@ export * from "./paths.js";
 
 - [ ] **Step 4: Install deps**
 
-Run: `cd anyclaw-server && npm install`
+Run: `cd anyraven-server && npm install`
 Expected: installs libsodium-wrappers, simple-git.
 
 - [ ] **Step 5: Write failing test `test/paths.test.ts`**
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { AnyClawPaths } from "../src/paths.js";
+import { AnyRavenPaths } from "../src/paths.js";
 
-describe("AnyClawPaths", () => {
+describe("AnyRavenPaths", () => {
   it("derives all known paths from a data root", () => {
-    const p = new AnyClawPaths("/tmp/anyclaw-data");
-    expect(p.dataRoot).toBe("/tmp/anyclaw-data");
-    expect(p.pocketbase).toBe("/tmp/anyclaw-data/pocketbase");
-    expect(p.pocketbaseData).toBe("/tmp/anyclaw-data/pocketbase/pb_data");
-    expect(p.dev).toBe("/tmp/anyclaw-data/dev");
-    expect(p.devWorktrees).toBe("/tmp/anyclaw-data/dev/.worktrees");
-    expect(p.prod).toBe("/tmp/anyclaw-data/prod");
-    expect(p.prodFrontend).toBe("/tmp/anyclaw-data/prod/app-frontend");
-    expect(p.prodLogic).toBe("/tmp/anyclaw-data/prod/app-backend");
-    expect(p.snapshots).toBe("/tmp/anyclaw-data/snapshots");
-    expect(p.secrets).toBe("/tmp/anyclaw-data/.anyclaw");
-    expect(p.secretsLogs).toBe("/tmp/anyclaw-data/.anyclaw/logs");
+    const p = new AnyRavenPaths("/tmp/anyraven-data");
+    expect(p.dataRoot).toBe("/tmp/anyraven-data");
+    expect(p.pocketbase).toBe("/tmp/anyraven-data/pocketbase");
+    expect(p.pocketbaseData).toBe("/tmp/anyraven-data/pocketbase/pb_data");
+    expect(p.dev).toBe("/tmp/anyraven-data/dev");
+    expect(p.devWorktrees).toBe("/tmp/anyraven-data/dev/.worktrees");
+    expect(p.prod).toBe("/tmp/anyraven-data/prod");
+    expect(p.prodFrontend).toBe("/tmp/anyraven-data/prod/app-frontend");
+    expect(p.prodLogic).toBe("/tmp/anyraven-data/prod/app-backend");
+    expect(p.snapshots).toBe("/tmp/anyraven-data/snapshots");
+    expect(p.secrets).toBe("/tmp/anyraven-data/.anyraven");
+    expect(p.secretsLogs).toBe("/tmp/anyraven-data/.anyraven/logs");
   });
 
   it("provides worktree path for a task id", () => {
-    const p = new AnyClawPaths("/data");
+    const p = new AnyRavenPaths("/data");
     expect(p.worktreeFor("task-abc")).toBe("/data/dev/.worktrees/task-abc");
   });
 
   it("provides snapshot path for an ISO timestamp", () => {
-    const p = new AnyClawPaths("/data");
+    const p = new AnyRavenPaths("/data");
     expect(p.snapshotFile("2026-04-06T12-00-00Z")).toBe(
       "/data/snapshots/2026-04-06T12-00-00Z.sqlite.gz",
     );
@@ -317,7 +317,7 @@ describe("AnyClawPaths", () => {
 
 - [ ] **Step 6: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/paths.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/paths.test.ts`
 Expected: FAIL — module `../src/paths.js` not found.
 
 - [ ] **Step 7: Implement `src/paths.ts`**
@@ -325,7 +325,7 @@ Expected: FAIL — module `../src/paths.js` not found.
 ```ts
 import path from "node:path";
 
-export class AnyClawPaths {
+export class AnyRavenPaths {
   constructor(public readonly dataRoot: string) {}
 
   get pocketbase() { return path.posix.join(this.dataRoot, "pocketbase"); }
@@ -336,7 +336,7 @@ export class AnyClawPaths {
   get prodFrontend() { return path.posix.join(this.prod, "app-frontend"); }
   get prodLogic() { return path.posix.join(this.prod, "app-backend"); }
   get snapshots() { return path.posix.join(this.dataRoot, "snapshots"); }
-  get secrets() { return path.posix.join(this.dataRoot, ".anyclaw"); }
+  get secrets() { return path.posix.join(this.dataRoot, ".anyraven"); }
   get secretsLogs() { return path.posix.join(this.secrets, "logs"); }
 
   worktreeFor(taskId: string): string {
@@ -351,14 +351,14 @@ export class AnyClawPaths {
 
 - [ ] **Step 8: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/paths.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/paths.test.ts`
 Expected: 3 passed.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared anyclaw-server/package-lock.json
-git commit -m "feat(shared): add AnyClawPaths resolver"
+git add anyraven-server/packages/shared anyraven-server/package-lock.json
+git commit -m "feat(shared): add AnyRavenPaths resolver"
 ```
 
 ---
@@ -366,9 +366,9 @@ git commit -m "feat(shared): add AnyClawPaths resolver"
 ### Task 3: NaCl crypto module (TDD)
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/src/crypto.ts`
-- Create: `anyclaw-server/packages/shared/test/crypto.test.ts`
-- Modify: `anyclaw-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/crypto.ts`
+- Create: `anyraven-server/packages/shared/test/crypto.test.ts`
+- Modify: `anyraven-server/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Write failing test `test/crypto.test.ts`**
 
@@ -396,7 +396,7 @@ describe("crypto (NaCl box)", () => {
   it("encrypts then decrypts a round trip between two keypairs", () => {
     const alice: KeyPair = generateKeyPair();
     const bob: KeyPair = generateKeyPair();
-    const msg = new TextEncoder().encode("hello anyclaw");
+    const msg = new TextEncoder().encode("hello anyraven");
 
     const box = encrypt(msg, bob.publicKey, alice.secretKey);
     expect(box.ciphertext).toBeInstanceOf(Uint8Array);
@@ -404,7 +404,7 @@ describe("crypto (NaCl box)", () => {
     expect(box.ciphertext).not.toEqual(msg);
 
     const plain = decrypt(box, alice.publicKey, bob.secretKey);
-    expect(new TextDecoder().decode(plain)).toBe("hello anyclaw");
+    expect(new TextDecoder().decode(plain)).toBe("hello anyraven");
   });
 
   it("throws on tampered ciphertext", () => {
@@ -419,7 +419,7 @@ describe("crypto (NaCl box)", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/crypto.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/crypto.test.ts`
 Expected: FAIL — cannot find module `../src/crypto.js`.
 
 - [ ] **Step 3: Implement `src/crypto.ts`**
@@ -497,15 +497,15 @@ export * from "./crypto.js";
 
 - [ ] **Step 5: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/crypto.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/crypto.test.ts`
 Expected: 3 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared/src/crypto.ts \
-        anyclaw-server/packages/shared/test/crypto.test.ts \
-        anyclaw-server/packages/shared/src/index.ts
+git add anyraven-server/packages/shared/src/crypto.ts \
+        anyraven-server/packages/shared/test/crypto.test.ts \
+        anyraven-server/packages/shared/src/index.ts
 git commit -m "feat(shared): add NaCl box encrypt/decrypt wrapper"
 ```
 
@@ -514,9 +514,9 @@ git commit -m "feat(shared): add NaCl box encrypt/decrypt wrapper"
 ### Task 4: Snapshot manager (TDD)
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/src/snapshots.ts`
-- Create: `anyclaw-server/packages/shared/test/snapshots.test.ts`
-- Modify: `anyclaw-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/snapshots.ts`
+- Create: `anyraven-server/packages/shared/test/snapshots.test.ts`
+- Modify: `anyraven-server/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Write failing test `test/snapshots.test.ts`**
 
@@ -535,7 +535,7 @@ describe("SnapshotManager", () => {
   let mgr: SnapshotManager;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-snap-"));
+    root = mkdtempSync(join(tmpdir(), "anyraven-snap-"));
     dbPath = join(root, "data.sqlite");
     snapshotsDir = join(root, "snapshots");
     writeFileSync(dbPath, Buffer.from("SQLITE-FAKE-DB-CONTENT"));
@@ -587,7 +587,7 @@ describe("SnapshotManager", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/snapshots.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/snapshots.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `src/snapshots.ts`**
@@ -677,15 +677,15 @@ export * from "./snapshots.js";
 
 - [ ] **Step 5: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/snapshots.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/snapshots.test.ts`
 Expected: 4 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared/src/snapshots.ts \
-        anyclaw-server/packages/shared/test/snapshots.test.ts \
-        anyclaw-server/packages/shared/src/index.ts
+git add anyraven-server/packages/shared/src/snapshots.ts \
+        anyraven-server/packages/shared/test/snapshots.test.ts \
+        anyraven-server/packages/shared/src/index.ts
 git commit -m "feat(shared): add gzip SQLite SnapshotManager"
 ```
 
@@ -694,9 +694,9 @@ git commit -m "feat(shared): add gzip SQLite SnapshotManager"
 ### Task 5: Git-based version store (TDD)
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/src/versionStore.ts`
-- Create: `anyclaw-server/packages/shared/test/versionStore.test.ts`
-- Modify: `anyclaw-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/versionStore.ts`
+- Create: `anyraven-server/packages/shared/test/versionStore.test.ts`
+- Modify: `anyraven-server/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Write failing test `test/versionStore.test.ts`**
 
@@ -712,7 +712,7 @@ async function initRepo(dir: string) {
   mkdirSync(dir, { recursive: true });
   const git = simpleGit(dir);
   await git.init();
-  await git.addConfig("user.email", "test@anyclaw.local");
+  await git.addConfig("user.email", "test@anyraven.local");
   await git.addConfig("user.name", "Test");
   await git.addConfig("commit.gpgsign", "false");
   writeFileSync(join(dir, "README.md"), "init\n");
@@ -727,7 +727,7 @@ describe("VersionStore", () => {
   let store: VersionStore;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-vs-"));
+    root = mkdtempSync(join(tmpdir(), "anyraven-vs-"));
     await initRepo(root);
     store = new VersionStore(root);
   });
@@ -768,7 +768,7 @@ describe("VersionStore", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/versionStore.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/versionStore.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `src/versionStore.ts`**
@@ -860,15 +860,15 @@ export * from "./versionStore.js";
 
 - [ ] **Step 5: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/versionStore.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/versionStore.test.ts`
 Expected: 3 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared/src/versionStore.ts \
-        anyclaw-server/packages/shared/test/versionStore.test.ts \
-        anyclaw-server/packages/shared/src/index.ts
+git add anyraven-server/packages/shared/src/versionStore.ts \
+        anyraven-server/packages/shared/test/versionStore.test.ts \
+        anyraven-server/packages/shared/src/index.ts
 git commit -m "feat(shared): add git-based VersionStore"
 ```
 
@@ -877,9 +877,9 @@ git commit -m "feat(shared): add git-based VersionStore"
 ### Task 6: Worktree manager (TDD)
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/src/worktrees.ts`
-- Create: `anyclaw-server/packages/shared/test/worktrees.test.ts`
-- Modify: `anyclaw-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/worktrees.ts`
+- Create: `anyraven-server/packages/shared/test/worktrees.test.ts`
+- Modify: `anyraven-server/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Write failing test `test/worktrees.test.ts`**
 
@@ -910,7 +910,7 @@ describe("WorktreeManager", () => {
   let mgr: WorktreeManager;
 
   beforeEach(async () => {
-    const root = mkdtempSync(join(tmpdir(), "anyclaw-wt-"));
+    const root = mkdtempSync(join(tmpdir(), "anyraven-wt-"));
     repoDir = join(root, "dev");
     worktreesDir = join(repoDir, ".worktrees");
     await initRepo(repoDir);
@@ -946,7 +946,7 @@ describe("WorktreeManager", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/worktrees.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/worktrees.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `src/worktrees.ts`**
@@ -1038,15 +1038,15 @@ export * from "./worktrees.js";
 
 - [ ] **Step 5: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/worktrees.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/worktrees.test.ts`
 Expected: 3 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared/src/worktrees.ts \
-        anyclaw-server/packages/shared/test/worktrees.test.ts \
-        anyclaw-server/packages/shared/src/index.ts
+git add anyraven-server/packages/shared/src/worktrees.ts \
+        anyraven-server/packages/shared/test/worktrees.test.ts \
+        anyraven-server/packages/shared/src/index.ts
 git commit -m "feat(shared): add WorktreeManager"
 ```
 
@@ -1057,9 +1057,9 @@ git commit -m "feat(shared): add WorktreeManager"
 The DeployManager wires the pieces together: run a validator, snapshot DB (if schema changed), commit-and-tag via VersionStore, merge the task branch into main, delete the worktree, copy built artifacts into `prod/`, and restart the app backend via an injected restart callback. Every dependency is injected for testability — no real supervisord calls in this plan.
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/src/deployManager.ts`
-- Create: `anyclaw-server/packages/shared/test/deployManager.test.ts`
-- Modify: `anyclaw-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/deployManager.ts`
+- Create: `anyraven-server/packages/shared/test/deployManager.test.ts`
+- Modify: `anyraven-server/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Write failing test `test/deployManager.test.ts`**
 
@@ -1100,7 +1100,7 @@ describe("DeployManager", () => {
   let mgr: DeployManager;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-dep-"));
+    root = mkdtempSync(join(tmpdir(), "anyraven-dep-"));
     repoDir = join(root, "dev");
     prodDir = join(root, "prod");
     snapDir = join(root, "snapshots");
@@ -1199,7 +1199,7 @@ describe("DeployManager", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/deployManager.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/deployManager.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `src/deployManager.ts`**
@@ -1349,20 +1349,20 @@ export * from "./deployManager.js";
 
 - [ ] **Step 5: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/deployManager.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/deployManager.test.ts`
 Expected: 3 passed.
 
 - [ ] **Step 6: Typecheck the whole shared package**
 
-Run: `cd anyclaw-server && npx tsc -b packages/shared`
+Run: `cd anyraven-server && npx tsc -b packages/shared`
 Expected: no errors.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared/src/deployManager.ts \
-        anyclaw-server/packages/shared/test/deployManager.test.ts \
-        anyclaw-server/packages/shared/src/index.ts
+git add anyraven-server/packages/shared/src/deployManager.ts \
+        anyraven-server/packages/shared/test/deployManager.test.ts \
+        anyraven-server/packages/shared/src/index.ts
 git commit -m "feat(shared): add DeployManager orchestrator"
 ```
 
@@ -1373,9 +1373,9 @@ git commit -m "feat(shared): add DeployManager orchestrator"
 Symmetric to `DeployManager`: checks out a prior version tag, optionally restores a DB snapshot, and restarts the app backend. All dependencies injected — no supervisord coupling.
 
 **Files:**
-- Create: `anyclaw-server/packages/shared/src/rollbackManager.ts`
-- Create: `anyclaw-server/packages/shared/test/rollbackManager.test.ts`
-- Modify: `anyclaw-server/packages/shared/src/index.ts`
+- Create: `anyraven-server/packages/shared/src/rollbackManager.ts`
+- Create: `anyraven-server/packages/shared/test/rollbackManager.test.ts`
+- Modify: `anyraven-server/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Write failing test `test/rollbackManager.test.ts`**
 
@@ -1413,7 +1413,7 @@ describe("RollbackManager", () => {
   let mgr: RollbackManager;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-rb-"));
+    root = mkdtempSync(join(tmpdir(), "anyraven-rb-"));
     repoDir = join(root, "dev");
     snapDir = join(root, "snapshots");
     dbPath = join(root, "db.sqlite");
@@ -1466,7 +1466,7 @@ describe("RollbackManager", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/rollbackManager.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/rollbackManager.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `src/rollbackManager.ts`**
@@ -1532,15 +1532,15 @@ export * from "./rollbackManager.js";
 
 - [ ] **Step 5: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/shared/test/rollbackManager.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/shared/test/rollbackManager.test.ts`
 Expected: 3 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add anyclaw-server/packages/shared/src/rollbackManager.ts \
-        anyclaw-server/packages/shared/test/rollbackManager.test.ts \
-        anyclaw-server/packages/shared/src/index.ts
+git add anyraven-server/packages/shared/src/rollbackManager.ts \
+        anyraven-server/packages/shared/test/rollbackManager.test.ts \
+        anyraven-server/packages/shared/src/index.ts
 git commit -m "feat(shared): add RollbackManager orchestrator"
 ```
 
@@ -1551,16 +1551,16 @@ git commit -m "feat(shared): add RollbackManager orchestrator"
 The `dispatch` package is the single Express app that hosts MCP routes (Plan 2), REST routes (Plan 3), and agent adapters (Plan 3), all on port **4100**. Plan 1 creates only the scaffold: `createApp(opts)` returns an Express instance with `/health` wired up, and later plans call `app.use(...)` to mount their route modules. No other routes exist in Plan 1.
 
 **Files:**
-- Create: `anyclaw-server/packages/dispatch/package.json`
-- Create: `anyclaw-server/packages/dispatch/tsconfig.json`
-- Create: `anyclaw-server/packages/dispatch/src/index.ts`
-- Create: `anyclaw-server/packages/dispatch/test/health.test.ts`
+- Create: `anyraven-server/packages/dispatch/package.json`
+- Create: `anyraven-server/packages/dispatch/tsconfig.json`
+- Create: `anyraven-server/packages/dispatch/src/index.ts`
+- Create: `anyraven-server/packages/dispatch/test/health.test.ts`
 
 - [ ] **Step 1: Create `packages/dispatch/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/dispatch",
+  "name": "@anyraven/dispatch",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -1570,7 +1570,7 @@ The `dispatch` package is the single Express app that hosts MCP routes (Plan 2),
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anyclaw/shared": "*",
+    "@anyraven/shared": "*",
     "express": "^4.19.2"
   },
   "devDependencies": {
@@ -1599,7 +1599,7 @@ The `dispatch` package is the single Express app that hosts MCP routes (Plan 2),
 
 - [ ] **Step 3: Install**
 
-Run: `cd anyclaw-server && npm install`
+Run: `cd anyraven-server && npm install`
 Expected: express, supertest installed.
 
 - [ ] **Step 4: Write failing test `test/health.test.ts`**
@@ -1627,7 +1627,7 @@ describe("dispatch stub", () => {
 
 - [ ] **Step 5: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/dispatch/test/health.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/dispatch/test/health.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 6: Implement `src/index.ts`**
@@ -1661,7 +1661,7 @@ export function createApp(opts: AppOptions): Express {
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const port = Number(process.env.PORT ?? 4100);
-  const app = createApp({ version: process.env.ANYCLAW_VERSION ?? "0.1.0" });
+  const app = createApp({ version: process.env.ANYRAVEN_VERSION ?? "0.1.0" });
   app.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`[dispatch] listening on :${port}`);
@@ -1671,45 +1671,45 @@ if (isMain) {
 
 - [ ] **Step 7: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/dispatch/test/health.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/dispatch/test/health.test.ts`
 Expected: 2 passed.
 
 - [ ] **Step 8: Build the whole repo**
 
-Run: `cd anyclaw-server && npm run build`
+Run: `cd anyraven-server && npm run build`
 Expected: success, produces `packages/*/dist/`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add anyclaw-server/packages/dispatch anyclaw-server/package-lock.json
+git add anyraven-server/packages/dispatch anyraven-server/package-lock.json
 git commit -m "feat(dispatch): scaffold Express app on :4100 with /health"
 ```
 
 ---
 
-### Task 8b: `@anyclaw/tunnel-manager` package (TDD)
+### Task 8b: `@anyraven/tunnel-manager` package (TDD)
 
 A Node service that will maintain a persistent WSS connection to `broker.anyraven.com` (real WSS wiring is Plan 4). In Plan 1 we create:
-- a config loader that reads `/data/.anyclaw/server-token` and `/data/.anyclaw/device-keys.json`,
+- a config loader that reads `/data/.anyraven/server-token` and `/data/.anyraven/device-keys.json`,
 - a routing table that maps the in-envelope `service` tag (`pb`/`api`/`app`) to a local port (`8090`/`4100`/`5173`),
 - a reconnection loop with exponential backoff that only logs (no real WSS).
 
 **Files:**
-- Create: `anyclaw-server/packages/tunnel-manager/package.json`
-- Create: `anyclaw-server/packages/tunnel-manager/tsconfig.json`
-- Create: `anyclaw-server/packages/tunnel-manager/src/index.ts`
-- Create: `anyclaw-server/packages/tunnel-manager/src/config.ts`
-- Create: `anyclaw-server/packages/tunnel-manager/src/router.ts`
-- Create: `anyclaw-server/packages/tunnel-manager/src/reconnect.ts`
-- Create: `anyclaw-server/packages/tunnel-manager/test/router.test.ts`
-- Create: `anyclaw-server/packages/tunnel-manager/test/config.test.ts`
+- Create: `anyraven-server/packages/tunnel-manager/package.json`
+- Create: `anyraven-server/packages/tunnel-manager/tsconfig.json`
+- Create: `anyraven-server/packages/tunnel-manager/src/index.ts`
+- Create: `anyraven-server/packages/tunnel-manager/src/config.ts`
+- Create: `anyraven-server/packages/tunnel-manager/src/router.ts`
+- Create: `anyraven-server/packages/tunnel-manager/src/reconnect.ts`
+- Create: `anyraven-server/packages/tunnel-manager/test/router.test.ts`
+- Create: `anyraven-server/packages/tunnel-manager/test/config.test.ts`
 
 - [ ] **Step 1: Create `packages/tunnel-manager/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/tunnel-manager",
+  "name": "@anyraven/tunnel-manager",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -1719,7 +1719,7 @@ A Node service that will maintain a persistent WSS connection to `broker.anyrave
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anyclaw/shared": "*",
+    "@anyraven/shared": "*",
     "ws": "^8.17.0"
   },
   "devDependencies": {
@@ -1744,7 +1744,7 @@ A Node service that will maintain a persistent WSS connection to `broker.anyrave
 
 - [ ] **Step 3: Install**
 
-Run: `cd anyclaw-server && npm install`
+Run: `cd anyraven-server && npm install`
 Expected: ws and types installed.
 
 - [ ] **Step 4: Write failing test `test/router.test.ts`**
@@ -1794,14 +1794,14 @@ describe("loadTunnelConfig", () => {
   let secretsDir: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-tun-"));
-    secretsDir = join(root, ".anyclaw");
+    root = mkdtempSync(join(tmpdir(), "anyraven-tun-"));
+    secretsDir = join(root, ".anyraven");
     mkdirSync(secretsDir, { recursive: true });
   });
 
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-  it("loads server token and device keys from .anyclaw/", async () => {
+  it("loads server token and device keys from .anyraven/", async () => {
     writeFileSync(join(secretsDir, "server-token"), "tok-123\n");
     writeFileSync(
       join(secretsDir, "device-keys.json"),
@@ -1825,7 +1825,7 @@ describe("loadTunnelConfig", () => {
 
 - [ ] **Step 6: Run tests — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/tunnel-manager/test/`
+Run: `cd anyraven-server && npx vitest run packages/tunnel-manager/test/`
 Expected: FAIL — modules not found.
 
 - [ ] **Step 7: Implement `src/router.ts`**
@@ -1948,7 +1948,7 @@ export * from "./reconnect.js";
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  const secretsDir = process.env.ANYCLAW_SECRETS_DIR ?? "/data/.anyclaw";
+  const secretsDir = process.env.ANYRAVEN_SECRETS_DIR ?? "/data/.anyraven";
   loadTunnelConfig({ secretsDir }).then(cfg => {
     const router = new ServiceRouter({ pb: 8090, api: 4100, app: 5173 });
     // eslint-disable-next-line no-console
@@ -1968,35 +1968,35 @@ if (isMain) {
 
 - [ ] **Step 11: Run tests — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/tunnel-manager/test/`
+Run: `cd anyraven-server && npx vitest run packages/tunnel-manager/test/`
 Expected: all green.
 
 - [ ] **Step 12: Commit**
 
 ```bash
-git add anyclaw-server/packages/tunnel-manager anyclaw-server/package-lock.json
+git add anyraven-server/packages/tunnel-manager anyraven-server/package-lock.json
 git commit -m "feat(tunnel-manager): scaffold config loader, router, reconnect stub"
 ```
 
 ---
 
-### Task 8c: `@anyclaw/app-backend` package (TDD)
+### Task 8c: `@anyraven/app-backend` package (TDD)
 
 A small Node process that runs the agent-built app backend from `/data/prod/app-backend/index.js` on port **3000**. If the file doesn't exist, it instead serves a single endpoint that returns 503 with `{"error":"no_app_backend_deployed"}`. Watches `/data/prod/app-backend/` for changes and restarts the inner process.
 
 **Files:**
-- Create: `anyclaw-server/packages/app-backend/package.json`
-- Create: `anyclaw-server/packages/app-backend/tsconfig.json`
-- Create: `anyclaw-server/packages/app-backend/src/index.ts`
-- Create: `anyclaw-server/packages/app-backend/src/fallback.ts`
-- Create: `anyclaw-server/packages/app-backend/test/fallback.test.ts`
-- Create: `anyclaw-server/packages/app-backend/test/runner.test.ts`
+- Create: `anyraven-server/packages/app-backend/package.json`
+- Create: `anyraven-server/packages/app-backend/tsconfig.json`
+- Create: `anyraven-server/packages/app-backend/src/index.ts`
+- Create: `anyraven-server/packages/app-backend/src/fallback.ts`
+- Create: `anyraven-server/packages/app-backend/test/fallback.test.ts`
+- Create: `anyraven-server/packages/app-backend/test/runner.test.ts`
 
 - [ ] **Step 1: Create `packages/app-backend/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/app-backend",
+  "name": "@anyraven/app-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -2006,7 +2006,7 @@ A small Node process that runs the agent-built app backend from `/data/prod/app-
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anyclaw/shared": "*",
+    "@anyraven/shared": "*",
     "chokidar": "^3.6.0",
     "express": "^4.19.2"
   },
@@ -2034,7 +2034,7 @@ A small Node process that runs the agent-built app backend from `/data/prod/app-
 
 - [ ] **Step 3: Install**
 
-Run: `cd anyclaw-server && npm install`
+Run: `cd anyraven-server && npm install`
 
 - [ ] **Step 4: Write failing test `test/fallback.test.ts`**
 
@@ -2071,7 +2071,7 @@ describe("AppBackendRunner", () => {
   let buildDir: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-lr-"));
+    root = mkdtempSync(join(tmpdir(), "anyraven-lr-"));
     buildDir = join(root, "app-backend");
     mkdirSync(buildDir, { recursive: true });
   });
@@ -2107,7 +2107,7 @@ describe("AppBackendRunner", () => {
 
 - [ ] **Step 6: Run tests — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/app-backend/test/`
+Run: `cd anyraven-server && npx vitest run packages/app-backend/test/`
 Expected: FAIL.
 
 - [ ] **Step 7: Implement `src/fallback.ts`**
@@ -2217,33 +2217,33 @@ if (isMain) {
 
 - [ ] **Step 9: Run tests — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/app-backend/test/`
+Run: `cd anyraven-server && npx vitest run packages/app-backend/test/`
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add anyclaw-server/packages/app-backend anyclaw-server/package-lock.json
+git add anyraven-server/packages/app-backend anyraven-server/package-lock.json
 git commit -m "feat(app-backend): supervise agent-built app backend on :3000"
 ```
 
 ---
 
-### Task 8d: `@anyclaw/app-frontend` package (TDD)
+### Task 8d: `@anyraven/app-frontend` package (TDD)
 
 A small Express server that serves static files from `/data/prod/app-frontend/` on port **5173**. If the directory is empty (nothing has been deployed), it serves a placeholder "Welcome to AnyRaven — your agent has not built anything yet" HTML page. SPA fallback: unknown routes return `index.html`.
 
 **Files:**
-- Create: `anyclaw-server/packages/app-frontend/package.json`
-- Create: `anyclaw-server/packages/app-frontend/tsconfig.json`
-- Create: `anyclaw-server/packages/app-frontend/src/index.ts`
-- Create: `anyclaw-server/packages/app-frontend/src/placeholder.ts`
-- Create: `anyclaw-server/packages/app-frontend/test/server.test.ts`
+- Create: `anyraven-server/packages/app-frontend/package.json`
+- Create: `anyraven-server/packages/app-frontend/tsconfig.json`
+- Create: `anyraven-server/packages/app-frontend/src/index.ts`
+- Create: `anyraven-server/packages/app-frontend/src/placeholder.ts`
+- Create: `anyraven-server/packages/app-frontend/test/server.test.ts`
 
 - [ ] **Step 1: Create `packages/app-frontend/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/app-frontend",
+  "name": "@anyraven/app-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -2278,7 +2278,7 @@ A small Express server that serves static files from `/data/prod/app-frontend/` 
 
 - [ ] **Step 3: Install**
 
-Run: `cd anyclaw-server && npm install`
+Run: `cd anyraven-server && npm install`
 
 - [ ] **Step 4: Write failing test `test/server.test.ts`**
 
@@ -2294,7 +2294,7 @@ describe("app-frontend", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "anyclaw-ps-"));
+    root = mkdtempSync(join(tmpdir(), "anyraven-ps-"));
   });
 
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
@@ -2338,7 +2338,7 @@ describe("app-frontend", () => {
 
 - [ ] **Step 5: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/app-frontend/test/`
+Run: `cd anyraven-server && npx vitest run packages/app-frontend/test/`
 Expected: FAIL.
 
 - [ ] **Step 6: Implement `src/placeholder.ts`**
@@ -2410,38 +2410,38 @@ if (isMain) {
 
 - [ ] **Step 8: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/app-frontend/test/`
+Run: `cd anyraven-server && npx vitest run packages/app-frontend/test/`
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add anyclaw-server/packages/app-frontend anyclaw-server/package-lock.json
+git add anyraven-server/packages/app-frontend anyraven-server/package-lock.json
 git commit -m "feat(app-frontend): Express static server on :5173 with placeholder"
 ```
 
 ---
 
-### Task 8e: `@anyclaw/frontend-template` package (TDD)
+### Task 8e: `@anyraven/frontend-template` package (TDD)
 
 A Vite + React + TypeScript + Tailwind v4 seed project copied into `/data/dev/` on first run. Plan 1 creates the scaffold only — the FULL `@theme` color values, real welcome page content, and the real PocketBase-backed `usePreferences` integration are locked in Plan 6. Plan 1 provides the package shell, hook contract, and a verifying build test.
 
 **Files:**
-- Create: `anyclaw-server/packages/frontend-template/package.json`
-- Create: `anyclaw-server/packages/frontend-template/tsconfig.json`
-- Create: `anyclaw-server/packages/frontend-template/vite.config.ts`
-- Create: `anyclaw-server/packages/frontend-template/index.html`
-- Create: `anyclaw-server/packages/frontend-template/src/main.tsx`
-- Create: `anyclaw-server/packages/frontend-template/src/App.tsx`
-- Create: `anyclaw-server/packages/frontend-template/src/app.css`
-- Create: `anyclaw-server/packages/frontend-template/src/lib/usePreferences.ts`
-- Create: `anyclaw-server/packages/frontend-template/test/usePreferences.test.ts`
-- Create: `anyclaw-server/packages/frontend-template/test/build.test.ts`
+- Create: `anyraven-server/packages/frontend-template/package.json`
+- Create: `anyraven-server/packages/frontend-template/tsconfig.json`
+- Create: `anyraven-server/packages/frontend-template/vite.config.ts`
+- Create: `anyraven-server/packages/frontend-template/index.html`
+- Create: `anyraven-server/packages/frontend-template/src/main.tsx`
+- Create: `anyraven-server/packages/frontend-template/src/App.tsx`
+- Create: `anyraven-server/packages/frontend-template/src/app.css`
+- Create: `anyraven-server/packages/frontend-template/src/lib/usePreferences.ts`
+- Create: `anyraven-server/packages/frontend-template/test/usePreferences.test.ts`
+- Create: `anyraven-server/packages/frontend-template/test/build.test.ts`
 
 - [ ] **Step 1: Create `package.json`**
 
 ```json
 {
-  "name": "@anyclaw/frontend-template",
+  "name": "@anyraven/frontend-template",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -2633,16 +2633,16 @@ describe("frontend-template build", () => {
 
 - [ ] **Step 11: Install and run tests**
 
-Run: `cd anyclaw-server && npm install`
-Run: `cd anyclaw-server && npx vitest run packages/frontend-template/test/usePreferences.test.ts`
+Run: `cd anyraven-server && npm install`
+Run: `cd anyraven-server && npx vitest run packages/frontend-template/test/usePreferences.test.ts`
 Expected: pass.
-Run: `cd anyclaw-server && npx vitest run packages/frontend-template/test/build.test.ts`
+Run: `cd anyraven-server && npx vitest run packages/frontend-template/test/build.test.ts`
 Expected: pass; `packages/frontend-template/dist/index.html` exists.
 
 - [ ] **Step 12: Commit**
 
 ```bash
-git add anyclaw-server/packages/frontend-template anyclaw-server/package-lock.json
+git add anyraven-server/packages/frontend-template anyraven-server/package-lock.json
 git commit -m "feat(frontend-template): Vite+React+Tailwind v4 seed for /data/dev"
 ```
 
@@ -2655,12 +2655,12 @@ git commit -m "feat(frontend-template): Vite+React+Tailwind v4 seed for /data/de
 
 - [ ] **Step 1: Run all tests**
 
-Run: `cd anyclaw-server && npm test`
+Run: `cd anyraven-server && npm test`
 Expected: all suites pass (paths, crypto, snapshots, versionStore, worktrees, deployManager, rollbackManager, dispatch health, tunnel-manager router+config, app-backend fallback+runner, app-frontend server, frontend-template usePreferences + build).
 
 - [ ] **Step 2: Typecheck the whole repo**
 
-Run: `cd anyclaw-server && npm run typecheck`
+Run: `cd anyraven-server && npm run typecheck`
 Expected: zero errors.
 
 - [ ] **Step 3: Commit (only if anything changed)**
@@ -2675,7 +2675,7 @@ git status
 ### Task 10: Filesystem layout init script
 
 **Files:**
-- Create: `anyclaw-server/infra/scripts/init-data-layout.sh`
+- Create: `anyraven-server/infra/scripts/init-data-layout.sh`
 
 - [ ] **Step 1: Create `init-data-layout.sh`**
 
@@ -2686,7 +2686,7 @@ git status
 set -euo pipefail
 
 DATA_ROOT="${DATA_ROOT:-/data}"
-FRONTEND_TEMPLATE_SRC="${FRONTEND_TEMPLATE_SRC:-/anyclaw/frontend-template}"
+FRONTEND_TEMPLATE_SRC="${FRONTEND_TEMPLATE_SRC:-/anyraven/frontend-template}"
 
 mkdir -p "$DATA_ROOT/pocketbase/pb_data"
 mkdir -p "$DATA_ROOT/dev"
@@ -2694,9 +2694,9 @@ mkdir -p "$DATA_ROOT/dev/.worktrees"
 mkdir -p "$DATA_ROOT/prod/app-frontend"
 mkdir -p "$DATA_ROOT/prod/app-backend"
 mkdir -p "$DATA_ROOT/snapshots"
-mkdir -p "$DATA_ROOT/.anyclaw/logs"
+mkdir -p "$DATA_ROOT/.anyraven/logs"
 
-chmod 0750 "$DATA_ROOT/.anyclaw" || true
+chmod 0750 "$DATA_ROOT/.anyraven" || true
 
 # On first run, seed /data/dev with the frontend template so the agent has
 # something to start with. We detect "first run" by the absence of .git.
@@ -2713,7 +2713,7 @@ if [ ! -d "$DATA_ROOT/dev/.git" ]; then
 
   ( cd "$DATA_ROOT/dev" \
     && git init --initial-branch=main \
-    && git config user.email "anyclaw@local" \
+    && git config user.email "anyraven@local" \
     && git config user.name  "AnyRaven" \
     && git config commit.gpgsign false \
     && [ -f README.md ] || : > README.md \
@@ -2729,14 +2729,14 @@ echo "AnyRaven data layout ready at $DATA_ROOT"
 
 - [ ] **Step 2: Make it executable and test locally**
 
-Run: `chmod +x anyclaw-server/infra/scripts/init-data-layout.sh`
-Run: `DATA_ROOT=$(mktemp -d)/data bash anyclaw-server/infra/scripts/init-data-layout.sh`
+Run: `chmod +x anyraven-server/infra/scripts/init-data-layout.sh`
+Run: `DATA_ROOT=$(mktemp -d)/data bash anyraven-server/infra/scripts/init-data-layout.sh`
 Expected: prints "AnyRaven data layout ready at ...", creates the directories, initializes git repo, exit 0.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add anyclaw-server/infra/scripts/init-data-layout.sh
+git add anyraven-server/infra/scripts/init-data-layout.sh
 git commit -m "feat(infra): add init-data-layout.sh"
 ```
 
@@ -2745,7 +2745,7 @@ git commit -m "feat(infra): add init-data-layout.sh"
 ### Task 11: PocketBase download script
 
 **Files:**
-- Create: `anyclaw-server/infra/scripts/download-pocketbase.sh`
+- Create: `anyraven-server/infra/scripts/download-pocketbase.sh`
 
 - [ ] **Step 1: Create `download-pocketbase.sh`**
 
@@ -2790,12 +2790,12 @@ echo "Installed: $DEST"
 
 - [ ] **Step 2: Make executable**
 
-Run: `chmod +x anyclaw-server/infra/scripts/download-pocketbase.sh`
+Run: `chmod +x anyraven-server/infra/scripts/download-pocketbase.sh`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add anyclaw-server/infra/scripts/download-pocketbase.sh
+git add anyraven-server/infra/scripts/download-pocketbase.sh
 git commit -m "feat(infra): add download-pocketbase.sh"
 ```
 
@@ -2804,14 +2804,14 @@ git commit -m "feat(infra): add download-pocketbase.sh"
 ### Task 12: supervisord configuration
 
 **Files:**
-- Create: `anyclaw-server/infra/supervisord.conf`
+- Create: `anyraven-server/infra/supervisord.conf`
 
 - [ ] **Step 1: Create `supervisord.conf`** (Plan 1 supervises all 5 processes: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`.)
 
 ```ini
 [supervisord]
 nodaemon=true
-logfile=/var/log/anyclaw/supervisord.log
+logfile=/var/log/anyraven/supervisord.log
 pidfile=/var/run/supervisord.pid
 user=root
 
@@ -2829,57 +2829,57 @@ serverurl=unix:///var/run/supervisor.sock
 command=/usr/local/bin/pocketbase serve --http=127.0.0.1:8090 --dir=/data/pocketbase/pb_data
 autorestart=true
 startretries=10
-user=anyclaw-infra
-stdout_logfile=/var/log/anyclaw/pocketbase.log
-stderr_logfile=/var/log/anyclaw/pocketbase.err
+user=anyraven-infra
+stdout_logfile=/var/log/anyraven/pocketbase.log
+stderr_logfile=/var/log/anyraven/pocketbase.err
 
 [program:dispatch]
-command=/usr/bin/node /anyclaw/dispatch/dist/index.js
-directory=/anyclaw/dispatch
+command=/usr/bin/node /anyraven/dispatch/dist/index.js
+directory=/anyraven/dispatch
 autorestart=true
 startretries=10
-user=anyclaw-infra
-environment=POCKETBASE_URL="http://127.0.0.1:8090",DEV_WORKSPACE="/data/dev",PROD_WORKSPACE="/data/prod",SNAPSHOTS_DIR="/data/snapshots",INFRA_DIR="/anyclaw",PORT="4100",ANYCLAW_VERSION="0.1.0"
-stdout_logfile=/var/log/anyclaw/dispatch.log
-stderr_logfile=/var/log/anyclaw/dispatch.err
+user=anyraven-infra
+environment=POCKETBASE_URL="http://127.0.0.1:8090",DEV_WORKSPACE="/data/dev",PROD_WORKSPACE="/data/prod",SNAPSHOTS_DIR="/data/snapshots",INFRA_DIR="/anyraven",PORT="4100",ANYRAVEN_VERSION="0.1.0"
+stdout_logfile=/var/log/anyraven/dispatch.log
+stderr_logfile=/var/log/anyraven/dispatch.err
 
 [program:tunnel-manager]
-command=/usr/bin/node /anyclaw/tunnel-manager/dist/index.js
-directory=/anyclaw/tunnel-manager
+command=/usr/bin/node /anyraven/tunnel-manager/dist/index.js
+directory=/anyraven/tunnel-manager
 autorestart=true
 startretries=10
-user=anyclaw-infra
-environment=ANYCLAW_SECRETS_DIR="/data/.anyclaw"
-stdout_logfile=/var/log/anyclaw/tunnel-manager.log
-stderr_logfile=/var/log/anyclaw/tunnel-manager.err
+user=anyraven-infra
+environment=ANYRAVEN_SECRETS_DIR="/data/.anyraven"
+stdout_logfile=/var/log/anyraven/tunnel-manager.log
+stderr_logfile=/var/log/anyraven/tunnel-manager.err
 
 [program:app-backend]
-command=/usr/bin/node /anyclaw/app-backend/dist/index.js
-directory=/anyclaw/app-backend
+command=/usr/bin/node /anyraven/app-backend/dist/index.js
+directory=/anyraven/app-backend
 ; app-backend wraps agent-authored code, which might crash — use on-failure
 ; so supervisord still restarts it but does not hide a crash loop.
 autorestart=unexpected
 startretries=20
-user=anyclaw-infra
+user=anyraven-infra
 environment=APP_BACKEND_DIR="/data/prod/app-backend",PORT="3000"
-stdout_logfile=/var/log/anyclaw/app-backend.log
-stderr_logfile=/var/log/anyclaw/app-backend.err
+stdout_logfile=/var/log/anyraven/app-backend.log
+stderr_logfile=/var/log/anyraven/app-backend.err
 
 [program:app-frontend]
-command=/usr/bin/node /anyclaw/app-frontend/dist/index.js
-directory=/anyclaw/app-frontend
+command=/usr/bin/node /anyraven/app-frontend/dist/index.js
+directory=/anyraven/app-frontend
 autorestart=true
 startretries=10
-user=anyclaw-infra
+user=anyraven-infra
 environment=APP_FRONTEND_DIR="/data/prod/app-frontend",PORT="5173"
-stdout_logfile=/var/log/anyclaw/app-frontend.log
-stderr_logfile=/var/log/anyclaw/app-frontend.err
+stdout_logfile=/var/log/anyraven/app-frontend.log
+stderr_logfile=/var/log/anyraven/app-frontend.err
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add anyclaw-server/infra/supervisord.conf
+git add anyraven-server/infra/supervisord.conf
 git commit -m "feat(infra): add supervisord.conf with all 5 supervised processes"
 ```
 
@@ -2888,8 +2888,8 @@ git commit -m "feat(infra): add supervisord.conf with all 5 supervised processes
 ### Task 13: Dockerfile
 
 **Files:**
-- Create: `anyclaw-server/infra/Dockerfile`
-- Create: `anyclaw-server/.dockerignore`
+- Create: `anyraven-server/infra/Dockerfile`
+- Create: `anyraven-server/.dockerignore`
 
 - [ ] **Step 1: Create `.dockerignore`**
 
@@ -2937,30 +2937,30 @@ RUN curl -fsSL -o /tmp/pb.zip \
  && chmod +x /usr/local/bin/pocketbase
 
 # Non-root users
-RUN groupadd --system anyclaw-infra \
- && useradd  --system --gid anyclaw-infra --home /anyclaw --shell /usr/sbin/nologin anyclaw-infra \
- && groupadd --system anyclaw-agent \
- && useradd  --system --gid anyclaw-agent --home /data/dev --shell /bin/bash anyclaw-agent
+RUN groupadd --system anyraven-infra \
+ && useradd  --system --gid anyraven-infra --home /anyraven --shell /usr/sbin/nologin anyraven-infra \
+ && groupadd --system anyraven-agent \
+ && useradd  --system --gid anyraven-agent --home /data/dev --shell /bin/bash anyraven-agent
 
 # Bundle all 5 supervised packages + shared (runtime artifacts only)
-RUN mkdir -p /anyclaw/dispatch /anyclaw/shared /anyclaw/tunnel-manager \
-             /anyclaw/app-backend /anyclaw/app-frontend /anyclaw/frontend-template
-COPY --from=builder /build/packages/dispatch/dist             /anyclaw/dispatch/dist
-COPY --from=builder /build/packages/dispatch/package.json     /anyclaw/dispatch/package.json
-COPY --from=builder /build/packages/shared/dist               /anyclaw/shared/dist
-COPY --from=builder /build/packages/shared/package.json       /anyclaw/shared/package.json
-COPY --from=builder /build/packages/tunnel-manager/dist       /anyclaw/tunnel-manager/dist
-COPY --from=builder /build/packages/tunnel-manager/package.json /anyclaw/tunnel-manager/package.json
-COPY --from=builder /build/packages/app-backend/dist         /anyclaw/app-backend/dist
-COPY --from=builder /build/packages/app-backend/package.json /anyclaw/app-backend/package.json
-COPY --from=builder /build/packages/app-frontend/dist          /anyclaw/app-frontend/dist
-COPY --from=builder /build/packages/app-frontend/package.json  /anyclaw/app-frontend/package.json
+RUN mkdir -p /anyraven/dispatch /anyraven/shared /anyraven/tunnel-manager \
+             /anyraven/app-backend /anyraven/app-frontend /anyraven/frontend-template
+COPY --from=builder /build/packages/dispatch/dist             /anyraven/dispatch/dist
+COPY --from=builder /build/packages/dispatch/package.json     /anyraven/dispatch/package.json
+COPY --from=builder /build/packages/shared/dist               /anyraven/shared/dist
+COPY --from=builder /build/packages/shared/package.json       /anyraven/shared/package.json
+COPY --from=builder /build/packages/tunnel-manager/dist       /anyraven/tunnel-manager/dist
+COPY --from=builder /build/packages/tunnel-manager/package.json /anyraven/tunnel-manager/package.json
+COPY --from=builder /build/packages/app-backend/dist         /anyraven/app-backend/dist
+COPY --from=builder /build/packages/app-backend/package.json /anyraven/app-backend/package.json
+COPY --from=builder /build/packages/app-frontend/dist          /anyraven/app-frontend/dist
+COPY --from=builder /build/packages/app-frontend/package.json  /anyraven/app-frontend/package.json
 # frontend-template is copied as SOURCE (not built dist) because init-data-layout.sh
 # seeds the source into /data/dev/ on first run where the agent will modify and build it.
-COPY --from=builder /build/packages/frontend-template         /anyclaw/frontend-template
-COPY --from=builder /build/node_modules                       /anyclaw/node_modules
-RUN rm -rf /anyclaw/frontend-template/node_modules /anyclaw/frontend-template/dist \
- && chown -R anyclaw-infra:anyclaw-infra /anyclaw
+COPY --from=builder /build/packages/frontend-template         /anyraven/frontend-template
+COPY --from=builder /build/node_modules                       /anyraven/node_modules
+RUN rm -rf /anyraven/frontend-template/node_modules /anyraven/frontend-template/dist \
+ && chown -R anyraven-infra:anyraven-infra /anyraven
 
 # Data directories
 RUN mkdir -p /data/pocketbase/pb_data \
@@ -2968,56 +2968,56 @@ RUN mkdir -p /data/pocketbase/pb_data \
              /data/prod/app-frontend \
              /data/prod/app-backend \
              /data/snapshots \
-             /data/.anyclaw/logs \
-             /var/log/anyclaw \
+             /data/.anyraven/logs \
+             /var/log/anyraven \
              /var/run \
- && chown -R anyclaw-infra:anyclaw-infra /data/pocketbase /data/prod /data/snapshots \
-                                          /data/.anyclaw  /var/log/anyclaw \
- && chown -R anyclaw-agent:anyclaw-agent /data/dev \
- && chmod 0750 /data/.anyclaw
+ && chown -R anyraven-infra:anyraven-infra /data/pocketbase /data/prod /data/snapshots \
+                                          /data/.anyraven  /var/log/anyraven \
+ && chown -R anyraven-agent:anyraven-agent /data/dev \
+ && chmod 0750 /data/.anyraven
 
 # Infra scripts + supervisord config
-COPY infra/scripts/ /anyclaw/scripts/
-RUN chmod +x /anyclaw/scripts/*.sh
-COPY infra/supervisord.conf /etc/supervisor/conf.d/anyclaw.conf
+COPY infra/scripts/ /anyraven/scripts/
+RUN chmod +x /anyraven/scripts/*.sh
+COPY infra/supervisord.conf /etc/supervisor/conf.d/anyraven.conf
 
 # Initialize the dev git repo at image-build time so the container is ready
-RUN bash /anyclaw/scripts/init-data-layout.sh \
- && chown -R anyclaw-agent:anyclaw-agent /data/dev
+RUN bash /anyraven/scripts/init-data-layout.sh \
+ && chown -R anyraven-agent:anyraven-agent /data/dev
 
 EXPOSE 8090 4100 5173 3000
 VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyclaw.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/anyraven.conf"]
 ```
 
 - [ ] **Step 3: Verify Docker build works**
 
-Run: `cd anyclaw-server && docker build -f infra/Dockerfile -t anyclaw:plan1 .`
+Run: `cd anyraven-server && docker build -f infra/Dockerfile -t anyraven:plan1 .`
 Expected: build succeeds.
 
 - [ ] **Step 4: Run the container and smoke-test `/health`**
 
 Run:
 ```bash
-docker run --rm -d --name anyclaw-plan1 \
+docker run --rm -d --name anyraven-plan1 \
   -p 127.0.0.1:4100:4100 \
   -p 127.0.0.1:5173:5173 \
   -p 127.0.0.1:8090:8090 \
-  anyclaw:plan1
+  anyraven:plan1
 sleep 5
 curl -fsS http://127.0.0.1:4100/health
 curl -fsS http://127.0.0.1:5173/ | head -5
-docker logs anyclaw-plan1 | tail -60
-docker stop anyclaw-plan1
+docker logs anyraven-plan1 | tail -60
+docker stop anyraven-plan1
 ```
 Expected: `curl /health` prints `{"status":"ok","version":"0.1.0"}`. `curl /` against app-frontend returns the "Welcome to AnyRaven" placeholder HTML. Logs show all 5 supervised processes started: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`. `/data/dev` contains the seeded frontend-template with a git history.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add anyclaw-server/infra/Dockerfile anyclaw-server/.dockerignore
+git add anyraven-server/infra/Dockerfile anyraven-server/.dockerignore
 git commit -m "feat(infra): add Dockerfile for plan1 single-container"
 ```
 
@@ -3032,7 +3032,7 @@ git commit -m "feat(infra): add Dockerfile for plan1 single-container"
 
 Run:
 ```bash
-cd anyclaw-server
+cd anyraven-server
 rm -rf node_modules packages/*/dist packages/*/node_modules
 npm install
 npm run build
@@ -3043,7 +3043,7 @@ Expected: every step succeeds; all test suites pass.
 
 - [ ] **Step 2: Verify all Plan 1 deliverables exist**
 
-Run: `cd anyclaw-server && ls packages/shared/src packages/dispatch/src packages/tunnel-manager/src packages/app-backend/src packages/app-frontend/src packages/frontend-template/src infra`
+Run: `cd anyraven-server && ls packages/shared/src packages/dispatch/src packages/tunnel-manager/src packages/app-backend/src packages/app-frontend/src packages/frontend-template/src infra`
 Expected output includes:
 - `packages/shared/src`: `paths.ts crypto.ts snapshots.ts versionStore.ts worktrees.ts deployManager.ts rollbackManager.ts index.ts`
 - `packages/dispatch/src`: `index.ts`
@@ -3064,8 +3064,8 @@ git log --oneline -20
 
 ## Self-Review Checklist
 
-- **Spec coverage:** monorepo scaffold (Task 1), TypeScript build + typecheck (Task 1), `@anyclaw/shared` with `paths` (Task 2), `crypto` (Task 3), `snapshots` (Task 4), `versionStore` (Task 5), `worktrees` (Task 6), `deployManager` (Task 7), `rollbackManager` (Task 7b), `@anyclaw/dispatch` scaffold on :4100 (Task 8), `@anyclaw/tunnel-manager` (Task 8b), `@anyclaw/app-backend` on :3000 (Task 8c), `@anyclaw/app-frontend` on :5173 (Task 8d), `@anyclaw/frontend-template` Vite+React+Tailwind v4 seed (Task 8e), filesystem init that copies the frontend-template into `/data/dev/` and creates `.worktrees/` (Task 10), PocketBase 0.25 pinned download (Task 11), supervisord with all 5 programs (Task 12), Dockerfile bundling all 5 packages + frontend-template source (Task 13), full verification (Tasks 9 + 14).
-- **Canonical decisions honored:** shared = `@anyclaw/shared`; dispatch = `@anyclaw/dispatch` on port **4100** (Plan 2 mounts MCP routes onto this same Express app, Plan 3 mounts REST + adapters — there is only ONE dispatch Express app per container); npm workspaces; infra at `anyclaw-server/infra/`; PocketBase **0.25** binary + **^0.25.0** JS SDK.
+- **Spec coverage:** monorepo scaffold (Task 1), TypeScript build + typecheck (Task 1), `@anyraven/shared` with `paths` (Task 2), `crypto` (Task 3), `snapshots` (Task 4), `versionStore` (Task 5), `worktrees` (Task 6), `deployManager` (Task 7), `rollbackManager` (Task 7b), `@anyraven/dispatch` scaffold on :4100 (Task 8), `@anyraven/tunnel-manager` (Task 8b), `@anyraven/app-backend` on :3000 (Task 8c), `@anyraven/app-frontend` on :5173 (Task 8d), `@anyraven/frontend-template` Vite+React+Tailwind v4 seed (Task 8e), filesystem init that copies the frontend-template into `/data/dev/` and creates `.worktrees/` (Task 10), PocketBase 0.25 pinned download (Task 11), supervisord with all 5 programs (Task 12), Dockerfile bundling all 5 packages + frontend-template source (Task 13), full verification (Tasks 9 + 14).
+- **Canonical decisions honored:** shared = `@anyraven/shared`; dispatch = `@anyraven/dispatch` on port **4100** (Plan 2 mounts MCP routes onto this same Express app, Plan 3 mounts REST + adapters — there is only ONE dispatch Express app per container); npm workspaces; infra at `anyraven-server/infra/`; PocketBase **0.25** binary + **^0.25.0** JS SDK.
 - **Out of scope (deferred to later plans):** MCP tools and routes (Plan 2), PocketBase collection bootstrap with `_` prefixed collections (Plan 2), dispatch REST routes and agent adapters (Plan 3), real WSS broker connection and CBOR envelope (Plan 4), mobile app (Plan 5), welcome page content, real `@theme` color values, `usePreferences` PocketBase integration, skills, `install.sh`, `bootstrap-pocketbase.sh`, `store-api-key.js` (all Plan 6 — Plan 1 only provides the scripts `install.sh` will call and the frontend hook contract Plan 6 will implement against).
-- **Type / name consistency:** `AnyClawPaths`, `KeyPair`, `SealedBox`, `SnapshotManager`, `Version`, `VersionStore`, `Worktree`, `WorktreeManager`, `DeployManager`, `DeployResult`, `ValidateResult`, `RollbackManager`, `RollbackResult`, `createApp` (dispatch), `ServiceRouter`, `ServiceTag`, `TunnelConfig`, `DeviceKeys`, `AppBackendRunner`, `RunnerMode`, `createFallbackApp`, `createAppFrontendApp`, `Preferences`, `usePreferences` are each defined exactly once and imported under the same name across tests, implementations, and package barrels.
+- **Type / name consistency:** `AnyRavenPaths`, `KeyPair`, `SealedBox`, `SnapshotManager`, `Version`, `VersionStore`, `Worktree`, `WorktreeManager`, `DeployManager`, `DeployResult`, `ValidateResult`, `RollbackManager`, `RollbackResult`, `createApp` (dispatch), `ServiceRouter`, `ServiceTag`, `TunnelConfig`, `DeviceKeys`, `AppBackendRunner`, `RunnerMode`, `createFallbackApp`, `createAppFrontendApp`, `Preferences`, `usePreferences` are each defined exactly once and imported under the same name across tests, implementations, and package barrels.
 - **No placeholders:** every step includes complete code or a concrete command with expected output. No TBD / TODO / "similar to".

@@ -25,11 +25,11 @@ apt update && apt upgrade -y
 apt install -y curl ufw fail2ban
 
 # Create a non-root user
-adduser anyclaw
-usermod -aG sudo anyclaw
+adduser anyraven
+usermod -aG sudo anyraven
 
 # Switch to the new user for remaining steps
-su - anyclaw
+su - anyraven
 ```
 
 ## Firewall Configuration
@@ -52,7 +52,7 @@ and inter-container communication stay on localhost or Docker networks only.
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker anyclaw
+sudo usermod -aG docker anyraven
 newgrp docker
 
 # Verify
@@ -86,12 +86,12 @@ Caddy handles TLS certificate provisioning automatically via Let's Encrypt.
 ## Directory Layout
 
 ```bash
-sudo mkdir -p /opt/anyclaw/{provisioner,caddy,users}
-sudo chown -R anyclaw:anyclaw /opt/anyclaw
+sudo mkdir -p /opt/anyraven/{provisioner,caddy,users}
+sudo chown -R anyraven:anyraven /opt/anyraven
 ```
 
 ```
-/opt/anyclaw/
+/opt/anyraven/
   provisioner/
     docker-compose.yml      # Broker + provisioner services
   caddy/
@@ -105,7 +105,7 @@ sudo chown -R anyclaw:anyclaw /opt/anyclaw
 ## Caddyfile
 
 ```bash
-cat > /opt/anyclaw/caddy/Caddyfile << 'CADDYEOF'
+cat > /opt/anyraven/caddy/Caddyfile << 'CADDYEOF'
 broker.anyraven.com {
     reverse_proxy localhost:8443
     encode gzip
@@ -113,7 +113,7 @@ broker.anyraven.com {
 CADDYEOF
 
 # Reload Caddy
-sudo cp /opt/anyclaw/caddy/Caddyfile /etc/caddy/Caddyfile
+sudo cp /opt/anyraven/caddy/Caddyfile /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
@@ -126,25 +126,25 @@ The provisioner runs the broker (accepts WSS from mobile apps) and manages
 user container lifecycle.
 
 ```bash
-cat > /opt/anyclaw/provisioner/docker-compose.yml << 'EOF'
+cat > /opt/anyraven/provisioner/docker-compose.yml << 'EOF'
 version: "3.8"
 
 services:
   broker:
-    image: ghcr.io/anyclaw/anyclaw-broker:latest
+    image: ghcr.io/anyraven/anyraven-broker:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8443:8443"
     volumes:
-      - /opt/anyclaw/users:/opt/anyclaw/users:ro
+      - /opt/anyraven/users:/opt/anyraven/users:ro
     environment:
       - BROKER_PORT=8443
-      - USER_DATA_ROOT=/opt/anyclaw/users
+      - USER_DATA_ROOT=/opt/anyraven/users
 EOF
 ```
 
 ```bash
-cd /opt/anyclaw/provisioner
+cd /opt/anyraven/provisioner
 docker compose up -d
 ```
 
@@ -155,18 +155,18 @@ host port bindings (all ingress via tunnel).
 
 ```bash
 # Template: replace <USER_ID> and <USER_TOKEN> at provisioning time
-cat > /opt/anyclaw/users/user-template.yml << 'EOF'
+cat > /opt/anyraven/users/user-template.yml << 'EOF'
 version: "3.8"
 
 services:
-  anyclaw:
-    image: ghcr.io/anyclaw/anyclaw:latest
-    container_name: anyclaw-user-USER_ID
+  anyraven:
+    image: ghcr.io/anyraven/anyraven:latest
+    container_name: anyraven-user-USER_ID
     restart: unless-stopped
     volumes:
       - ./data:/data
     environment:
-      - ANYCLAW_USER_TOKEN=USER_TOKEN
+      - ANYRAVEN_USER_TOKEN=USER_TOKEN
     deploy:
       resources:
         limits:
@@ -181,11 +181,11 @@ EOF
 ```bash
 USER_ID="abc123"
 USER_TOKEN="$(openssl rand -hex 32)"
-USER_DIR="/opt/anyclaw/users/user-$USER_ID"
+USER_DIR="/opt/anyraven/users/user-$USER_ID"
 
 mkdir -p "$USER_DIR/data"
 sed "s/USER_ID/$USER_ID/g; s/USER_TOKEN/$USER_TOKEN/g" \
-  /opt/anyclaw/users/user-template.yml > "$USER_DIR/docker-compose.yml"
+  /opt/anyraven/users/user-template.yml > "$USER_DIR/docker-compose.yml"
 
 cd "$USER_DIR"
 docker compose up -d
@@ -206,8 +206,8 @@ resources. The broker wakes them on the next incoming message.
 
 ```bash
 # Example cron job (runs every 5 minutes)
-# /opt/anyclaw/provisioner/idle-check.sh
-*/5 * * * * /opt/anyclaw/provisioner/idle-check.sh
+# /opt/anyraven/provisioner/idle-check.sh
+*/5 * * * * /opt/anyraven/provisioner/idle-check.sh
 ```
 
 The idle-check script inspects the last tunnel activity timestamp for each
@@ -218,14 +218,14 @@ user and runs `docker compose stop` for idle containers.
 Nightly backup of all user PocketBase data to offsite storage:
 
 ```bash
-cat > /opt/anyclaw/provisioner/backup.sh << 'BACKUPEOF'
+cat > /opt/anyraven/provisioner/backup.sh << 'BACKUPEOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-BACKUP_DIR="/opt/anyclaw/backups/$(date +%Y-%m-%d)"
+BACKUP_DIR="/opt/anyraven/backups/$(date +%Y-%m-%d)"
 mkdir -p "$BACKUP_DIR"
 
-for user_dir in /opt/anyclaw/users/user-*/; do
+for user_dir in /opt/anyraven/users/user-*/; do
   user_id=$(basename "$user_dir")
   pb_data="$user_dir/data/pocketbase/pb_data"
   if [ -d "$pb_data" ]; then
@@ -234,15 +234,15 @@ for user_dir in /opt/anyclaw/users/user-*/; do
 done
 
 # Upload to offsite (configure your provider)
-# rclone copy "$BACKUP_DIR" remote:anyclaw-backups/
+# rclone copy "$BACKUP_DIR" remote:anyraven-backups/
 echo "Backup complete: $BACKUP_DIR"
 BACKUPEOF
-chmod +x /opt/anyclaw/provisioner/backup.sh
+chmod +x /opt/anyraven/provisioner/backup.sh
 ```
 
 ```bash
 # Add to crontab: daily at 3 AM
-echo "0 3 * * * /opt/anyclaw/provisioner/backup.sh" | crontab -
+echo "0 3 * * * /opt/anyraven/provisioner/backup.sh" | crontab -
 ```
 
 ## Monitoring
@@ -254,20 +254,20 @@ Basic monitoring via Docker stats and container count:
 docker stats --no-stream
 
 # Count running user containers
-docker ps --filter "name=anyclaw-user-" --format "{{.Names}}" | wc -l
+docker ps --filter "name=anyraven-user-" --format "{{.Names}}" | wc -l
 
 # Simple cron alert if too many containers are running
-cat > /opt/anyclaw/provisioner/monitor.sh << 'MONEOF'
+cat > /opt/anyraven/provisioner/monitor.sh << 'MONEOF'
 #!/usr/bin/env bash
-COUNT=$(docker ps --filter "name=anyclaw-user-" -q | wc -l)
+COUNT=$(docker ps --filter "name=anyraven-user-" -q | wc -l)
 if [ "$COUNT" -gt 14 ]; then
   echo "WARNING: $COUNT user containers running on CX32 (recommended max: 14)"
 fi
 MONEOF
-chmod +x /opt/anyclaw/provisioner/monitor.sh
+chmod +x /opt/anyraven/provisioner/monitor.sh
 
 # Every 10 minutes
-echo "*/10 * * * * /opt/anyclaw/provisioner/monitor.sh" >> /tmp/cron-monitor
+echo "*/10 * * * * /opt/anyraven/provisioner/monitor.sh" >> /tmp/cron-monitor
 crontab -l 2>/dev/null | cat - /tmp/cron-monitor | crontab -
 ```
 
@@ -283,11 +283,11 @@ crontab -l 2>/dev/null | cat - /tmp/cron-monitor | crontab -
 
 ## Migration to Phase 2 (microVMs / K8s Agent Sandbox)
 
-The same `ghcr.io/anyclaw/anyclaw:latest` image used here runs unchanged in
+The same `ghcr.io/anyraven/anyraven:latest` image used here runs unchanged in
 a microVM (Firecracker) or Kubernetes pod. Phase 2 replaces the provisioner
 shell scripts with a proper scheduler (K8s operator or Firecracker orchestrator)
 while keeping the per-user data volume layout and tunnel-based networking
 identical. The migration path is: stop the Docker container, copy
-`/opt/anyclaw/users/user-<id>/data/` into the new storage backend, and start
+`/opt/anyraven/users/user-<id>/data/` into the new storage backend, and start
 the same image in the new runtime. No user data migration is needed beyond
 the volume copy.

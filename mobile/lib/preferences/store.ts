@@ -9,7 +9,7 @@ import type {
 } from "./types";
 import { DEFAULT_PREFERENCES, FONT_SCALE_MAP } from "./types";
 
-const STORE_KEY = "anyclaw_preferences";
+const STORE_KEY = "anyraven_preferences";
 
 // PocketBase instance — set externally via _setPb for testing
 let pb: { authStore: { isValid: boolean; record: { id: string } | null }; collection: (name: string) => { getFirstListItem: (filter: string) => Promise<{ id: string; data: Preferences }>; create: (data: unknown) => Promise<unknown>; update: (id: string, data: unknown) => Promise<unknown>; }; } | null = null;

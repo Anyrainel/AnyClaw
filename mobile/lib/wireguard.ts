@@ -1,5 +1,5 @@
 /**
- * WireGuard VPN module for AnyClaw mobile app.
+ * WireGuard VPN module for AnyRaven mobile app.
  *
  * This is a platform abstraction layer. On iOS/Android it wraps
  * react-native-wireguard-vpn (or similar). In Expo Go / web, it stubs.
@@ -39,7 +39,7 @@ class StubWireGuardVpn {
   getStatus(): WireGuardConnection {
     return {
       isConnected: this.config !== null,
-      tunnelName: "anyclaw-wg",
+      tunnelName: "anyraven-wg",
       serverAddress: this.config?.serverAddress ?? "",
     };
   }

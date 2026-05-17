@@ -30,7 +30,7 @@ export function generatePairingKeypair(): {
 
 /**
  * Deterministic 4-word BIP39 verification code from two public keys.
- * Uses crypto_generichash(8, clientPk || serverPk) with key "anyclaw-pair".
+ * Uses crypto_generichash(8, clientPk || serverPk) with key "anyraven-pair".
  */
 export function verificationCode(
   clientPk: Uint8Array,
@@ -43,7 +43,7 @@ export function verificationCode(
   const hash = sodium.crypto_generichash(
     8,
     combined,
-    sodium.from_string("anyclaw-pair")
+    sodium.from_string("anyraven-pair")
   );
 
   // Read 4 uint16 values from 8 bytes, each mod 2048 to index into BIP39
