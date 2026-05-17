@@ -317,7 +317,7 @@ packages/frontend/src/
   App.tsx
   lib/
     pocketbase.ts        # PocketBase JS SDK client
-    api.ts               # fetch wrapper for the logic service
+    api.ts               # fetch wrapper for the app backend
   contexts/              # React Context providers
   hooks/                 # Reusable hooks (e.g. useCollection)
   components/            # Shared components (2+ pages use them)

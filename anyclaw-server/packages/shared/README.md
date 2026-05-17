@@ -37,8 +37,8 @@ All classes accept an `AnyClawPaths` instance so tests can override the data roo
 paths.dev              // /data/dev
 paths.devWorktrees     // /data/dev/.worktrees
 paths.prod             // /data/prod
-paths.prodFrontend     // /data/prod/frontend-build
-paths.prodLogic        // /data/prod/logic-build
+paths.prodAppFrontend     // /data/prod/app-frontend
+paths.prodAppBackend        // /data/prod/app-backend
 paths.snapshots        // /data/snapshots
 paths.secrets          // /data/.anyclaw
 paths.worktreeFor(taskId)         // /data/dev/.worktrees/<taskId>

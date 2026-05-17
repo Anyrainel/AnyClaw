@@ -17,8 +17,8 @@ chmod +x ~/.local/bin/pocketbase
 ```bash
 mkdir -p /data/pocketbase/pb_data
 mkdir -p /data/dev/.worktrees
-mkdir -p /data/prod/frontend-build
-mkdir -p /data/prod/logic-build
+mkdir -p /data/prod/app-frontend
+mkdir -p /data/prod/app-backend
 mkdir -p /data/snapshots
 mkdir -p /data/.anyclaw/logs
 mkdir -p /var/log/anyclaw
@@ -63,10 +63,10 @@ pocketbase serve --http=127.0.0.1:8090 --dir=/data/pocketbase/pb_data &
 node anyclaw-server/packages/dispatch/dist/index.js &
 
 # Prod-static (serves built frontend)
-# node anyclaw-server/packages/prod-static/dist/index.js &
+# node anyclaw-server/packages/app-frontend/dist/index.js &
 
 # Logic-runner (watches /data/dev for changes)
-# node anyclaw-server/packages/logic-runner/dist/index.js &
+# node anyclaw-server/packages/app-backend/dist/index.js &
 
 # Tunnel-manager (optional, for external access)
 # node anyclaw-server/packages/tunnel-manager/dist/index.js &

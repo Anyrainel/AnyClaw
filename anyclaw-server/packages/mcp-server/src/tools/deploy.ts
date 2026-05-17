@@ -86,7 +86,7 @@ export function registerDeploy(
     {
       title: "Deploy to Production",
       description:
-        "Validate, snapshot, commit, merge to main, promote, restart logic service. REQUIRES a version description a non-technical user can understand.",
+        "Validate, snapshot, commit, merge to main, promote, restart app backend. REQUIRES a version description a non-technical user can understand.",
       inputSchema: deployInput,
       outputSchema: deployOutput,
       annotations: { destructiveHint: true, idempotentHint: false },

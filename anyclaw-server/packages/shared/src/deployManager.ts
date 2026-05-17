@@ -16,7 +16,7 @@ export interface DeployManagerOptions {
   versions: VersionStore;
   worktrees: WorktreeManager;
   snapshots: SnapshotManager;
-  restartLogicService: () => Promise<void>;
+  restartAppBackendService: () => Promise<void>;
   now?: () => Date;
 }
 
@@ -84,8 +84,8 @@ export class DeployManager {
     // 7. Remove the worktree + task branch
     await this.opts.worktrees.delete(input.taskId);
 
-    // 8. Restart logic service
-    await this.opts.restartLogicService();
+    // 8. Restart app backend
+    await this.opts.restartAppBackendService();
 
     return { ok: true, version, ...(snapshotId !== undefined ? { snapshotId } : {}) };
   }

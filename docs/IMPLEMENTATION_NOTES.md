@@ -157,7 +157,7 @@ Added PocketBase SSE subscription module: `initPocketBase`, `subscribeToTask`, `
 - `docs/superpowers/` namespace removed
 
 ### READMEs added
-Root `README.md` plus per-module READMEs for: broker, mobile, anyclaw-server, shared, dispatch, mcp-server, tunnel-manager, logic-runner, prod-static, frontend-template.
+Root `README.md` plus per-module READMEs for: broker, mobile, anyclaw-server, shared, dispatch, mcp-server, tunnel-manager, app-backend, app-frontend, frontend-template.
 
 ### CLAUDE.md added
 Project-level agent guidance: repo layout, test commands, TypeScript strictness conventions, key patterns (ANYCLAW_DATA_ROOT, libsodium pin, deploy flow, MCP token lifecycle), commit conventions, WIP status.

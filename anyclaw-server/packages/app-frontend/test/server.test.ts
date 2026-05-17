@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request from "supertest";
-import { createProdStaticApp } from "../src/index.js";
+import { createAppFrontendApp } from "../src/index.js";
 
-describe("prod-static", () => {
+describe("app-frontend", () => {
   let root: string;
 
   beforeEach(() => {
@@ -16,7 +16,7 @@ describe("prod-static", () => {
 
   it("serves the placeholder when the build dir is empty", async () => {
     mkdirSync(root, { recursive: true });
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/");
     expect(res.status).toBe(200);
     expect(res.text).toMatch(/Welcome to AnyClaw/);
@@ -26,7 +26,7 @@ describe("prod-static", () => {
   it("serves index.html when the build dir has content", async () => {
     writeFileSync(join(root, "index.html"), "<html><body>APP</body></html>");
     writeFileSync(join(root, "app.js"), "console.log(1)");
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/");
     expect(res.status).toBe(200);
     expect(res.text).toContain("APP");
@@ -35,7 +35,7 @@ describe("prod-static", () => {
   it("serves static assets", async () => {
     writeFileSync(join(root, "index.html"), "<html></html>");
     writeFileSync(join(root, "app.js"), "console.log(1)");
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/app.js");
     expect(res.status).toBe(200);
     expect(res.text).toContain("console.log");
@@ -43,7 +43,7 @@ describe("prod-static", () => {
 
   it("falls back to index.html for SPA routes", async () => {
     writeFileSync(join(root, "index.html"), "<html>SPA</html>");
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/settings/profile");
     expect(res.status).toBe(200);
     expect(res.text).toContain("SPA");

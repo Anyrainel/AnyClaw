@@ -13,8 +13,8 @@ anyclaw-server/    Server monorepo (Node 20, npm workspaces)
     dispatch/      Task orchestration + REST API (:4100)
     mcp-server/    MCP tools for coding agents (:4100/mcp)
     tunnel-manager WSS client to broker
-    logic-runner   Supervises agent-built logic service (:3000)
-    prod-static    Serves agent-built frontend (:5173)
+    app-backend   Supervises agent-built app backend (:3000)
+    app-frontend    Serves agent-built frontend (:5173)
     frontend-template  Vite+React+Tailwind v4 seed
 docs/              Architecture design docs (plan1–plan6) + tasks/
 ```
@@ -59,7 +59,7 @@ Never hardcode `/data/` in test code.
 
 **libsodium version pin** — `libsodium-wrappers` is pinned to `0.7.15` in both `anyclaw-server` and `broker`. Do not upgrade: `0.7.16` ships a broken ESM build (`libsodium.mjs` is missing from the package).
 
-**Deploy flow** — `DeployManager` in `@anyclaw/shared` is the canonical deploy entry point. It runs: validate worktree → snapshot DB → merge to main → copy artifacts to prod → signal logic-runner restart. Never implement deploy logic outside this class.
+**Deploy flow** — `DeployManager` in `@anyclaw/shared` is the canonical deploy entry point. It runs: validate worktree → snapshot DB → merge to main → copy artifacts to prod → signal app-backend restart. Never implement deploy logic outside this class.
 
 **MCP bearer tokens** — Each agent task gets a unique token from `registerTaskToken(taskId)` in `@anyclaw/mcp-server`. Always call `revokeTaskToken(taskId)` on task completion or failure, including in error paths.
 

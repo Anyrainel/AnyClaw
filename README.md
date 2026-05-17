@@ -24,8 +24,8 @@ AnyRaven is **agent-agnostic** — it does not bundle a coding agent. It provide
 │  ├── dispatch         Task orchestration + REST API :4100    │
 │  ├── mcp-server       MCP tools for coding agents            │
 │  ├── tunnel-manager   Persistent WSS tunnel to broker        │
-│  ├── logic-runner     Supervises agent-built logic :3000     │
-│  ├── prod-static      Serves agent-built frontend :5173      │
+│  ├── app-backend     Supervises agent-built logic :3000     │
+│  ├── app-frontend      Serves agent-built frontend :5173      │
 │  ├── shared           Crypto, deploy, rollback, worktrees    │
 │  ├── frontend-template Vite+React seed copied on first run   │
 │  └── PocketBase       Database + realtime :8090              │
@@ -44,8 +44,8 @@ AnyRaven/
 │       ├── dispatch/
 │       ├── mcp-server/
 │       ├── tunnel-manager/
-│       ├── logic-runner/
-│       ├── prod-static/
+│       ├── app-backend/
+│       ├── app-frontend/
 │       └── frontend-template/
 └── docs/               Architecture and design documentation
     ├── design.md                    Product overview and principles

@@ -27,7 +27,7 @@ Single active task + queue for MVP (locked decision #1). The design is isolation
 
 The dispatch layer runs **inside the Dispatch / MCP Server process** -- one of the supervised processes defined in the main spec's "Process Architecture" section. It is a long-lived Node.js process managed by systemd (primary) or supervisord (fallback) alongside PocketBase, the Tunnel Manager, the Logic Service, and the Prod Static Server.
 
-The dispatch/MCP server is the "control plane": the small, stable process that always works even when the agent-written logic service is broken. Responsibilities:
+The dispatch/MCP server is the "control plane": the small, stable process that always works even when the agent-written app backend is broken. Responsibilities:
 
 1. Task dispatch REST API (`POST /api/tasks`, etc.).
 2. MCP HTTP/SSE endpoint the agent calls back into.
@@ -1201,7 +1201,7 @@ All endpoints are served by the dispatch/MCP server over loopback, forwarded by 
 | `GET` | `/api/adapter/config` | Current adapter type + non-secret config. |
 | `PUT` | `/api/adapter/config` | Switch adapter or update config. Body: `{ activeAdapter, ... }`. |
 | `POST` | `/api/rollback` | Emergency rollback. Always works. |
-| `POST` | `/api/restart-app` | Restart logic service via `systemctl --user restart anyclaw-logic`. |
+| `POST` | `/api/restart-app` | Restart app backend via `systemctl --user restart anyclaw-logic`. |
 | `POST` | `/api/webhook/callback` | Webhook adapter callback sink. |
 
 The mobile app does not poll `GET /api/tasks/:id` for status; it subscribes to PocketBase realtime on the `tasks` collection (filtered by `taskId`) through the tunnel. The REST endpoints exist for the commands (submit, answer, cancel) and for initial snapshots.

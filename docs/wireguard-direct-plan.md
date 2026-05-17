@@ -95,7 +95,7 @@ IF both fail:
   - Heartbeat to broker (status, current endpoint if known)
   - Handle client connection requests (add peer to WireGuard)
 
-#### Modified: dispatch, prod-static, pocketbase
+#### Modified: dispatch, app-frontend, pocketbase
 - **Current**: Listen on `0.0.0.0` (all interfaces)
 - **New**: Also listen on WireGuard tunnel interface (`10.64.0.1`)
 - HTTP services accessible via tunnel

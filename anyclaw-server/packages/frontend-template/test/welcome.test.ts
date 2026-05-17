@@ -48,23 +48,26 @@ afterEach(() => {
 });
 
 describe("Welcome app shell", () => {
-  it("renders level one, level two, and level three navigation", () => {
+  it("renders the three baseline tabs", () => {
     render(createElement(Welcome));
     expect(screen.getByRole("heading", { name: "Home" })).toBeDefined();
-    expect(screen.getAllByRole("button", { name: "Work" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Overview" })).toBeDefined();
-    expect(screen.getByLabelText("Current location").textContent).toContain("Workspace");
+    expect(screen.getAllByRole("button", { name: "Home" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Tutorial" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "AnyRaven" }).length).toBeGreaterThan(0);
   });
 
-  it("shows starter sections for immediate use", () => {
+  it("shows placeholder home and tutorial examples", () => {
     render(createElement(Welcome));
-    expect(screen.getByRole("heading", { name: "Today" })).toBeDefined();
-    expect(screen.getByRole("heading", { name: "Requests" })).toBeDefined();
-    expect(screen.getByRole("heading", { name: "Versions" })).toBeDefined();
+    expect(screen.getByText("Your app starts here.")).toBeDefined();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Tutorial" })[0]!);
+    expect(screen.getByText("Ask for a small tool")).toBeDefined();
+    expect(screen.getByText(/starter material for the free canvas/)).toBeDefined();
   });
 
   it("opens settings and applies local theme choices", () => {
     const { container } = render(createElement(Welcome));
+    fireEvent.click(screen.getAllByRole("button", { name: "AnyRaven" })[0]!);
     fireEvent.click(screen.getAllByLabelText("Open settings")[0]!);
 
     const theme = screen.getByLabelText("Theme mode");
@@ -75,19 +78,21 @@ describe("Welcome app shell", () => {
     expect(localStorage.getItem("anyclaw_shell_preferences")).toContain('"theme":"dark"');
   });
 
-  it("opens the dispatch assistant and shows empty state", async () => {
+  it("shows AnyRaven work history in the last tab", async () => {
     render(createElement(Welcome));
-    fireEvent.click(screen.getByLabelText("Open dispatch assistant"));
+    fireEvent.click(screen.getAllByRole("button", { name: "AnyRaven" })[0]!);
 
     await waitFor(() => {
       expect(mockListTasks).toHaveBeenCalled();
     });
+    expect(screen.getByText("App evolution")).toBeDefined();
     expect(screen.getByText("No requests yet.")).toBeDefined();
   });
 
-  it("creates a dispatch task from the assistant composer", async () => {
+  it("creates a dispatch task from the full screen request modal", async () => {
     render(createElement(Welcome));
-    fireEvent.click(screen.getByLabelText("Open dispatch assistant"));
+    fireEvent.click(screen.getAllByRole("button", { name: "AnyRaven" })[0]!);
+    fireEvent.click(screen.getByLabelText("Open new AnyRaven request"));
 
     const input = screen.getByPlaceholderText(/Build a simple habit tracker/);
     fireEvent.change(input, { target: { value: "Build me a mood tracker" } });
@@ -128,7 +133,7 @@ describe("Welcome app shell", () => {
     ]);
 
     render(createElement(Welcome));
-    fireEvent.click(screen.getByLabelText("Open dispatch assistant"));
+    fireEvent.click(screen.getAllByRole("button", { name: "AnyRaven" })[0]!);
 
     await waitFor(() => {
       expect(screen.getByText("Working task")).toBeDefined();
@@ -137,6 +142,37 @@ describe("Welcome app shell", () => {
     expect(screen.getByText("oops")).toBeDefined();
     expect(screen.getByText(/Version v4/)).toBeDefined();
     expect(screen.getByText(/Commit abcdef1/)).toBeDefined();
+  });
+
+  it("drills into AnyRaven feature requests and work history", async () => {
+    mockListTasks.mockResolvedValue([
+      {
+        taskId: "t1",
+        state: "working",
+        seq: 1,
+        request: "Working task",
+      },
+      {
+        taskId: "t2",
+        state: "done",
+        seq: 2,
+        request: "Done task",
+      },
+    ]);
+
+    render(createElement(Welcome));
+    fireEvent.click(screen.getAllByRole("button", { name: "AnyRaven" })[0]!);
+
+    await waitFor(() => {
+      expect(screen.getByText("Working task")).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Feature requests/ }));
+    expect(screen.getByText("Feature request history")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    fireEvent.click(screen.getByRole("button", { name: /Work history/ }));
+    expect(screen.getByText("Done task")).toBeDefined();
   });
 
   it("contains no hardcoded hex colors in Welcome source", async () => {

@@ -107,7 +107,7 @@ export function isCompatible(
   if (semver.lt(serverVersion, skill.minServerVersion)) {
     return {
       ok: false,
-      reason: `Server version ${serverVersion} is below the skill's required minimum server version ${skill.minServerVersion}. Update the AnyClaw server.`,
+      reason: `Server version ${serverVersion} is below the skill's required minimum server version ${skill.minServerVersion}. Update the AnyRaven server.`,
     };
   }
 

@@ -3,11 +3,11 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { PLACEHOLDER_HTML } from "./placeholder.js";
 
-export interface ProdStaticOptions {
+export interface AppFrontendOptions {
   buildDir: string;
 }
 
-export function createProdStaticApp(opts: ProdStaticOptions): Express {
+export function createAppFrontendApp(opts: AppFrontendOptions): Express {
   const app = express();
 
   const hasIndex = () =>
@@ -32,11 +32,11 @@ export function createProdStaticApp(opts: ProdStaticOptions): Express {
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  const buildDir = process.env.PROD_FRONTEND_DIR ?? "/data/prod/frontend-build";
+  const buildDir = process.env.APP_FRONTEND_DIR ?? "/data/prod/app-frontend";
   const port = Number(process.env.PORT ?? 5173);
-  const app = createProdStaticApp({ buildDir });
+  const app = createAppFrontendApp({ buildDir });
   app.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`[prod-static] serving ${buildDir} on :${port}`);
+    console.log(`[app-frontend] serving ${buildDir} on :${port}`);
   });
 }

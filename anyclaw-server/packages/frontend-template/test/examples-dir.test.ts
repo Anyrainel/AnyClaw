@@ -20,7 +20,7 @@ describe("_examples directory", () => {
     const welcomePath = join(EXAMPLES_DIR, "welcome.tsx");
     expect(existsSync(welcomePath)).toBe(true);
     const content = readFileSync(welcomePath, "utf-8");
-    expect(content).toContain("Welcome to AnyClaw");
+    expect(content).toContain("Welcome to AnyRaven");
     expect(content).toContain("usePreferences");
   });
 });

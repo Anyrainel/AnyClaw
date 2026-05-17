@@ -4,7 +4,7 @@ import type { SnapshotManager } from "./snapshots.js";
 export interface RollbackManagerOptions {
   versions: VersionStore;
   snapshots: SnapshotManager;
-  restartLogicService: () => Promise<void>;
+  restartAppBackendService: () => Promise<void>;
 }
 
 export type RollbackResult =
@@ -34,8 +34,8 @@ export class RollbackManager {
     // 3. Checkout the version tag
     await this.opts.versions.checkoutVersion(versionTag);
 
-    // 4. Restart logic service
-    await this.opts.restartLogicService();
+    // 4. Restart app backend
+    await this.opts.restartAppBackendService();
 
     return { ok: true };
   }

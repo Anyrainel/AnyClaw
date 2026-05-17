@@ -8,7 +8,7 @@ The AnyRaven mobile app is a thin Expo (React Native) shell that wraps the agent
 
 1. **WebView viewer** — A full-screen WebView loads the agent-built React frontend from the user's server at `/app/*`. The native shell and the WebView communicate via a postMessage/onMessage JS bridge. The session token is injected via the bridge after page load (never in the URL).
 2. **Task dispatch** — A dedicated "Request" tab with a strict state machine (idle → input → clarifying → working → deploying → done/failed). Submits requests to the dispatch/MCP server at `/api/*` and observes progress via PocketBase Realtime SSE on `/pb/*`. Survives app close/reopen — pending clarification questions resume on next launch.
-3. **Version history & rollback** — A "Versions" tab lists deployments with agent-written descriptions. Rollback calls `POST /api/rollback` and always works (the dispatch server is its own supervised process outside the agent's writable path), even when the logic service is crash-looping.
+3. **Version history & rollback** — A "Versions" tab lists deployments with agent-written descriptions. Rollback calls `POST /api/rollback` and always works (the dispatch server is its own supervised process outside the agent's writable path), even when the app backend is crash-looping.
 4. **Settings** — Clarification timeout mode, API key management, connection/server management, device re-pair flow, and an opt-in debug mode for encrypted traffic.
 
 **Server-side routing (reminder from main spec).** The user's host runs several independently supervised processes behind a single tunnel endpoint. The tunnel manager uses an in-envelope service tag to route traffic:
@@ -601,7 +601,7 @@ Clarification questions live in PocketBase `_agent_messages` (and are mirrored o
 | POST | `/api/tasks/:id/cancel` | `{}` | Cancel a running task |
 | GET  | `/api/versions` | — | List deployment history |
 | POST | `/api/rollback` | `{ versionId }` | Atomic code + DB rollback (always available) |
-| POST | `/api/restart-app` | `{}` | Restart the logic service (crash-loop recovery) |
+| POST | `/api/restart-app` | `{}` | Restart the app backend (crash-loop recovery) |
 | GET  | `/api/health` | — | Per-process health |
 
 ---
@@ -1446,7 +1446,7 @@ export function useNotificationDeepLinks() {
 }
 ```
 
-The server dispatches notifications via the Expo Push API from the dispatch/MCP server (not from agent code) so that notifications still fire even if the logic service is crashed.
+The server dispatches notifications via the Expo Push API from the dispatch/MCP server (not from agent code) so that notifications still fire even if the app backend is crashed.
 
 ---
 
@@ -1552,7 +1552,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 | 1 | Fresh install → OAuth with Google | Lands on server-list |
 | 2 | Pair with new server | BIP39 code shown; matches server terminal output |
 | 3 | Submit task, answer clarification | Task moves clarifying → working → done; WebView reloads |
-| 4 | Kill the logic service mid-session | WebView shows "app broken" error screen; Versions tab still works; `/api/rollback` restores prior version |
+| 4 | Kill the app backend mid-session | WebView shows "app broken" error screen; Versions tab still works; `/api/rollback` restores prior version |
 | 5 | Kill the dispatch server | Header badge turns red; Versions tab becomes read-only; auto-recover on restart |
 | 6 | Close app during clarification, reopen | Pending question is restored via `resumeActiveTask` |
 | 7 | Receive push notification while backgrounded | Tap opens the relevant tab via deep link |

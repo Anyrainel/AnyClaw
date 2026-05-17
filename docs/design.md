@@ -8,7 +8,7 @@ AnyRaven is a self-evolving mobile UI layer powered by a personal AI coding agen
 
 **AnyRaven consists of:**
 
-1. **Server infrastructure** — PocketBase + Node.js logic service + Vite/React frontend + dev/prod deployment pipeline. This is the foundation the agent builds on.
+1. **Server infrastructure** — PocketBase + Node.js app backend + Vite/React frontend + dev/prod deployment pipeline. This is the foundation the agent builds on.
 2. **An MCP server + skill suite** — gives any compatible coding agent the ability to deploy, rollback, snapshot data, and ask the user questions.
 3. **An agent dispatch layer** — a pluggable adapter interface that lets the mobile app submit work requests to the user's chosen coding agent, including support for agent-initiated clarifying questions.
 4. **A companion mobile app** — a thin native shell (WebView for agent-built UI, task submission with Q&A, version history/rollback, settings).
@@ -205,7 +205,7 @@ getPocketBase(): PocketBase
 
 - React + TypeScript + Vite
 - Talks to PocketBase directly for data (PocketBase JS SDK)
-- Talks to the logic service for custom endpoints
+- Talks to the app backend for custom endpoints
 - Tailwind v4 with a locked `@theme` token set (see Style Guide)
 - Responsive (phone + tablet)
 
@@ -220,7 +220,7 @@ Two environments live on the server:
 
 1. Agent writes code in a per-task worktree under `dev/.worktrees/task-<id>/`.
 2. Agent runs the validation suite: `eslint` + `tsc --noEmit` + `vite build` + smoke tests.
-3. On success: agent commits to the task branch, merges into `main`, snapshots the DB (if schema changed), copies build artifacts to `prod/`, restarts the logic service via the supervisor, and fires a WebSocket event to reload the WebView.
+3. On success: agent commits to the task branch, merges into `main`, snapshots the DB (if schema changed), copies build artifacts to `prod/`, restarts the app backend via the supervisor, and fires a WebSocket event to reload the WebView.
 4. On failure: worktree is deleted without merging. The user never sees broken state.
 5. User can cancel a long-running task from the mobile app.
 
@@ -276,7 +276,7 @@ Host (or single cloud container)
 ├── [supervised, restart=always] Dispatch / MCP Server
 │       Task dispatch API + MCP HTTP/SSE endpoint + emergency rollback +
 │       app restart endpoint. Source NOT in agent's writable path.
-│       Always available even when the logic service is broken.
+│       Always available even when the app backend is broken.
 │
 ├── [supervised, restart=on-failure] Logic Service
 │       Agent-modifiable Node.js service. Custom API routes, background
@@ -309,7 +309,7 @@ The dispatch server is the small, stable process that handles everything the use
 - `POST /tasks/:id/answer` — answer a clarification question
 - `POST /tasks/:id/cancel` — cancel a running task
 - `POST /rollback` — emergency rollback (always works)
-- `POST /restart-app` — restart logic service (always works)
+- `POST /restart-app` — restart app backend (always works)
 - `GET /versions` — version history
 - `GET /health` — health check
 - `POST /mcp` — MCP HTTP/SSE endpoint for the agent
@@ -399,7 +399,7 @@ The agent subprocess authenticates to the MCP server with a per-task bearer toke
 
 The MCP server is deliberately minimal. Agents use their own built-in tools (file I/O, shell, git) for everything they already do well. AnyRaven MCP tools only guard failure-prone operations:
 
-- `anyclaw_deploy` — Run validation suite, commit, merge worktree, snapshot DB if needed, promote to prod, restart logic service via supervisor
+- `anyclaw_deploy` — Run validation suite, commit, merge worktree, snapshot DB if needed, promote to prod, restart app backend via supervisor
 - `anyclaw_rollback` — Revert to a specific version (code + DB atomically)
 - `anyclaw_snapshot_db` — Create a DB backup (called automatically before migrations)
 - `anyclaw_list_versions` — Show deployment history
@@ -472,12 +472,12 @@ All decisions below are binding for implementation.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Process model | Process supervision, not container split. Supervised: PocketBase, tunnel manager, dispatch/MCP server, logic service, prod static server. Transient: agent subprocess, Vite dev server. Dispatch/MCP source NOT in agent's writable path. | Same crash isolation as multi-container, dramatically simpler. Same model as Replit, Codex, Devin. |
+| Process model | Process supervision, not container split. Supervised: PocketBase, tunnel manager, dispatch/MCP server, app backend, prod static server. Transient: agent subprocess, Vite dev server. Dispatch/MCP source NOT in agent's writable path. | Same crash isolation as multi-container, dramatically simpler. Same model as Replit, Codex, Devin. |
 | Supervisor choice | `systemd --user` primary; `supervisord` fallback for minimal containers | Works without root on any modern distro with cgroup v2 delegation |
 | Platform | Linux-first for MVP; WSL2/VM for Windows/macOS self-hosters | Cross-platform cgroup abstraction not worth MVP complexity |
 | Resource limits | `ResourceLimits` interface exists as a no-op for MVP | Premature optimization; lock down once real abuse emerges |
 | Filesystem bootstrapping | Install script runs as root once; creates `anyclaw-infra` and `anyclaw-agent` users; services run non-root after install | Standard Linux pattern |
-| Restart prod logic service after deploy | `systemctl --user restart anyclaw-logic` (or supervisord equivalent), invoked by dispatch server | Standard supervisor mechanism |
+| Restart prod app backend after deploy | `systemctl --user restart anyclaw-logic` (or supervisord equivalent), invoked by dispatch server | Standard supervisor mechanism |
 
 ### Agent Integration
 

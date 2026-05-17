@@ -10,8 +10,8 @@ describe("AnyClawPaths", () => {
     expect(p.dev).toBe("/tmp/anyclaw-data/dev");
     expect(p.devWorktrees).toBe("/tmp/anyclaw-data/dev/.worktrees");
     expect(p.prod).toBe("/tmp/anyclaw-data/prod");
-    expect(p.prodFrontend).toBe("/tmp/anyclaw-data/prod/frontend-build");
-    expect(p.prodLogic).toBe("/tmp/anyclaw-data/prod/logic-build");
+    expect(p.prodAppFrontend).toBe("/tmp/anyclaw-data/prod/app-frontend");
+    expect(p.prodAppBackend).toBe("/tmp/anyclaw-data/prod/app-backend");
     expect(p.snapshots).toBe("/tmp/anyclaw-data/snapshots");
     expect(p.secrets).toBe("/tmp/anyclaw-data/.anyclaw");
     expect(p.secretsLogs).toBe("/tmp/anyclaw-data/.anyclaw/logs");

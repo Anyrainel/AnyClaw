@@ -7,19 +7,19 @@ import { createFallbackApp } from "./fallback.js";
 
 export type RunnerMode = "fallback" | "running";
 
-export interface LogicRunnerOptions {
+export interface AppBackendRunnerOptions {
   buildDir: string;
   port: number;
   nodeBin?: string;
 }
 
-export class LogicRunner {
+export class AppBackendRunner {
   public mode: RunnerMode = "fallback";
   private child: ChildProcess | undefined;
   private watcher: FSWatcher | undefined;
   private fallback: Server | undefined;
 
-  constructor(private readonly opts: LogicRunnerOptions) {}
+  constructor(private readonly opts: AppBackendRunnerOptions) {}
 
   async start(): Promise<void> {
     await this.reconcile();
@@ -76,11 +76,11 @@ export class LogicRunner {
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  const buildDir = process.env.LOGIC_BUILD_DIR ?? "/data/prod/logic-build";
+  const buildDir = process.env.APP_BACKEND_DIR ?? "/data/prod/app-backend";
   const port = Number(process.env.PORT ?? 3000);
-  const runner = new LogicRunner({ buildDir, port });
+  const runner = new AppBackendRunner({ buildDir, port });
   runner.start().then(() => {
     // eslint-disable-next-line no-console
-    console.log(`[logic-runner] listening on :${port} mode=${runner.mode}`);
+    console.log(`[app-backend] listening on :${port} mode=${runner.mode}`);
   });
 }

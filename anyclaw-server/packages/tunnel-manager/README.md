@@ -34,7 +34,7 @@ Use direct mode when:
 |---|---|
 | `pb` | `http://127.0.0.1:8090` (PocketBase) |
 | `api` | `http://127.0.0.1:4100` (dispatch) |
-| `app` | `http://127.0.0.1:5173` (prod-static) |
+| `app` | `http://127.0.0.1:5173` (app-frontend) |
 
 ## Environment Variables
 

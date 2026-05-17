@@ -10,7 +10,7 @@ The seven tools are:
 
 | Tool | Purpose |
 |------|---------|
-| `anyclaw_deploy` | Validate the current worktree, snapshot DB, commit, merge to `main`, promote to prod, restart the prod logic service. |
+| `anyclaw_deploy` | Validate the current worktree, snapshot DB, commit, merge to `main`, promote to prod, restart the prod app backend. |
 | `anyclaw_rollback` | Atomically revert code and database to a previous version. |
 | `anyclaw_snapshot_db` | Create a labelled compressed SQLite snapshot. |
 | `anyclaw_list_versions` | Return deployment history. |
@@ -37,7 +37,7 @@ Host (or single cloud container)
 ├── [systemd unit, restart=always] anyclaw-tunnel.service
 ├── [systemd unit, restart=always] anyclaw-dispatch.service    ← embeds the MCP server
 ├── [systemd unit, restart=on-failure] anyclaw-logic.service   ← agent-modifiable; deploy restarts this
-├── [systemd unit, restart=always] anyclaw-prod-static.service
+├── [systemd unit, restart=always] anyclaw-app-frontend.service
 │
 ├── [transient, spawned per task] Agent subprocess (claude -p / openclaw / ...)
 │       Runs as `anyclaw-agent` OS user inside a git worktree.
@@ -55,7 +55,7 @@ The dispatch server and the MCP server live in the **same source package and sam
 | Coding agent | inbound HTTP/SSE on `127.0.0.1:4100/mcp` | Tool calls |
 | PocketBase | outbound REST on `127.0.0.1:8090` | Collection CRUD, `_tasks` / `_agent_messages` / `_versions` reads/writes, realtime subscriptions |
 | Local filesystem | direct | Worktree create/merge, validation, git commits, prod artifact copies |
-| systemd (user bus) | `systemctl --user restart anyclaw-logic` via subprocess | Restart prod logic service after deploy (decision #28) |
+| systemd (user bus) | `systemctl --user restart anyclaw-logic` via subprocess | Restart prod app backend after deploy (decision #28) |
 | Dispatch REST clients (mobile app via tunnel) | inbound HTTP on same port | Emergency rollback, version list, restart-app, task submission |
 
 ### 2.3 File Layout on Disk
@@ -77,11 +77,11 @@ The MCP/dispatch server source and configuration live under `/data/.anyclaw/`, o
 │   ├── .git/                            primary git repo
 │   ├── .worktrees/                      per-task isolation (decision #36)
 │   │   └── task-<uuid>/                 worktree created by dispatch, removed after merge
-│   ├── logic/                           agent-modifiable Node.js logic service
+│   ├── logic/                           agent-modifiable Node.js app backend
 │   └── frontend/                        agent-modifiable Vite+React frontend
 │
 ├── prod/                                owned by anyclaw-infra, 0755
-│   ├── logic/                           promoted logic service artifacts
+│   ├── logic/                           promoted app backend artifacts
 │   └── frontend/                        promoted frontend build artifacts
 │
 └── pocketbase/
@@ -465,7 +465,7 @@ server.registerTool(
     title: "Deploy to Production",
     description:
       "Validate the current task worktree, snapshot the database, commit, merge to main, " +
-      "promote artifacts to prod, and restart the prod logic service. " +
+      "promote artifacts to prod, and restart the prod app backend. " +
       "REQUIRES a version description a non-technical user can understand.",
     inputSchema: z.object({
       versionDescription: z.string().min(10).describe(
@@ -738,7 +738,7 @@ cp -a <worktreePath>/logic/dist/.     /data/prod/logic/
 
 The copy is staged to `/data/prod/<component>.new/` then atomically renamed over the live directory to avoid serving half-written files.
 
-**7. Restart prod logic service** (decision #28).
+**7. Restart prod app backend** (decision #28).
 
 ```bash
 systemctl --user restart anyclaw-logic
@@ -789,7 +789,7 @@ Mark `_tasks[taskId].state = "done"`, revoke the per-task bearer token, and retu
 
 ## 9. Rollback Pipeline
 
-`anyclaw_rollback` (and the dispatch REST endpoint `POST /rollback`) run this pipeline. It is the user's emergency recovery path and must work even when the logic service is broken.
+`anyclaw_rollback` (and the dispatch REST endpoint `POST /rollback`) run this pipeline. It is the user's emergency recovery path and must work even when the app backend is broken.
 
 ### 9.1 Steps
 
@@ -813,7 +813,7 @@ git -C /data/dev checkout v<version>
 
 **5. Rebuild and promote.** Run `vite build` and `tsc` in the checked-out code and copy the artifacts to `/data/prod/frontend/` and `/data/prod/logic/` using the same atomic-rename pattern as deploy step 6.
 
-**6. Restart prod logic service.** `systemctl --user restart anyclaw-logic`.
+**6. Restart prod app backend.** `systemctl --user restart anyclaw-logic`.
 
 **7. Record the rollback.** Insert a new row into `_versions` with `description = "Rollback to v${version}"`, `gitCommit = target.gitCommit`, `dbSnapshotId = target.dbSnapshotId`. Rollback is just another version in the history.
 
@@ -970,7 +970,7 @@ Representative test matrix:
 | Tool | Key cases |
 |------|-----------|
 | `anyclaw_create_collection` | happy path, reserved name `_foo` rejected, snapshot failure aborts, PocketBase 400 surfaced |
-| `anyclaw_deploy` | happy path, lint failure returns isError, typecheck failure, build failure, test failure, logic-service restart failure triggers rollback |
+| `anyclaw_deploy` | happy path, lint failure returns isError, typecheck failure, build failure, test failure, app-backend restart failure triggers rollback |
 | `anyclaw_rollback` | happy path, unknown version, safety snapshot failure aborts, DB restore failure |
 | `anyclaw_snapshot_db` | happy path, label too short, disk-full simulation |
 | `anyclaw_list_versions` | empty list, limit bounds, PB unreachable retries then fails |

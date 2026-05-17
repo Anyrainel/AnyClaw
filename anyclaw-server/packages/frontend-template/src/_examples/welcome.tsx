@@ -97,7 +97,7 @@ export function Welcome() {
       {/* Header */}
       <header className="mb-10 text-center">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">
-          Welcome to AnyClaw
+          Welcome to AnyRaven
         </h1>
         <p className="mt-3 text-base text-muted">
           Tap <strong>Request</strong> and describe what you want in plain
@@ -144,7 +144,7 @@ export function Welcome() {
 
         {!loading && !error && tips.length === 0 && (
           <p className="text-sm text-muted">
-            No tips yet. The agent will populate this section as you use AnyClaw.
+            No tips yet. The agent will populate this section as you use AnyRaven.
           </p>
         )}
 

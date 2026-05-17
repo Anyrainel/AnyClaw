@@ -7,8 +7,8 @@ The server infrastructure is the foundation every other AnyRaven plan builds on.
 - **`@anyclaw/shared`** — the shared library consumed by all packages: NaCl crypto, gzip SQLite snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager, and the `AnyClawPaths` resolver.
 - **`@anyclaw/dispatch`** — a single Express app on `:4100` that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes and agent adapters onto. Plan 1 scaffolds the app factory and the `/health` endpoint.
 - **`@anyclaw/tunnel-manager`** — persistent WSS connection to the broker with an in-memory routing table and exponential-backoff reconnection.
-- **`@anyclaw/logic-runner`** — supervises the agent-built logic service from `/data/prod/logic-build/` on `:3000`. Provides a 503 fallback when no logic service is deployed.
-- **`@anyclaw/prod-static`** — serves `/data/prod/frontend-build/` on `:5173` with SPA fallback.
+- **`@anyclaw/app-backend`** — supervises the agent-built app backend from `/data/prod/app-backend/` on `:3000`. Provides a 503 fallback when no app backend is deployed.
+- **`@anyclaw/app-frontend`** — serves `/data/prod/app-frontend/` on `:5173` with SPA fallback.
 - **`@anyclaw/frontend-template`** — a Vite + React + Tailwind v4 seed project copied into `/data/dev/` on first run by `init-data-layout.sh`.
 - **Infrastructure** — `supervisord.conf` managing 5 supervised processes, a `Dockerfile` bundling everything, and shell scripts for PocketBase download and `/data` layout initialization.
 
@@ -32,11 +32,11 @@ Docker container (or single host)
 ├── [supervisord, restart=always]        pocketbase           :8090
 ├── [supervisord, restart=always]        dispatch             :4100  ← MCP + REST + health
 ├── [supervisord, restart=always]        tunnel-manager              ← WSS to broker
-├── [supervisord, restart=on-failure]    logic-runner         :3000  ← agent-modifiable
-└── [supervisord, restart=always]        prod-static          :5173  ← agent-built frontend
+├── [supervisord, restart=on-failure]    app-backend         :3000  ← agent-modifiable
+└── [supervisord, restart=always]        app-frontend          :5173  ← agent-built frontend
 ```
 
-`logic-runner` uses `restart=on-failure` (not `restart=always`) because the agent replaces the logic service binary during deploy — a deliberate stop is not a failure.
+`app-backend` uses `restart=on-failure` (not `restart=always`) because the agent replaces the app backend binary during deploy — a deliberate stop is not a failure.
 
 ### 2.2 Package Dependency Graph
 
@@ -44,7 +44,7 @@ Docker container (or single host)
 @anyclaw/shared
     ↑           ↑           ↑               ↑
 @anyclaw/   @anyclaw/   @anyclaw/       @anyclaw/
-dispatch  tunnel-mgr  logic-runner    prod-static
+dispatch  tunnel-mgr  app-backend    app-frontend
     ↑
 @anyclaw/mcp-server   (Plan 2, mounted onto dispatch app)
 @anyclaw/dispatch     (Plan 3, REST routes + adapters)
@@ -74,8 +74,8 @@ All persistent state is rooted at `/data`. The `ANYCLAW_DATA_ROOT` environment v
 │       └── <taskId>/              created by dispatch, removed after merge
 │
 ├── prod/
-│   ├── frontend-build/            promoted Vite build artifacts (served by prod-static)
-│   └── logic-build/               promoted logic service artifacts (run by logic-runner)
+│   ├── app-frontend/            promoted Vite build artifacts (served by app-frontend)
+│   └── app-backend/               promoted app backend artifacts (run by app-backend)
 │
 ├── snapshots/                     gzip SQLite snapshots
 │   └── <iso-timestamp>.sqlite.gz
@@ -99,8 +99,8 @@ const paths = new AnyClawPaths("/data");
 paths.dev           // "/data/dev"
 paths.devWorktrees  // "/data/dev/.worktrees"
 paths.prod          // "/data/prod"
-paths.prodFrontend  // "/data/prod/frontend-build"
-paths.prodLogic     // "/data/prod/logic-build"
+paths.prodFrontend  // "/data/prod/app-frontend"
+paths.prodLogic     // "/data/prod/app-backend"
 paths.snapshots     // "/data/snapshots"
 paths.secrets       // "/data/.anyclaw"
 paths.worktreeFor(taskId)           // "/data/dev/.worktrees/<taskId>"
@@ -133,13 +133,13 @@ Key exports: `WorktreeManager` — `create(taskId)`, `remove(taskId)`, `list()`.
 
 ### 4.6 Deploy Manager (`deployManager.ts`)
 
-Orchestrates a full deployment: validate the worktree (lint + typecheck + build + tests), snapshot the DB, merge the worktree into `main`, copy artifacts to `prod/`, and signal `logic-runner` to restart. Returns a discriminated union `{ ok: true, version } | { ok: false, error }`.
+Orchestrates a full deployment: validate the worktree (lint + typecheck + build + tests), snapshot the DB, merge the worktree into `main`, copy artifacts to `prod/`, and signal `app-backend` to restart. Returns a discriminated union `{ ok: true, version } | { ok: false, error }`.
 
 Key exports: `DeployManager` — `deploy(taskId, message)`.
 
 ### 4.7 Rollback Manager (`rollbackManager.ts`)
 
-Symmetric to deploy: restore the DB snapshot for a given version tag, check out that tag in the prod directories, and restart `logic-runner`. Atomic — if any step fails, the prior state is preserved.
+Symmetric to deploy: restore the DB snapshot for a given version tag, check out that tag in the prod directories, and restart `app-backend`. Atomic — if any step fails, the prior state is preserved.
 
 Key exports: `RollbackManager` — `rollback(versionTag)`.
 
@@ -156,8 +156,8 @@ Manages 5 programs. Key settings:
 | `pocketbase` | `pocketbase serve --http=127.0.0.1:8090` | `always` | PocketBase 0.25 binary |
 | `dispatch` | `node packages/dispatch/dist/index.js` | `always` | Port 4100 |
 | `tunnel-manager` | `node packages/tunnel-manager/dist/index.js` | `always` | WSS to broker |
-| `logic-runner` | `node packages/logic-runner/dist/index.js` | `on-failure` | Restartable by deploy |
-| `prod-static` | `node packages/prod-static/dist/index.js` | `always` | Port 5173 |
+| `app-backend` | `node packages/app-backend/dist/index.js` | `on-failure` | Restartable by deploy |
+| `app-frontend` | `node packages/app-frontend/dist/index.js` | `always` | Port 5173 |
 
 ### 5.2 Dockerfile
 
@@ -169,7 +169,7 @@ Single-stage build on `node:20-slim`. Steps:
 4. Run `download-pocketbase.sh` to fetch the PocketBase 0.25 binary.
 5. `ENTRYPOINT ["supervisord", "-c", "infra/supervisord.conf"]`
 
-The container exposes ports `4100` (dispatch), `5173` (prod-static), and `8090` (PocketBase, loopback only inside container).
+The container exposes ports `4100` (dispatch), `5173` (app-frontend), and `8090` (PocketBase, loopback only inside container).
 
 ### 5.3 `init-data-layout.sh`
 
@@ -187,7 +187,7 @@ Creates the `/data` directory tree and copies `@anyclaw/frontend-template` into 
 | Tests | Vitest 2.x | All packages |
 | Crypto | libsodium-wrappers 0.7.15 | Pinned; 0.7.16 ESM build is broken |
 | Git operations | simple-git | Worktrees, commit, tag, checkout |
-| HTTP | Express 4.x | Dispatch scaffold; prod-static |
+| HTTP | Express 4.x | Dispatch scaffold; app-frontend |
 | WebSockets | ws | Tunnel manager |
 | File watching | chokidar | Logic runner |
 | PocketBase | 0.25 binary + JS SDK 0.25 | Database + realtime |

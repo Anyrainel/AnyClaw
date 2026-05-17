@@ -2,7 +2,7 @@ import http from "http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import express from "express";
+import express, { type Express } from "express";
 import PocketBase from "pocketbase";
 import {
   ensureInternalCollections,
@@ -52,6 +52,49 @@ function getPocketBaseAdmin(dataRoot: string): PocketBase {
   return pb;
 }
 
+function isAllowedCorsOrigin(origin: string): boolean {
+  const configured = process.env.CORS_ALLOWED_ORIGINS
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (configured?.includes("*") || configured?.includes(origin)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+      (parsed.protocol === "http:" || parsed.protocol === "https:")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function mountCors(app: Express): void {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (typeof origin === "string" && isAllowedCorsOrigin(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "authorization,content-type,x-anyclaw-task-id",
+      );
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET,POST,PATCH,DELETE,OPTIONS",
+      );
+    }
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+}
+
 function makeAdapter(config: DispatchConfig, repo: TasksRepo, _paths: AnyClawPaths): AgentAdapter {
   switch (config.adapter) {
     case "openclaw": {
@@ -97,10 +140,10 @@ function makeManagers(paths: AnyClawPaths) {
     keep: 10,
   });
 
-  // TODO: implement real restart logic (e.g. signal to logic-runner process)
-  const restartLogicService = async () => {
+  // TODO: implement real restart logic (e.g. signal to app-backend process)
+  const restartAppBackendService = async () => {
     // eslint-disable-next-line no-console
-    console.log("[dispatch] restartLogicService called (no-op in local testing)");
+    console.log("[dispatch] restartAppBackendService called (no-op in local testing)");
   };
 
   const worktreeManager = new WorktreeManager({
@@ -114,13 +157,13 @@ function makeManagers(paths: AnyClawPaths) {
     versions: versionStore,
     worktrees: worktreeManager,
     snapshots: snapshotManager,
-    restartLogicService,
+    restartAppBackendService,
   });
 
   const rollbackManager = new RollbackManager({
     versions: versionStore,
     snapshots: snapshotManager,
-    restartLogicService,
+    restartAppBackendService,
   });
 
   // Wrap DeployManager to match DeployManagerLike interface expected by MCP tools
@@ -130,9 +173,10 @@ function makeManagers(paths: AnyClawPaths) {
       const wt = wtList.find(w => w.taskId === args.taskId);
       if (!wt) throw new Error(`Worktree not found for task ${args.taskId}`);
 
-      // Build artifact dir is the frontend template build output
-      const buildArtifactDir = "packages/frontend-template/dist";
-      const prodSubdir = "frontend-build";
+      // /data/dev is seeded as the app root, so deployed worktrees build the
+      // app frontend into their root-level Vite dist directory.
+      const buildArtifactDir = "dist";
+      const prodSubdir = "app-frontend";
 
       const result = await deployManager.deploy({
         taskId: args.taskId,
@@ -269,6 +313,7 @@ export async function buildServer(opts: BuildServerOptions) {
 
   // Single Express app shared between MCP (Plan 2) and REST (Plan 3).
   const app = express();
+  mountCors(app);
   app.use(express.json({ limit: "2mb" }));
   app.set("trust proxy", false);
 

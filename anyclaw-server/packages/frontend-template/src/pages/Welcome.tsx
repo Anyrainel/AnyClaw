@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
-  Activity,
   Bell,
-  ChevronRight,
-  ClipboardList,
+  BookOpen,
+  Bot,
   Home,
-  Layers3,
-  Plus,
   Search,
-  Settings,
   Sparkles,
 } from "lucide-react";
 import { AssistantPanel } from "../components/AssistantPanel.js";
@@ -26,34 +22,25 @@ export interface ShellPreferences {
 
 const LEVEL_ONE = [
   { id: "home", label: "Home", icon: Home },
-  { id: "work", label: "Work", icon: ClipboardList },
-  { id: "activity", label: "Activity", icon: Activity },
-  { id: "library", label: "Library", icon: Layers3 },
+  { id: "tutorial", label: "Tutorial", icon: BookOpen },
+  { id: "anyraven", label: "AnyRaven", icon: Bot },
 ] as const;
 
-const LEVEL_TWO = [
-  { id: "overview", label: "Overview" },
-  { id: "requests", label: "Requests" },
-  { id: "versions", label: "Versions" },
-] as const;
-
-const LEVEL_THREE = ["Home", "Workspace", "Today"] as const;
-
-const SAMPLE_SECTIONS = [
+const TUTORIAL_SECTIONS = [
   {
-    title: "Today",
-    body: "A stable landing area for the first real feature the agent builds.",
-    meta: "Ready for content",
+    title: "Ask for a small tool",
+    body: "Example: Build a daily habit tracker with streaks and a weekly summary.",
+    meta: "Starter prompt",
   },
   {
-    title: "Requests",
-    body: "Recent software-building tasks, clarifications, and status updates.",
-    meta: "Dispatch-aware",
+    title: "Answer only product questions",
+    body: "The agent should make normal engineering decisions and ask only when requirements change the result.",
+    meta: "Workflow",
   },
   {
-    title: "Versions",
-    body: "A future home for deployment notes, commits, and rollback controls.",
-    meta: "Version surface",
+    title: "Review what shipped",
+    body: "Use AnyRaven to see previous requests, progress, failures, commits, and deployments.",
+    meta: "History",
   },
 ] as const;
 
@@ -76,12 +63,58 @@ function toCssVars(preferences: ShellPreferences) {
   } as CSSProperties;
 }
 
+function HomePanel() {
+  return (
+    <section className="hero-panel" aria-label="Welcome">
+      <div className="hero-icon" aria-hidden>
+        <Sparkles className="size-6" />
+      </div>
+      <div>
+        <p className="eyebrow">Welcome</p>
+        <h2>Your app starts here.</h2>
+        <p>
+          This home tab is part of the free canvas. Ask AnyRaven to build
+          real features, and the agent can replace this content with the tools
+          you actually use.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function TutorialPanel() {
+  return (
+    <section className="section-list" aria-label="Tutorial examples">
+      <div className="section-list-header">
+        <div>
+          <p className="eyebrow">Tutorial</p>
+          <h2>Examples for you and the agent</h2>
+        </div>
+      </div>
+      <div className="section-items">
+        {TUTORIAL_SECTIONS.map((section) => (
+          <article className="section-item" key={section.title}>
+            <div>
+              <h3>{section.title}</h3>
+              <p>{section.body}</p>
+            </div>
+            <span>{section.meta}</span>
+          </article>
+        ))}
+      </div>
+      <p className="canvas-note">
+        This tutorial is starter material for the free canvas. The agent can
+        replace it once the app has a more useful onboarding flow.
+      </p>
+    </section>
+  );
+}
+
 export function Welcome() {
   const serverPrefs = usePreferences();
   const [levelOne, setLevelOne] = useState<(typeof LEVEL_ONE)[number]["id"]>("home");
-  const [levelTwo, setLevelTwo] = useState<(typeof LEVEL_TWO)[number]["id"]>("overview");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
   const [preferences, setPreferences] = useState<ShellPreferences>(() =>
     readStoredPreferences({
       theme: serverPrefs.theme,
@@ -121,7 +154,7 @@ export function Welcome() {
       style={cssVars}
     >
       <aside className="desktop-rail" aria-label="Primary">
-        <div className="brand-mark" aria-label="AnyClaw">
+        <div className="brand-mark" aria-label="AnyRaven">
           <Sparkles className="size-5" aria-hidden />
         </div>
         <nav>
@@ -135,18 +168,15 @@ export function Welcome() {
             );
           })}
         </nav>
-        <button type="button" className="rail-settings" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
-          <Settings className="size-5" aria-hidden />
-        </button>
       </aside>
 
       <div className="shell-main">
         <header className="top-bar">
-          <div className="mobile-brand" aria-label="AnyClaw">
+          <div className="mobile-brand" aria-label="AnyRaven">
             <Sparkles className="size-5" aria-hidden />
           </div>
           <div>
-            <p className="eyebrow">AnyClaw</p>
+            <p className="eyebrow">AnyRaven</p>
             <h1>{activeSection.label}</h1>
           </div>
           <div className="top-actions">
@@ -156,54 +186,19 @@ export function Welcome() {
             <button type="button" className="icon-button" aria-label="Notifications">
               <Bell className="size-5" aria-hidden />
             </button>
-            <button type="button" className="icon-button" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
-              <Settings className="size-5" aria-hidden />
-            </button>
           </div>
         </header>
 
         <main className="workspace" aria-label="Workspace">
-          <nav className="level-two-tabs" aria-label="Section">
-            {LEVEL_TWO.map((item) => (
-              <button key={item.id} type="button" data-active={levelTwo === item.id} onClick={() => setLevelTwo(item.id)}>
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          <nav className="breadcrumb-nav" aria-label="Current location">
-            {LEVEL_THREE.map((item, index) => (
-              <span key={item}>
-                {index > 0 && <ChevronRight className="size-3" aria-hidden />}
-                {item}
-              </span>
-            ))}
-          </nav>
-
-          <section className="section-list" aria-label="Default sections">
-            <div className="section-list-header">
-              <div>
-                <p className="eyebrow">Starter structure</p>
-                <h2>{LEVEL_TWO.find((item) => item.id === levelTwo)?.label}</h2>
-              </div>
-              <button type="button" className="primary-button">
-                <Plus className="size-4" aria-hidden />
-                Add section
-              </button>
-            </div>
-
-            <div className="section-items">
-              {SAMPLE_SECTIONS.map((section) => (
-                <article className="section-item" key={section.title}>
-                  <div>
-                    <h3>{section.title}</h3>
-                    <p>{section.body}</p>
-                  </div>
-                  <span>{section.meta}</span>
-                </article>
-              ))}
-            </div>
-          </section>
+          {levelOne === "home" && <HomePanel />}
+          {levelOne === "tutorial" && <TutorialPanel />}
+          {levelOne === "anyraven" && (
+            <AssistantPanel
+              open={dispatchOpen}
+              onOpenChange={setDispatchOpen}
+              onSettingsOpen={() => setSettingsOpen(true)}
+            />
+          )}
         </main>
       </div>
 
@@ -220,7 +215,6 @@ export function Welcome() {
       </nav>
 
       <SettingsSheet open={settingsOpen} preferences={preferences} onChange={setPreferences} onOpenChange={setSettingsOpen} />
-      <AssistantPanel open={assistantOpen} onOpenChange={setAssistantOpen} />
     </div>
   );
 }

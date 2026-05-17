@@ -43,6 +43,25 @@ describe("buildServer", () => {
     expect(body.ok).toBe(true);
   });
 
+  it("allows local frontend CORS preflight requests", async () => {
+    const pb = makeFakePb();
+    const result = await buildTestServer(pb);
+    server = result.server;
+    await new Promise<void>((r) => server!.listen(0, "127.0.0.1", r));
+    const addr = server.address() as { port: number };
+    const res = await fetch(`http://127.0.0.1:${addr.port}/api/tasks`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:5174",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:5174");
+    expect(res.headers.get("access-control-allow-headers")).toContain("authorization");
+  });
+
   it("mounts the MCP route from @anyclaw/mcp-server", async () => {
     const pb = makeFakePb();
     const result = await buildTestServer(pb);

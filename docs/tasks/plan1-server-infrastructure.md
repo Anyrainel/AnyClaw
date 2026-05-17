@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Scaffold the AnyRaven server monorepo as the comprehensive foundation for every other plan. Plan 1 delivers: the shared library (`@anyclaw/shared` — NaCl crypto, snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager), the dispatch scaffold (`@anyclaw/dispatch` — the single Express app on port 4100 that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes + adapters onto), the tunnel manager package (`@anyclaw/tunnel-manager` — routing table + reconnection stub for Plan 4), the logic runner (`@anyclaw/logic-runner` — supervises the agent-built logic service), the prod-static server (`@anyclaw/prod-static` — serves built frontend), the frontend template (`@anyclaw/frontend-template` — seed project copied into `/data/dev/` on first run), the `/data` filesystem layout scripts, the pinned PocketBase 0.25 binary, the full 5-process `supervisord` config, and the Dockerfile bundling all of it.
+**Goal:** Scaffold the AnyRaven server monorepo as the comprehensive foundation for every other plan. Plan 1 delivers: the shared library (`@anyclaw/shared` — NaCl crypto, snapshot manager, git-based version store, worktree manager, deploy manager, rollback manager), the dispatch scaffold (`@anyclaw/dispatch` — the single Express app on port 4100 that Plan 2 mounts MCP routes onto and Plan 3 mounts REST routes + adapters onto), the tunnel manager package (`@anyclaw/tunnel-manager` — routing table + reconnection stub for Plan 4), the logic runner (`@anyclaw/app-backend` — supervises the agent-built app backend), the app-frontend server (`@anyclaw/app-frontend` — serves built frontend), the frontend template (`@anyclaw/frontend-template` — seed project copied into `/data/dev/` on first run), the `/data` filesystem layout scripts, the pinned PocketBase 0.25 binary, the full 5-process `supervisord` config, and the Dockerfile bundling all of it.
 
-**Architecture:** TypeScript monorepo under `anyclaw-server/` using npm workspaces. All shared code lives in `packages/shared/` (imported as `@anyclaw/shared`) and is consumed by every other package. `packages/dispatch/` is a single Express app listening on port 4100 — Plan 1 creates the scaffold (app factory + `/health`), Plan 2 mounts MCP routes, Plan 3 mounts REST routes and agent adapters. `packages/tunnel-manager/`, `packages/logic-runner/`, `packages/prod-static/` are independently supervised Node services. `packages/frontend-template/` is a Vite + React + TS + Tailwind v4 source tree that is copied into `/data/dev/` by `init-data-layout.sh` on first run. All persistent state is rooted at `/data` (PocketBase, dev, prod, snapshots, `.anyclaw`). Process supervision runs via `supervisord` inside a single Docker container with 5 supervised programs: `pocketbase`, `dispatch`, `tunnel-manager`, `logic-runner`, `prod-static`.
+**Architecture:** TypeScript monorepo under `anyclaw-server/` using npm workspaces. All shared code lives in `packages/shared/` (imported as `@anyclaw/shared`) and is consumed by every other package. `packages/dispatch/` is a single Express app listening on port 4100 — Plan 1 creates the scaffold (app factory + `/health`), Plan 2 mounts MCP routes, Plan 3 mounts REST routes and agent adapters. `packages/tunnel-manager/`, `packages/app-backend/`, `packages/app-frontend/` are independently supervised Node services. `packages/frontend-template/` is a Vite + React + TS + Tailwind v4 source tree that is copied into `/data/dev/` by `init-data-layout.sh` on first run. All persistent state is rooted at `/data` (PocketBase, dev, prod, snapshots, `.anyclaw`). Process supervision runs via `supervisord` inside a single Docker container with 5 supervised programs: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`.
 
-**Tech Stack:** Node.js 20, TypeScript 5.4, npm workspaces, vitest, libsodium-wrappers, better-sqlite3 (schema-inspection only for snapshot tests), simple-git, express (dispatch scaffold + prod-static), ws (tunnel-manager), chokidar (logic-runner file watch), Vite 5 + React 18 + Tailwind v4 + lucide-react + pocketbase JS SDK 0.25 (frontend-template), supervisord, PocketBase 0.25 binary.
+**Tech Stack:** Node.js 20, TypeScript 5.4, npm workspaces, vitest, libsodium-wrappers, better-sqlite3 (schema-inspection only for snapshot tests), simple-git, express (dispatch scaffold + app-frontend), ws (tunnel-manager), chokidar (app-backend file watch), Vite 5 + React 18 + Tailwind v4 + lucide-react + pocketbase JS SDK 0.25 (frontend-template), supervisord, PocketBase 0.25 binary.
 
 **Dependencies:** None — this is the foundation.
 
@@ -61,16 +61,16 @@ anyclaw-server/
       test/
         router.test.ts
         config.test.ts
-    logic-runner/
+    app-backend/
       package.json
       tsconfig.json
       src/
-        index.ts                     # spawn + watch /data/prod/logic-build
-        fallback.ts                  # 503 no_logic_deployed server
+        index.ts                     # spawn + watch /data/prod/app-backend
+        fallback.ts                  # 503 no_app_backend_deployed server
       test/
         fallback.test.ts
         runner.test.ts
-    prod-static/
+    app-frontend/
       package.json
       tsconfig.json
       src/
@@ -123,7 +123,7 @@ anyclaw-server/
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/shared packages/dispatch packages/tunnel-manager packages/logic-runner packages/prod-static packages/frontend-template",
+    "typecheck": "tsc -b packages/shared packages/dispatch packages/tunnel-manager packages/app-backend packages/app-frontend packages/frontend-template",
     "lint": "echo \"(lint wired in later plans)\""
   },
   "devDependencies": {
@@ -196,8 +196,8 @@ Packages:
 - `shared` — crypto, snapshots, version store, worktrees, deploy manager, rollback manager
 - `dispatch` — single Express app on :4100 (scaffold in Plan 1, MCP routes in Plan 2, REST + adapters in Plan 3)
 - `tunnel-manager` — persistent WSS connection to broker (routing logic in Plan 1, real WSS in Plan 4)
-- `logic-runner` — supervises agent-built logic service from `/data/prod/logic-build/` on :3000
-- `prod-static` — serves `/data/prod/frontend-build/` on :5173 with SPA fallback
+- `app-backend` — supervises agent-built app backend from `/data/prod/app-backend/` on :3000
+- `app-frontend` — serves `/data/prod/app-frontend/` on :5173 with SPA fallback
 - `frontend-template` — Vite + React + Tailwind v4 seed copied into `/data/dev/` on first run
 ```
 
@@ -294,8 +294,8 @@ describe("AnyClawPaths", () => {
     expect(p.dev).toBe("/tmp/anyclaw-data/dev");
     expect(p.devWorktrees).toBe("/tmp/anyclaw-data/dev/.worktrees");
     expect(p.prod).toBe("/tmp/anyclaw-data/prod");
-    expect(p.prodFrontend).toBe("/tmp/anyclaw-data/prod/frontend-build");
-    expect(p.prodLogic).toBe("/tmp/anyclaw-data/prod/logic-build");
+    expect(p.prodFrontend).toBe("/tmp/anyclaw-data/prod/app-frontend");
+    expect(p.prodLogic).toBe("/tmp/anyclaw-data/prod/app-backend");
     expect(p.snapshots).toBe("/tmp/anyclaw-data/snapshots");
     expect(p.secrets).toBe("/tmp/anyclaw-data/.anyclaw");
     expect(p.secretsLogs).toBe("/tmp/anyclaw-data/.anyclaw/logs");
@@ -333,8 +333,8 @@ export class AnyClawPaths {
   get dev() { return path.posix.join(this.dataRoot, "dev"); }
   get devWorktrees() { return path.posix.join(this.dev, ".worktrees"); }
   get prod() { return path.posix.join(this.dataRoot, "prod"); }
-  get prodFrontend() { return path.posix.join(this.prod, "frontend-build"); }
-  get prodLogic() { return path.posix.join(this.prod, "logic-build"); }
+  get prodFrontend() { return path.posix.join(this.prod, "app-frontend"); }
+  get prodLogic() { return path.posix.join(this.prod, "app-backend"); }
   get snapshots() { return path.posix.join(this.dataRoot, "snapshots"); }
   get secrets() { return path.posix.join(this.dataRoot, ".anyclaw"); }
   get secretsLogs() { return path.posix.join(this.secrets, "logs"); }
@@ -1054,7 +1054,7 @@ git commit -m "feat(shared): add WorktreeManager"
 
 ### Task 7: DeployManager (TDD)
 
-The DeployManager wires the pieces together: run a validator, snapshot DB (if schema changed), commit-and-tag via VersionStore, merge the task branch into main, delete the worktree, copy built artifacts into `prod/`, and restart the logic service via an injected restart callback. Every dependency is injected for testability — no real supervisord calls in this plan.
+The DeployManager wires the pieces together: run a validator, snapshot DB (if schema changed), commit-and-tag via VersionStore, merge the task branch into main, delete the worktree, copy built artifacts into `prod/`, and restart the app backend via an injected restart callback. Every dependency is injected for testability — no real supervisord calls in this plan.
 
 **Files:**
 - Create: `anyclaw-server/packages/shared/src/deployManager.ts`
@@ -1139,14 +1139,14 @@ describe("DeployManager", () => {
       schemaChanged: true,
       validate: async () => ({ ok: true }),
       buildArtifactDir: "build",
-      prodSubdir: "frontend-build",
+      prodSubdir: "app-frontend",
     });
 
     expect(result.ok).toBe(true);
     expect(result.version.tag).toBe("v1");
     expect(result.snapshotId).toBe("2026-04-06T12-00-00Z");
     expect(existsSync(join(snapDir, "2026-04-06T12-00-00Z.sqlite.gz"))).toBe(true);
-    expect(readFileSync(join(prodDir, "frontend-build", "index.html"), "utf8")).toBe("<html>v1</html>");
+    expect(readFileSync(join(prodDir, "app-frontend", "index.html"), "utf8")).toBe("<html>v1</html>");
     expect(existsSync(join(repoDir, ".worktrees", "task-1"))).toBe(false);
     expect(readFileSync(join(repoDir, "feature.txt"), "utf8")).toBe("new feature");
     expect(restartCalls).toBe(1);
@@ -1163,13 +1163,13 @@ describe("DeployManager", () => {
       schemaChanged: false,
       validate: async () => ({ ok: false, error: "typecheck failed" }),
       buildArtifactDir: "build",
-      prodSubdir: "frontend-build",
+      prodSubdir: "app-frontend",
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("typecheck");
     expect(restartCalls).toBe(0);
-    expect(existsSync(join(prodDir, "frontend-build"))).toBe(false);
+    expect(existsSync(join(prodDir, "app-frontend"))).toBe(false);
     const list = await vs.list();
     expect(list.length).toBe(0);
   });
@@ -1186,7 +1186,7 @@ describe("DeployManager", () => {
       schemaChanged: false,
       validate: async () => ({ ok: true }),
       buildArtifactDir: "build",
-      prodSubdir: "frontend-build",
+      prodSubdir: "app-frontend",
     });
 
     expect(result.ok).toBe(true);
@@ -1291,7 +1291,7 @@ export class DeployManager {
     // 7. Remove the worktree + task branch
     await this.opts.worktrees.delete(input.taskId);
 
-    // 8. Restart logic service
+    // 8. Restart app backend
     await this.opts.restartLogicService();
 
     return { ok: true, version, ...(snapshotId !== undefined ? { snapshotId } : {}) };
@@ -1370,7 +1370,7 @@ git commit -m "feat(shared): add DeployManager orchestrator"
 
 ### Task 7b: RollbackManager (TDD)
 
-Symmetric to `DeployManager`: checks out a prior version tag, optionally restores a DB snapshot, and restarts the logic service. All dependencies injected — no supervisord coupling.
+Symmetric to `DeployManager`: checks out a prior version tag, optionally restores a DB snapshot, and restarts the app backend. All dependencies injected — no supervisord coupling.
 
 **Files:**
 - Create: `anyclaw-server/packages/shared/src/rollbackManager.ts`
@@ -1437,7 +1437,7 @@ describe("RollbackManager", () => {
 
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-  it("rolls back to a prior version tag and restarts the logic service", async () => {
+  it("rolls back to a prior version tag and restarts the app backend", async () => {
     const result = await mgr.rollback("v1");
     expect(result.ok).toBe(true);
     expect(readFileSync(join(repoDir, "f.txt"), "utf8")).toBe("one");
@@ -1510,7 +1510,7 @@ export class RollbackManager {
     // 3. Checkout the version tag
     await this.opts.versions.checkoutVersion(versionTag);
 
-    // 4. Restart logic service
+    // 4. Restart app backend
     await this.opts.restartLogicService();
 
     return { ok: true };
@@ -1980,23 +1980,23 @@ git commit -m "feat(tunnel-manager): scaffold config loader, router, reconnect s
 
 ---
 
-### Task 8c: `@anyclaw/logic-runner` package (TDD)
+### Task 8c: `@anyclaw/app-backend` package (TDD)
 
-A small Node process that runs the agent-built logic service from `/data/prod/logic-build/index.js` on port **3000**. If the file doesn't exist, it instead serves a single endpoint that returns 503 with `{"error":"no_logic_deployed"}`. Watches `/data/prod/logic-build/` for changes and restarts the inner process.
+A small Node process that runs the agent-built app backend from `/data/prod/app-backend/index.js` on port **3000**. If the file doesn't exist, it instead serves a single endpoint that returns 503 with `{"error":"no_app_backend_deployed"}`. Watches `/data/prod/app-backend/` for changes and restarts the inner process.
 
 **Files:**
-- Create: `anyclaw-server/packages/logic-runner/package.json`
-- Create: `anyclaw-server/packages/logic-runner/tsconfig.json`
-- Create: `anyclaw-server/packages/logic-runner/src/index.ts`
-- Create: `anyclaw-server/packages/logic-runner/src/fallback.ts`
-- Create: `anyclaw-server/packages/logic-runner/test/fallback.test.ts`
-- Create: `anyclaw-server/packages/logic-runner/test/runner.test.ts`
+- Create: `anyclaw-server/packages/app-backend/package.json`
+- Create: `anyclaw-server/packages/app-backend/tsconfig.json`
+- Create: `anyclaw-server/packages/app-backend/src/index.ts`
+- Create: `anyclaw-server/packages/app-backend/src/fallback.ts`
+- Create: `anyclaw-server/packages/app-backend/test/fallback.test.ts`
+- Create: `anyclaw-server/packages/app-backend/test/runner.test.ts`
 
-- [ ] **Step 1: Create `packages/logic-runner/package.json`**
+- [ ] **Step 1: Create `packages/app-backend/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/logic-runner",
+  "name": "@anyclaw/app-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -2018,7 +2018,7 @@ A small Node process that runs the agent-built logic service from `/data/prod/lo
 }
 ```
 
-- [ ] **Step 2: Create `packages/logic-runner/tsconfig.json`**
+- [ ] **Step 2: Create `packages/app-backend/tsconfig.json`**
 
 ```json
 {
@@ -2043,16 +2043,16 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { createFallbackApp } from "../src/fallback.js";
 
-describe("logic-runner fallback", () => {
-  it("returns 503 with no_logic_deployed for any route", async () => {
+describe("app-backend fallback", () => {
+  it("returns 503 with no_app_backend_deployed for any route", async () => {
     const app = createFallbackApp();
     const a = await request(app).get("/");
     expect(a.status).toBe(503);
-    expect(a.body).toEqual({ error: "no_logic_deployed" });
+    expect(a.body).toEqual({ error: "no_app_backend_deployed" });
 
     const b = await request(app).post("/api/anything");
     expect(b.status).toBe(503);
-    expect(b.body).toEqual({ error: "no_logic_deployed" });
+    expect(b.body).toEqual({ error: "no_app_backend_deployed" });
   });
 });
 ```
@@ -2064,22 +2064,22 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LogicRunner } from "../src/index.js";
+import { AppBackendRunner } from "../src/index.js";
 
-describe("LogicRunner", () => {
+describe("AppBackendRunner", () => {
   let root: string;
   let buildDir: string;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "anyclaw-lr-"));
-    buildDir = join(root, "logic-build");
+    buildDir = join(root, "app-backend");
     mkdirSync(buildDir, { recursive: true });
   });
 
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
   it("reports mode=fallback when index.js is missing", async () => {
-    const runner = new LogicRunner({ buildDir, port: 0 });
+    const runner = new AppBackendRunner({ buildDir, port: 0 });
     await runner.start();
     expect(runner.mode).toBe("fallback");
     await runner.stop();
@@ -2087,14 +2087,14 @@ describe("LogicRunner", () => {
 
   it("reports mode=running when index.js exists", async () => {
     writeFileSync(join(buildDir, "index.js"), "// agent logic");
-    const runner = new LogicRunner({ buildDir, port: 0 });
+    const runner = new AppBackendRunner({ buildDir, port: 0 });
     await runner.start();
     expect(runner.mode).toBe("running");
     await runner.stop();
   });
 
   it("transitions from fallback to running when index.js appears", async () => {
-    const runner = new LogicRunner({ buildDir, port: 0 });
+    const runner = new AppBackendRunner({ buildDir, port: 0 });
     await runner.start();
     expect(runner.mode).toBe("fallback");
     writeFileSync(join(buildDir, "index.js"), "// later");
@@ -2107,7 +2107,7 @@ describe("LogicRunner", () => {
 
 - [ ] **Step 6: Run tests — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/logic-runner/test/`
+Run: `cd anyclaw-server && npx vitest run packages/app-backend/test/`
 Expected: FAIL.
 
 - [ ] **Step 7: Implement `src/fallback.ts`**
@@ -2118,7 +2118,7 @@ import express, { type Express } from "express";
 export function createFallbackApp(): Express {
   const app = express();
   app.use((_req, res) => {
-    res.status(503).json({ error: "no_logic_deployed" });
+    res.status(503).json({ error: "no_app_backend_deployed" });
   });
   return app;
 }
@@ -2136,19 +2136,19 @@ import { createFallbackApp } from "./fallback.js";
 
 export type RunnerMode = "fallback" | "running";
 
-export interface LogicRunnerOptions {
+export interface AppBackendRunnerOptions {
   buildDir: string;
   port: number;
   nodeBin?: string;
 }
 
-export class LogicRunner {
+export class AppBackendRunner {
   public mode: RunnerMode = "fallback";
   private child?: ChildProcess;
   private watcher?: FSWatcher;
   private fallback?: Server;
 
-  constructor(private readonly opts: LogicRunnerOptions) {}
+  constructor(private readonly opts: AppBackendRunnerOptions) {}
 
   async start(): Promise<void> {
     await this.reconcile();
@@ -2205,45 +2205,45 @@ export class LogicRunner {
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  const buildDir = process.env.LOGIC_BUILD_DIR ?? "/data/prod/logic-build";
+  const buildDir = process.env.APP_BACKEND_DIR ?? "/data/prod/app-backend";
   const port = Number(process.env.PORT ?? 3000);
-  const runner = new LogicRunner({ buildDir, port });
+  const runner = new AppBackendRunner({ buildDir, port });
   runner.start().then(() => {
     // eslint-disable-next-line no-console
-    console.log(`[logic-runner] listening on :${port} mode=${runner.mode}`);
+    console.log(`[app-backend] listening on :${port} mode=${runner.mode}`);
   });
 }
 ```
 
 - [ ] **Step 9: Run tests — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/logic-runner/test/`
+Run: `cd anyclaw-server && npx vitest run packages/app-backend/test/`
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add anyclaw-server/packages/logic-runner anyclaw-server/package-lock.json
-git commit -m "feat(logic-runner): supervise agent-built logic service on :3000"
+git add anyclaw-server/packages/app-backend anyclaw-server/package-lock.json
+git commit -m "feat(app-backend): supervise agent-built app backend on :3000"
 ```
 
 ---
 
-### Task 8d: `@anyclaw/prod-static` package (TDD)
+### Task 8d: `@anyclaw/app-frontend` package (TDD)
 
-A small Express server that serves static files from `/data/prod/frontend-build/` on port **5173**. If the directory is empty (nothing has been deployed), it serves a placeholder "Welcome to AnyRaven — your agent has not built anything yet" HTML page. SPA fallback: unknown routes return `index.html`.
+A small Express server that serves static files from `/data/prod/app-frontend/` on port **5173**. If the directory is empty (nothing has been deployed), it serves a placeholder "Welcome to AnyRaven — your agent has not built anything yet" HTML page. SPA fallback: unknown routes return `index.html`.
 
 **Files:**
-- Create: `anyclaw-server/packages/prod-static/package.json`
-- Create: `anyclaw-server/packages/prod-static/tsconfig.json`
-- Create: `anyclaw-server/packages/prod-static/src/index.ts`
-- Create: `anyclaw-server/packages/prod-static/src/placeholder.ts`
-- Create: `anyclaw-server/packages/prod-static/test/server.test.ts`
+- Create: `anyclaw-server/packages/app-frontend/package.json`
+- Create: `anyclaw-server/packages/app-frontend/tsconfig.json`
+- Create: `anyclaw-server/packages/app-frontend/src/index.ts`
+- Create: `anyclaw-server/packages/app-frontend/src/placeholder.ts`
+- Create: `anyclaw-server/packages/app-frontend/test/server.test.ts`
 
-- [ ] **Step 1: Create `packages/prod-static/package.json`**
+- [ ] **Step 1: Create `packages/app-frontend/package.json`**
 
 ```json
 {
-  "name": "@anyclaw/prod-static",
+  "name": "@anyclaw/app-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -2263,7 +2263,7 @@ A small Express server that serves static files from `/data/prod/frontend-build/
 }
 ```
 
-- [ ] **Step 2: Create `packages/prod-static/tsconfig.json`**
+- [ ] **Step 2: Create `packages/app-frontend/tsconfig.json`**
 
 ```json
 {
@@ -2288,9 +2288,9 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request from "supertest";
-import { createProdStaticApp } from "../src/index.js";
+import { createAppFrontendApp } from "../src/index.js";
 
-describe("prod-static", () => {
+describe("app-frontend", () => {
   let root: string;
 
   beforeEach(() => {
@@ -2301,7 +2301,7 @@ describe("prod-static", () => {
 
   it("serves the placeholder when the build dir is empty", async () => {
     mkdirSync(root, { recursive: true });
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/");
     expect(res.status).toBe(200);
     expect(res.text).toMatch(/Welcome to AnyRaven/);
@@ -2311,7 +2311,7 @@ describe("prod-static", () => {
   it("serves index.html when the build dir has content", async () => {
     writeFileSync(join(root, "index.html"), "<html><body>APP</body></html>");
     writeFileSync(join(root, "app.js"), "console.log(1)");
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/");
     expect(res.status).toBe(200);
     expect(res.text).toContain("APP");
@@ -2320,7 +2320,7 @@ describe("prod-static", () => {
   it("serves static assets", async () => {
     writeFileSync(join(root, "index.html"), "<html></html>");
     writeFileSync(join(root, "app.js"), "console.log(1)");
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/app.js");
     expect(res.status).toBe(200);
     expect(res.text).toContain("console.log");
@@ -2328,7 +2328,7 @@ describe("prod-static", () => {
 
   it("falls back to index.html for SPA routes", async () => {
     writeFileSync(join(root, "index.html"), "<html>SPA</html>");
-    const app = createProdStaticApp({ buildDir: root });
+    const app = createAppFrontendApp({ buildDir: root });
     const res = await request(app).get("/settings/profile");
     expect(res.status).toBe(200);
     expect(res.text).toContain("SPA");
@@ -2338,7 +2338,7 @@ describe("prod-static", () => {
 
 - [ ] **Step 5: Run test — expect FAIL**
 
-Run: `cd anyclaw-server && npx vitest run packages/prod-static/test/`
+Run: `cd anyclaw-server && npx vitest run packages/app-frontend/test/`
 Expected: FAIL.
 
 - [ ] **Step 6: Implement `src/placeholder.ts`**
@@ -2373,7 +2373,7 @@ export interface ProdStaticOptions {
   buildDir: string;
 }
 
-export function createProdStaticApp(opts: ProdStaticOptions): Express {
+export function createAppFrontendApp(opts: ProdStaticOptions): Express {
   const app = express();
 
   const hasIndex = () =>
@@ -2398,25 +2398,25 @@ export function createProdStaticApp(opts: ProdStaticOptions): Express {
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  const buildDir = process.env.PROD_FRONTEND_DIR ?? "/data/prod/frontend-build";
+  const buildDir = process.env.APP_FRONTEND_DIR ?? "/data/prod/app-frontend";
   const port = Number(process.env.PORT ?? 5173);
-  const app = createProdStaticApp({ buildDir });
+  const app = createAppFrontendApp({ buildDir });
   app.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`[prod-static] serving ${buildDir} on :${port}`);
+    console.log(`[app-frontend] serving ${buildDir} on :${port}`);
   });
 }
 ```
 
 - [ ] **Step 8: Run test — expect PASS**
 
-Run: `cd anyclaw-server && npx vitest run packages/prod-static/test/`
+Run: `cd anyclaw-server && npx vitest run packages/app-frontend/test/`
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add anyclaw-server/packages/prod-static anyclaw-server/package-lock.json
-git commit -m "feat(prod-static): Express static server on :5173 with placeholder"
+git add anyclaw-server/packages/app-frontend anyclaw-server/package-lock.json
+git commit -m "feat(app-frontend): Express static server on :5173 with placeholder"
 ```
 
 ---
@@ -2656,7 +2656,7 @@ git commit -m "feat(frontend-template): Vite+React+Tailwind v4 seed for /data/de
 - [ ] **Step 1: Run all tests**
 
 Run: `cd anyclaw-server && npm test`
-Expected: all suites pass (paths, crypto, snapshots, versionStore, worktrees, deployManager, rollbackManager, dispatch health, tunnel-manager router+config, logic-runner fallback+runner, prod-static server, frontend-template usePreferences + build).
+Expected: all suites pass (paths, crypto, snapshots, versionStore, worktrees, deployManager, rollbackManager, dispatch health, tunnel-manager router+config, app-backend fallback+runner, app-frontend server, frontend-template usePreferences + build).
 
 - [ ] **Step 2: Typecheck the whole repo**
 
@@ -2691,8 +2691,8 @@ FRONTEND_TEMPLATE_SRC="${FRONTEND_TEMPLATE_SRC:-/anyclaw/frontend-template}"
 mkdir -p "$DATA_ROOT/pocketbase/pb_data"
 mkdir -p "$DATA_ROOT/dev"
 mkdir -p "$DATA_ROOT/dev/.worktrees"
-mkdir -p "$DATA_ROOT/prod/frontend-build"
-mkdir -p "$DATA_ROOT/prod/logic-build"
+mkdir -p "$DATA_ROOT/prod/app-frontend"
+mkdir -p "$DATA_ROOT/prod/app-backend"
 mkdir -p "$DATA_ROOT/snapshots"
 mkdir -p "$DATA_ROOT/.anyclaw/logs"
 
@@ -2806,7 +2806,7 @@ git commit -m "feat(infra): add download-pocketbase.sh"
 **Files:**
 - Create: `anyclaw-server/infra/supervisord.conf`
 
-- [ ] **Step 1: Create `supervisord.conf`** (Plan 1 supervises all 5 processes: `pocketbase`, `dispatch`, `tunnel-manager`, `logic-runner`, `prod-static`.)
+- [ ] **Step 1: Create `supervisord.conf`** (Plan 1 supervises all 5 processes: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`.)
 
 ```ini
 [supervisord]
@@ -2853,27 +2853,27 @@ environment=ANYCLAW_SECRETS_DIR="/data/.anyclaw"
 stdout_logfile=/var/log/anyclaw/tunnel-manager.log
 stderr_logfile=/var/log/anyclaw/tunnel-manager.err
 
-[program:logic-runner]
-command=/usr/bin/node /anyclaw/logic-runner/dist/index.js
-directory=/anyclaw/logic-runner
-; logic-runner wraps agent-authored code, which might crash — use on-failure
+[program:app-backend]
+command=/usr/bin/node /anyclaw/app-backend/dist/index.js
+directory=/anyclaw/app-backend
+; app-backend wraps agent-authored code, which might crash — use on-failure
 ; so supervisord still restarts it but does not hide a crash loop.
 autorestart=unexpected
 startretries=20
 user=anyclaw-infra
-environment=LOGIC_BUILD_DIR="/data/prod/logic-build",PORT="3000"
-stdout_logfile=/var/log/anyclaw/logic-runner.log
-stderr_logfile=/var/log/anyclaw/logic-runner.err
+environment=APP_BACKEND_DIR="/data/prod/app-backend",PORT="3000"
+stdout_logfile=/var/log/anyclaw/app-backend.log
+stderr_logfile=/var/log/anyclaw/app-backend.err
 
-[program:prod-static]
-command=/usr/bin/node /anyclaw/prod-static/dist/index.js
-directory=/anyclaw/prod-static
+[program:app-frontend]
+command=/usr/bin/node /anyclaw/app-frontend/dist/index.js
+directory=/anyclaw/app-frontend
 autorestart=true
 startretries=10
 user=anyclaw-infra
-environment=PROD_FRONTEND_DIR="/data/prod/frontend-build",PORT="5173"
-stdout_logfile=/var/log/anyclaw/prod-static.log
-stderr_logfile=/var/log/anyclaw/prod-static.err
+environment=APP_FRONTEND_DIR="/data/prod/app-frontend",PORT="5173"
+stdout_logfile=/var/log/anyclaw/app-frontend.log
+stderr_logfile=/var/log/anyclaw/app-frontend.err
 ```
 
 - [ ] **Step 2: Commit**
@@ -2944,17 +2944,17 @@ RUN groupadd --system anyclaw-infra \
 
 # Bundle all 5 supervised packages + shared (runtime artifacts only)
 RUN mkdir -p /anyclaw/dispatch /anyclaw/shared /anyclaw/tunnel-manager \
-             /anyclaw/logic-runner /anyclaw/prod-static /anyclaw/frontend-template
+             /anyclaw/app-backend /anyclaw/app-frontend /anyclaw/frontend-template
 COPY --from=builder /build/packages/dispatch/dist             /anyclaw/dispatch/dist
 COPY --from=builder /build/packages/dispatch/package.json     /anyclaw/dispatch/package.json
 COPY --from=builder /build/packages/shared/dist               /anyclaw/shared/dist
 COPY --from=builder /build/packages/shared/package.json       /anyclaw/shared/package.json
 COPY --from=builder /build/packages/tunnel-manager/dist       /anyclaw/tunnel-manager/dist
 COPY --from=builder /build/packages/tunnel-manager/package.json /anyclaw/tunnel-manager/package.json
-COPY --from=builder /build/packages/logic-runner/dist         /anyclaw/logic-runner/dist
-COPY --from=builder /build/packages/logic-runner/package.json /anyclaw/logic-runner/package.json
-COPY --from=builder /build/packages/prod-static/dist          /anyclaw/prod-static/dist
-COPY --from=builder /build/packages/prod-static/package.json  /anyclaw/prod-static/package.json
+COPY --from=builder /build/packages/app-backend/dist         /anyclaw/app-backend/dist
+COPY --from=builder /build/packages/app-backend/package.json /anyclaw/app-backend/package.json
+COPY --from=builder /build/packages/app-frontend/dist          /anyclaw/app-frontend/dist
+COPY --from=builder /build/packages/app-frontend/package.json  /anyclaw/app-frontend/package.json
 # frontend-template is copied as SOURCE (not built dist) because init-data-layout.sh
 # seeds the source into /data/dev/ on first run where the agent will modify and build it.
 COPY --from=builder /build/packages/frontend-template         /anyclaw/frontend-template
@@ -2965,8 +2965,8 @@ RUN rm -rf /anyclaw/frontend-template/node_modules /anyclaw/frontend-template/di
 # Data directories
 RUN mkdir -p /data/pocketbase/pb_data \
              /data/dev/.worktrees \
-             /data/prod/frontend-build \
-             /data/prod/logic-build \
+             /data/prod/app-frontend \
+             /data/prod/app-backend \
              /data/snapshots \
              /data/.anyclaw/logs \
              /var/log/anyclaw \
@@ -3012,7 +3012,7 @@ curl -fsS http://127.0.0.1:5173/ | head -5
 docker logs anyclaw-plan1 | tail -60
 docker stop anyclaw-plan1
 ```
-Expected: `curl /health` prints `{"status":"ok","version":"0.1.0"}`. `curl /` against prod-static returns the "Welcome to AnyRaven" placeholder HTML. Logs show all 5 supervised processes started: `pocketbase`, `dispatch`, `tunnel-manager`, `logic-runner`, `prod-static`. `/data/dev` contains the seeded frontend-template with a git history.
+Expected: `curl /health` prints `{"status":"ok","version":"0.1.0"}`. `curl /` against app-frontend returns the "Welcome to AnyRaven" placeholder HTML. Logs show all 5 supervised processes started: `pocketbase`, `dispatch`, `tunnel-manager`, `app-backend`, `app-frontend`. `/data/dev` contains the seeded frontend-template with a git history.
 
 - [ ] **Step 5: Commit**
 
@@ -3043,13 +3043,13 @@ Expected: every step succeeds; all test suites pass.
 
 - [ ] **Step 2: Verify all Plan 1 deliverables exist**
 
-Run: `cd anyclaw-server && ls packages/shared/src packages/dispatch/src packages/tunnel-manager/src packages/logic-runner/src packages/prod-static/src packages/frontend-template/src infra`
+Run: `cd anyclaw-server && ls packages/shared/src packages/dispatch/src packages/tunnel-manager/src packages/app-backend/src packages/app-frontend/src packages/frontend-template/src infra`
 Expected output includes:
 - `packages/shared/src`: `paths.ts crypto.ts snapshots.ts versionStore.ts worktrees.ts deployManager.ts rollbackManager.ts index.ts`
 - `packages/dispatch/src`: `index.ts`
 - `packages/tunnel-manager/src`: `index.ts config.ts router.ts reconnect.ts`
-- `packages/logic-runner/src`: `index.ts fallback.ts`
-- `packages/prod-static/src`: `index.ts placeholder.ts`
+- `packages/app-backend/src`: `index.ts fallback.ts`
+- `packages/app-frontend/src`: `index.ts placeholder.ts`
 - `packages/frontend-template/src`: `main.tsx App.tsx app.css lib/`
 - `infra`: `Dockerfile supervisord.conf scripts`
 
@@ -3064,8 +3064,8 @@ git log --oneline -20
 
 ## Self-Review Checklist
 
-- **Spec coverage:** monorepo scaffold (Task 1), TypeScript build + typecheck (Task 1), `@anyclaw/shared` with `paths` (Task 2), `crypto` (Task 3), `snapshots` (Task 4), `versionStore` (Task 5), `worktrees` (Task 6), `deployManager` (Task 7), `rollbackManager` (Task 7b), `@anyclaw/dispatch` scaffold on :4100 (Task 8), `@anyclaw/tunnel-manager` (Task 8b), `@anyclaw/logic-runner` on :3000 (Task 8c), `@anyclaw/prod-static` on :5173 (Task 8d), `@anyclaw/frontend-template` Vite+React+Tailwind v4 seed (Task 8e), filesystem init that copies the frontend-template into `/data/dev/` and creates `.worktrees/` (Task 10), PocketBase 0.25 pinned download (Task 11), supervisord with all 5 programs (Task 12), Dockerfile bundling all 5 packages + frontend-template source (Task 13), full verification (Tasks 9 + 14).
+- **Spec coverage:** monorepo scaffold (Task 1), TypeScript build + typecheck (Task 1), `@anyclaw/shared` with `paths` (Task 2), `crypto` (Task 3), `snapshots` (Task 4), `versionStore` (Task 5), `worktrees` (Task 6), `deployManager` (Task 7), `rollbackManager` (Task 7b), `@anyclaw/dispatch` scaffold on :4100 (Task 8), `@anyclaw/tunnel-manager` (Task 8b), `@anyclaw/app-backend` on :3000 (Task 8c), `@anyclaw/app-frontend` on :5173 (Task 8d), `@anyclaw/frontend-template` Vite+React+Tailwind v4 seed (Task 8e), filesystem init that copies the frontend-template into `/data/dev/` and creates `.worktrees/` (Task 10), PocketBase 0.25 pinned download (Task 11), supervisord with all 5 programs (Task 12), Dockerfile bundling all 5 packages + frontend-template source (Task 13), full verification (Tasks 9 + 14).
 - **Canonical decisions honored:** shared = `@anyclaw/shared`; dispatch = `@anyclaw/dispatch` on port **4100** (Plan 2 mounts MCP routes onto this same Express app, Plan 3 mounts REST + adapters — there is only ONE dispatch Express app per container); npm workspaces; infra at `anyclaw-server/infra/`; PocketBase **0.25** binary + **^0.25.0** JS SDK.
 - **Out of scope (deferred to later plans):** MCP tools and routes (Plan 2), PocketBase collection bootstrap with `_` prefixed collections (Plan 2), dispatch REST routes and agent adapters (Plan 3), real WSS broker connection and CBOR envelope (Plan 4), mobile app (Plan 5), welcome page content, real `@theme` color values, `usePreferences` PocketBase integration, skills, `install.sh`, `bootstrap-pocketbase.sh`, `store-api-key.js` (all Plan 6 — Plan 1 only provides the scripts `install.sh` will call and the frontend hook contract Plan 6 will implement against).
-- **Type / name consistency:** `AnyClawPaths`, `KeyPair`, `SealedBox`, `SnapshotManager`, `Version`, `VersionStore`, `Worktree`, `WorktreeManager`, `DeployManager`, `DeployResult`, `ValidateResult`, `RollbackManager`, `RollbackResult`, `createApp` (dispatch), `ServiceRouter`, `ServiceTag`, `TunnelConfig`, `DeviceKeys`, `LogicRunner`, `RunnerMode`, `createFallbackApp`, `createProdStaticApp`, `Preferences`, `usePreferences` are each defined exactly once and imported under the same name across tests, implementations, and package barrels.
+- **Type / name consistency:** `AnyClawPaths`, `KeyPair`, `SealedBox`, `SnapshotManager`, `Version`, `VersionStore`, `Worktree`, `WorktreeManager`, `DeployManager`, `DeployResult`, `ValidateResult`, `RollbackManager`, `RollbackResult`, `createApp` (dispatch), `ServiceRouter`, `ServiceTag`, `TunnelConfig`, `DeviceKeys`, `AppBackendRunner`, `RunnerMode`, `createFallbackApp`, `createAppFrontendApp`, `Preferences`, `usePreferences` are each defined exactly once and imported under the same name across tests, implementations, and package barrels.
 - **No placeholders:** every step includes complete code or a concrete command with expected output. No TBD / TODO / "similar to".

@@ -8,8 +8,8 @@ export class AnyClawPaths {
   get dev() { return path.posix.join(this.dataRoot, "dev"); }
   get devWorktrees() { return path.posix.join(this.dev, ".worktrees"); }
   get prod() { return path.posix.join(this.dataRoot, "prod"); }
-  get prodFrontend() { return path.posix.join(this.prod, "frontend-build"); }
-  get prodLogic() { return path.posix.join(this.prod, "logic-build"); }
+  get prodAppFrontend() { return path.posix.join(this.prod, "app-frontend"); }
+  get prodAppBackend() { return path.posix.join(this.prod, "app-backend"); }
   get snapshots() { return path.posix.join(this.dataRoot, "snapshots"); }
   get secrets() { return path.posix.join(this.dataRoot, ".anyclaw"); }
   get secretsLogs() { return path.posix.join(this.secrets, "logs"); }

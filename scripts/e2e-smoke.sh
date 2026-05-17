@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# AnyClaw baseline e2e smoke test
+# AnyRaven baseline e2e smoke test
 # Verifies: docker compose up → health → create task → task appears in list
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:4100}"
+APP_URL="${APP_URL:-http://127.0.0.1:5173}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-60}"
 
-echo "=== AnyClaw Baseline E2E Smoke Test ==="
+echo "=== AnyRaven Baseline E2E Smoke Test ==="
 echo "Compose file: $COMPOSE_FILE"
 echo "API base:     $BASE_URL"
+echo "App URL:      $APP_URL"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -27,7 +29,7 @@ docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$TIMEOUT_SEC"
 echo "[3/6] Waiting for dispatch health..."
 for i in $(seq 1 "$TIMEOUT_SEC"); do
   if curl -fsS "$BASE_URL/api/health" >/dev/null 2>&1; then
-    echo "    ✓ dispatch healthy"
+echo "    ✓ dispatch healthy"
     break
   fi
   if [ "$i" -eq "$TIMEOUT_SEC" ]; then
@@ -37,6 +39,15 @@ for i in $(seq 1 "$TIMEOUT_SEC"); do
   fi
   sleep 1
 done
+
+echo "[3b/6] Verifying app frontend..."
+if curl -fsS "$APP_URL/" >/dev/null; then
+  echo "    ✓ app frontend reachable"
+else
+  echo "    ✗ app frontend not reachable"
+  docker compose -f "$COMPOSE_FILE" logs --tail 50 app-frontend 2>/dev/null || docker compose -f "$COMPOSE_FILE" logs --tail 50
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Create a task
@@ -92,5 +103,5 @@ fi
 echo ""
 echo "=== All checks passed ==="
 echo "Task ID: $TASK_ID"
-echo "Web UI:  http://127.0.0.1:5173"
+echo "Web UI:  $APP_URL"
 echo "API:     $BASE_URL"

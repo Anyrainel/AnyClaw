@@ -5,8 +5,8 @@
  *   frontend-template  (no @anyclaw/* imports — standalone Vite project)
  *   shared             (no @anyclaw/* imports — foundation layer)
  *   tunnel-manager  ─┐
- *   logic-runner    ─┤→ shared only
- *   prod-static     ─┘
+ *   app-backend    ─┤→ shared only
+ *   app-frontend     ─┘
  *   mcp-server         → shared only  (mounted BY dispatch, never imports it)
  *   dispatch           → shared + mcp-server
  *
@@ -69,9 +69,9 @@ describe("tunnel-manager — leaf service", () => {
   });
 });
 
-describe("logic-runner — leaf service", () => {
+describe("app-backend — leaf service", () => {
   it("does not import @anyclaw/dispatch or @anyclaw/mcp-server", () => {
-    const violations = anyclawImports(walkTs(pkgSrc("logic-runner")));
+    const violations = anyclawImports(walkTs(pkgSrc("app-backend")));
     const forbidden = Object.entries(violations).flatMap(([f, imps]) =>
       imps.filter(i => i === "@anyclaw/dispatch" || i === "@anyclaw/mcp-server").map(i => `${f}: ${i}`)
     );
@@ -79,9 +79,9 @@ describe("logic-runner — leaf service", () => {
   });
 });
 
-describe("prod-static — leaf service", () => {
+describe("app-frontend — leaf service", () => {
   it("has no @anyclaw/* imports", () => {
-    const violations = anyclawImports(walkTs(pkgSrc("prod-static")));
+    const violations = anyclawImports(walkTs(pkgSrc("app-frontend")));
     expect(violations).toEqual({});
   });
 });
@@ -110,11 +110,11 @@ describe("frontend-template — standalone Vite project", () => {
 // ─── dispatch ───────────────────────────────────────────────────────────────
 
 describe("dispatch — orchestrator, allowed to import mcp-server + shared", () => {
-  it("does not import tunnel-manager, logic-runner, or prod-static", () => {
+  it("does not import tunnel-manager, app-backend, or app-frontend", () => {
     const violations = anyclawImports(walkTs(pkgSrc("dispatch")));
     const forbidden = Object.entries(violations).flatMap(([f, imps]) =>
       imps
-        .filter(i => ["@anyclaw/tunnel-manager", "@anyclaw/logic-runner", "@anyclaw/prod-static"].includes(i))
+        .filter(i => ["@anyclaw/tunnel-manager", "@anyclaw/app-backend", "@anyclaw/app-frontend"].includes(i))
         .map(i => `${f}: ${i}`)
     );
     expect(forbidden).toEqual([]);

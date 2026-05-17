@@ -27,9 +27,10 @@ services:
       - MAX_BUDGET_USD=5
       # Allowed MCP tools
       - ANYCLAW_ALLOWED_TOOLS=anyclaw_ask_user,anyclaw_update_progress,anyclaw_create_collection,anyclaw_snapshot_db,anyclaw_deploy,anyclaw_rollback,anyclaw_list_versions
-      # Prod-static + logic-runner
-      - PROD_FRONTEND_DIR=/data/prod/frontend-build
-      - LOGIC_BUILD_DIR=/data/prod/logic-build
+      # App frontend/backend. Dev mode keeps :5173 hot-reloaded from /data/dev for MVP template iteration.
+      - APP_FRONTEND_SERVER_MODE=dev
+      - APP_FRONTEND_DIR=/data/prod/app-frontend
+      - APP_BACKEND_DIR=/data/prod/app-backend
       - POCKETBASE_URL=http://127.0.0.1:8090
       # Tunnel-manager (disabled for baseline — stub mode)
       - ANYCLAW_CONNECTION_MODE=direct

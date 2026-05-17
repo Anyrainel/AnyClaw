@@ -36,7 +36,7 @@ RUN groupadd --system anyclaw-infra \
 
 # Bundle all supervised packages + shared (runtime artifacts only)
 RUN mkdir -p /anyclaw/dispatch /anyclaw/shared /anyclaw/tunnel-manager \
-             /anyclaw/logic-runner /anyclaw/prod-static /anyclaw/frontend-template \
+             /anyclaw/app-backend /anyclaw/app-frontend /anyclaw/frontend-template \
              /anyclaw/mcp-server
 COPY --from=builder /build/packages/dispatch/dist             /anyclaw/dispatch/dist
 COPY --from=builder /build/packages/dispatch/package.json     /anyclaw/dispatch/package.json
@@ -47,18 +47,18 @@ COPY --from=builder /build/packages/mcp-server/dist           /anyclaw/mcp-serve
 COPY --from=builder /build/packages/mcp-server/package.json   /anyclaw/mcp-server/package.json
 COPY --from=builder /build/packages/tunnel-manager/dist       /anyclaw/tunnel-manager/dist
 COPY --from=builder /build/packages/tunnel-manager/package.json /anyclaw/tunnel-manager/package.json
-COPY --from=builder /build/packages/logic-runner/dist         /anyclaw/logic-runner/dist
-COPY --from=builder /build/packages/logic-runner/package.json /anyclaw/logic-runner/package.json
-COPY --from=builder /build/packages/prod-static/dist          /anyclaw/prod-static/dist
-COPY --from=builder /build/packages/prod-static/package.json  /anyclaw/prod-static/package.json
+COPY --from=builder /build/packages/app-backend/dist         /anyclaw/app-backend/dist
+COPY --from=builder /build/packages/app-backend/package.json /anyclaw/app-backend/package.json
+COPY --from=builder /build/packages/app-frontend/dist          /anyclaw/app-frontend/dist
+COPY --from=builder /build/packages/app-frontend/package.json  /anyclaw/app-frontend/package.json
 # frontend-template is copied as SOURCE (not built dist) because init-data-layout.sh
 # seeds the source into /data/dev/ on first run where the agent will modify and build it.
 COPY --from=builder /build/packages/frontend-template         /anyclaw/frontend-template
 COPY --from=builder /build/node_modules                       /anyclaw/node_modules
-RUN rm -rf /anyclaw/frontend-template/node_modules /anyclaw/frontend-template/dist \
+RUN rm -rf /anyclaw/frontend-template/dist \
  && chown -R anyclaw-infra:anyclaw-infra /anyclaw
 # Fix workspace symlinks — they point to ../../packages/* from builder stage
-RUN for pkg in dispatch shared mcp-server tunnel-manager logic-runner prod-static frontend-template direct-connect wireguard; do \
+RUN for pkg in dispatch shared mcp-server tunnel-manager app-backend app-frontend frontend-template direct-connect wireguard; do \
       rm -f /anyclaw/node_modules/@anyclaw/$pkg \
       && ln -s /anyclaw/$pkg /anyclaw/node_modules/@anyclaw/$pkg; \
     done
@@ -66,8 +66,8 @@ RUN for pkg in dispatch shared mcp-server tunnel-manager logic-runner prod-stati
 # Data directories
 RUN mkdir -p /data/pocketbase/pb_data \
              /data/dev/.worktrees \
-             /data/prod/frontend-build \
-             /data/prod/logic-build \
+             /data/prod/app-frontend \
+             /data/prod/app-backend \
              /data/snapshots \
              /data/.anyclaw/logs \
              /var/log/anyclaw \

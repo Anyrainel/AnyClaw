@@ -6,7 +6,7 @@ min_server_version: "0.1.0"
 
 You are building a feature for a personal web application running on AnyRaven
 infrastructure. The app uses PocketBase (SQLite with auto-generated REST API),
-a Node.js/TypeScript logic service, and a Vite + React + TypeScript +
+a Node.js/TypeScript app backend, and a Vite + React + TypeScript +
 Tailwind v4 frontend.
 
 Use `anyclaw-developer-loop` as the top-level state machine. This skill
@@ -130,7 +130,7 @@ CSS, component conventions, voice & tone, and the `usePreferences()` hook.
 
 Pages in `packages/frontend/src/pages/`, shared components in
 `packages/frontend/src/components/`, feature-specific components alongside
-their page. Use the PocketBase JS SDK for CRUD and the logic service for
+their page. Use the PocketBase JS SDK for CRUD and the app backend for
 custom endpoints.
 
 Mandatory for every screen:
@@ -195,7 +195,7 @@ Call `anyclaw_deploy` with your version description. The deploy tool:
 2. Snapshots the database if schema changed
 3. Commits the worktree branch and merges it to main
 4. Copies build artifacts from dev to `/data/prod/`
-5. Restarts the logic service
+5. Restarts the app backend
 6. Triggers a WebView reload on the mobile app
 
 If deploy fails, read the error and iterate.

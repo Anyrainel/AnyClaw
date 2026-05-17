@@ -348,7 +348,7 @@ Implement `lib/bridge.ts` per design doc §6.2 plus a `buildResolvedPreferencesP
 - Error handling matrix from §6.4: 401 triggers silent broker JWT refresh then reload; 5xx shows "app broken" screen with an "Open Version History" CTA; `onError` (tunnel down) shows the reconnect card.
 - `ConnectionStatus` header badge reflects `useConnectionStore.connectionState`.
 
-**16c. CHECKPOINT:** User connects to a live server, sees the agent-built welcome page render in the WebView. Trigger a dev deploy — WebView auto-reloads. Kill the logic service — "app broken" screen appears with working Versions CTA. User signs off on loading state, error screens, and reload behavior.
+**16c. CHECKPOINT:** User connects to a live server, sees the agent-built welcome page render in the WebView. Trigger a dev deploy — WebView auto-reloads. Kill the app backend — "app broken" screen appears with working Versions CTA. User signs off on loading state, error screens, and reload behavior.
 
 ---
 
@@ -372,7 +372,7 @@ Implement `lib/bridge.ts` per design doc §6.2 plus a `buildResolvedPreferencesP
 
 **18b. Logic:** Mount calls `fetchVersions()`. Row expand reveals the agent-written description and a "Rollback to this version" button (hidden for `isCurrent`). Tap opens `RollbackConfirm` with branched copy depending on `hasDbSnapshot` (§8). Confirm calls `rollbackTo(versionId)`; on success, sheet closes — the incoming `_deployments` SSE will cause the WebView to reload automatically. The Versions tab must remain functional when `/app/*` is broken (it only talks to `/api/versions`).
 
-**18c. CHECKPOINT:** User reviews version history, expands a row, opens the rollback sheet (both snapshot and no-snapshot copy variants), performs a real rollback. Verifies that with the logic service killed, the tab still renders and rollback still works. Signs off on list density, expand animation, sheet copy.
+**18c. CHECKPOINT:** User reviews version history, expands a row, opens the rollback sheet (both snapshot and no-snapshot copy variants), performs a real rollback. Verifies that with the app backend killed, the tab still renders and rollback still works. Signs off on list density, expand animation, sheet copy.
 
 ---
 

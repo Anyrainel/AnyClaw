@@ -1,10 +1,10 @@
-# @anyclaw/logic-runner
+# @anyclaw/app-backend
 
-Supervises the agent-built logic service. Watches `/data/prod/logic-build/` and runs `index.js` from that directory on port `3000`. If no build exists, serves a 503 placeholder instead. Designed to be restarted by `supervisord` (`restart=on-failure`) — a deliberate stop during deploy is not treated as a failure.
+Supervises the agent-built app backend. Watches `/data/prod/app-backend/` and runs `index.js` from that directory on port `3000`. If no build exists, serves a 503 placeholder instead. Designed to be restarted by `supervisord` (`restart=on-failure`) — a deliberate stop during deploy is not treated as a failure.
 
 ## Behavior
 
-- On startup: check if `/data/prod/logic-build/index.js` exists.
+- On startup: check if `/data/prod/app-backend/index.js` exists.
   - If yes: spawn it as a child process.
   - If no: start the fallback 503 server.
 - On file change in the build dir: kill the running process and respawn.
@@ -14,8 +14,8 @@ Supervises the agent-built logic service. Watches `/data/prod/logic-build/` and 
 
 | Variable | Default | Description |
 |---|---|---|
-| `LOGIC_BUILD_DIR` | `/data/prod/logic-build` | Directory to watch and run |
-| `PORT` | `3000` | Port the logic service listens on |
+| `APP_BACKEND_DIR` | `/data/prod/app-backend` | Directory to watch and run |
+| `PORT` | `3000` | Port the app backend listens on |
 | `ANYCLAW_DATA_ROOT` | `/data` | Base path (used for fallback page) |
 
 ## Build & Run

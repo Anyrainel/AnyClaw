@@ -43,7 +43,7 @@ describe("RollbackManager", () => {
     mgr = new RollbackManager({
       versions: vs,
       snapshots: sn,
-      restartLogicService: async () => { restartCalls++; },
+      restartAppBackendService: async () => { restartCalls++; },
     });
 
     // Create two versions
@@ -55,7 +55,7 @@ describe("RollbackManager", () => {
 
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-  it("rolls back to a prior version tag and restarts the logic service", async () => {
+  it("rolls back to a prior version tag and restarts the app backend", async () => {
     const result = await mgr.rollback("v1");
     expect(result.ok).toBe(true);
     expect(readFileSync(join(repoDir, "f.txt"), "utf8")).toBe("one");

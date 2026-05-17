@@ -52,7 +52,7 @@ describe("DeployManager", () => {
       versions: vs,
       worktrees: wt,
       snapshots: sn,
-      restartLogicService: async () => { restartCalls++; },
+      restartAppBackendService: async () => { restartCalls++; },
       now: () => new Date("2026-04-06T12:00:00Z"),
     });
   });
@@ -73,7 +73,7 @@ describe("DeployManager", () => {
       schemaChanged: true,
       validate: async () => ({ ok: true }),
       buildArtifactDir: "build",
-      prodSubdir: "frontend-build",
+      prodSubdir: "app-frontend",
     });
 
     expect(result.ok).toBe(true);
@@ -82,7 +82,7 @@ describe("DeployManager", () => {
       expect(result.snapshotId).toBe("2026-04-06T12-00-00Z");
     }
     expect(existsSync(join(snapDir, "2026-04-06T12-00-00Z.sqlite.gz"))).toBe(true);
-    expect(readFileSync(join(prodDir, "frontend-build", "index.html"), "utf8")).toBe("<html>v1</html>");
+    expect(readFileSync(join(prodDir, "app-frontend", "index.html"), "utf8")).toBe("<html>v1</html>");
     expect(existsSync(join(repoDir, ".worktrees", "task-1"))).toBe(false);
     expect(readFileSync(join(repoDir, "feature.txt"), "utf8")).toBe("new feature");
     expect(restartCalls).toBe(1);
@@ -99,13 +99,13 @@ describe("DeployManager", () => {
       schemaChanged: false,
       validate: async () => ({ ok: false, error: "typecheck failed" }),
       buildArtifactDir: "build",
-      prodSubdir: "frontend-build",
+      prodSubdir: "app-frontend",
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("typecheck");
     expect(restartCalls).toBe(0);
-    expect(existsSync(join(prodDir, "frontend-build"))).toBe(false);
+    expect(existsSync(join(prodDir, "app-frontend"))).toBe(false);
     const list = await vs.list();
     expect(list.length).toBe(0);
   });
@@ -122,7 +122,7 @@ describe("DeployManager", () => {
       schemaChanged: false,
       validate: async () => ({ ok: true }),
       buildArtifactDir: "build",
-      prodSubdir: "frontend-build",
+      prodSubdir: "app-frontend",
     });
 
     expect(result.ok).toBe(true);

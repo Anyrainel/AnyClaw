@@ -8,7 +8,7 @@ See [docs/plan2-mcp-server-design.md](../../../docs/plan2-mcp-server-design.md) 
 
 | Tool | Description |
 |---|---|
-| `anyclaw_deploy` | Validate worktree, snapshot DB, merge to main, promote to prod, restart logic service |
+| `anyclaw_deploy` | Validate worktree, snapshot DB, merge to main, promote to prod, restart app backend |
 | `anyclaw_rollback` | Restore DB snapshot and revert code to a prior version tag |
 | `anyclaw_snapshot_db` | Create a labelled gzip SQLite snapshot |
 | `anyclaw_list_versions` | Return deployment history |

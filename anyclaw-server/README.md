@@ -12,8 +12,8 @@ See [docs/plan1-server-infrastructure-design.md](../docs/plan1-server-infrastruc
 | [`dispatch`](packages/dispatch/README.md) | 4100 | Task orchestration, REST API, and MCP mount point |
 | [`mcp-server`](packages/mcp-server/README.md) | 4100/mcp | MCP tools for coding agents (deploy, rollback, ask user, etc.) |
 | [`tunnel-manager`](packages/tunnel-manager/README.md) | — | Persistent WSS tunnel to the broker |
-| [`logic-runner`](packages/logic-runner/README.md) | 3000 | Supervises agent-built logic service |
-| [`prod-static`](packages/prod-static/README.md) | 5173 | Serves agent-built frontend (SPA) |
+| [`app-backend`](packages/app-backend/README.md) | 3000 | Supervises agent-built app backend |
+| [`app-frontend`](packages/app-frontend/README.md) | 5173 | Serves agent-built frontend (SPA) |
 | [`frontend-template`](packages/frontend-template/README.md) | — | Vite+React+Tailwind v4 seed copied to `/data/dev/` on first run |
 
 ## Process Model
@@ -24,8 +24,8 @@ All services are supervised by `supervisord` (5 programs):
 pocketbase        :8090   restart=always
 dispatch          :4100   restart=always   (embeds MCP + REST)
 tunnel-manager            restart=always
-logic-runner      :3000   restart=on-failure
-prod-static       :5173   restart=always
+app-backend      :3000   restart=on-failure
+app-frontend       :5173   restart=always
 ```
 
 ## Monorepo Commands
@@ -56,8 +56,8 @@ All persistent runtime state lives under `/data` (override with `ANYCLAW_DATA_RO
 ├── dev/                         Agent's git repo + worktrees
 │   └── .worktrees/<taskId>/     Per-task isolated worktrees
 ├── prod/
-│   ├── frontend-build/          Promoted Vite build
-│   └── logic-build/             Promoted logic service
+│   ├── app-frontend/          Promoted Vite build
+│   └── app-backend/             Promoted app backend
 ├── snapshots/                   Gzip SQLite snapshots (pre-deploy)
 └── .anyclaw/                    Secrets: pb-token, mcp-tokens/, logs/
 ```

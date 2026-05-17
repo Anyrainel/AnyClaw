@@ -53,7 +53,7 @@ min_server_version: "0.1.0"
 
 You are building a feature for a personal web application running on AnyRaven
 infrastructure. The app uses PocketBase (SQLite with auto-generated REST API),
-a Node.js/TypeScript logic service, and a Vite + React + TypeScript +
+a Node.js/TypeScript app backend, and a Vite + React + TypeScript +
 Tailwind v4 frontend.
 
 You write code directly using YOUR OWN built-in file tools (read, write, edit)
@@ -173,7 +173,7 @@ CSS, component conventions, voice & tone, and the `usePreferences()` hook.
 
 Pages in `packages/frontend/src/pages/`, shared components in
 `packages/frontend/src/components/`, feature-specific components alongside
-their page. Use the PocketBase JS SDK for CRUD and the logic service for
+their page. Use the PocketBase JS SDK for CRUD and the app backend for
 custom endpoints.
 
 Mandatory for every screen:
@@ -238,7 +238,7 @@ Call `anyclaw_deploy` with your version description. The deploy tool:
 2. Snapshots the database if schema changed
 3. Commits the worktree branch and merges it to main
 4. Copies build artifacts from dev to `/data/prod/`
-5. Restarts the logic service
+5. Restarts the app backend
 6. Triggers a WebView reload on the mobile app
 
 If deploy fails, read the error and iterate.
@@ -594,7 +594,7 @@ packages/frontend/src/
   App.tsx
   lib/
     pocketbase.ts        # PocketBase JS SDK client
-    api.ts               # fetch wrapper for the logic service
+    api.ts               # fetch wrapper for the app backend
   contexts/              # React Context providers
   hooks/                 # Reusable hooks (e.g. useCollection)
   components/            # Shared components (2+ pages use them)
@@ -943,8 +943,8 @@ Inside one container (or one host), the supervisor runs:
 | `pocketbase` | always | `/usr/local/bin/pocketbase` | Data layer. SQLite + REST + Realtime SSE on :8090. |
 | `tunnel-manager` | always | `/.anyclaw/tunnel/` | Persistent WSS to the broker. Survives every other crash. |
 | `dispatch-mcp` | always | `/.anyclaw/dispatch/` | Task dispatch API + MCP HTTP/SSE + emergency rollback + restart-logic. Agent-read-only. |
-| `logic-service` | on-failure | `/data/prod/logic-build/` | Agent-modifiable Node logic service. Custom routes + jobs. |
-| `prod-static` | always | `/.anyclaw/prod-static/` | Express server for `/data/prod/frontend-build/`. |
+| `app-backend` | on-failure | `/data/prod/app-backend/` | Agent-modifiable Node app backend. Custom routes + jobs. |
+| `app-frontend` | always | `/.anyclaw/app-frontend/` | Express server for `/data/prod/app-frontend/`. |
 
 Transient (not supervised):
 
@@ -974,8 +974,8 @@ The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owne
       logic/
     package.json
   prod/                             # Deployed artifacts (read-only to agent)
-    frontend-build/                 # Static assets for prod-static
-    logic-build/                    # Compiled logic service
+    app-frontend/                 # Static assets for app-frontend
+    app-backend/                    # Compiled app backend
     VERSION                         # Current deployed git sha + description
   snapshots/                        # Compressed DB snapshots for rollback
     2026-04-06T12-00-00Z.sqlite.gz
@@ -987,7 +987,7 @@ The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owne
 /.anyclaw/                          # Infrastructure code (read-only to agent)
   dispatch/                         # Dispatch + MCP server source
   tunnel/                           # Tunnel manager source
-  prod-static/                      # Express static server source
+  app-frontend/                      # Express static server source
   skills/                           # Skill .md files
     anyclaw-build-feature.md
     anyclaw-style-guide.md
@@ -1002,7 +1002,7 @@ The `/.anyclaw/` tree is owned by the `anyclaw-infra` user; `/data/dev/` is owne
     anyclaw-tunnel.service
     anyclaw-dispatch.service
     anyclaw-logic.service
-    anyclaw-prod-static.service
+    anyclaw-app-frontend.service
   supervisord.conf                  # Container install
 ```
 
@@ -1087,8 +1087,8 @@ Wants=anyclaw-pocketbase.service
 
 [Service]
 Type=simple
-WorkingDirectory=/data/prod/logic-build
-ExecStart=/usr/bin/node /data/prod/logic-build/index.js
+WorkingDirectory=/data/prod/app-backend
+ExecStart=/usr/bin/node /data/prod/app-backend/index.js
 Environment=POCKETBASE_URL=http://127.0.0.1:8090
 Environment=NODE_ENV=production
 EnvironmentFile=/data/.anyclaw/logic.env
@@ -1102,7 +1102,7 @@ StandardError=append:/data/.anyclaw/logs/logic.err
 WantedBy=default.target
 ```
 
-**`anyclaw-prod-static.service`:**
+**`anyclaw-app-frontend.service`:**
 ```ini
 [Unit]
 Description=AnyRaven Prod Static Server
@@ -1110,14 +1110,14 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/.anyclaw/prod-static
-ExecStart=/usr/bin/node /.anyclaw/prod-static/server.js
-Environment=PROD_FRONTEND=/data/prod/frontend-build
+WorkingDirectory=/.anyclaw/app-frontend
+ExecStart=/usr/bin/node /.anyclaw/app-frontend/server.js
+Environment=APP_FRONTEND=/data/prod/app-frontend
 Environment=PORT=5173
 Restart=always
 RestartSec=2
-StandardOutput=append:/data/.anyclaw/logs/prod-static.log
-StandardError=append:/data/.anyclaw/logs/prod-static.err
+StandardOutput=append:/data/.anyclaw/logs/app-frontend.log
+StandardError=append:/data/.anyclaw/logs/app-frontend.err
 
 [Install]
 WantedBy=default.target
@@ -1127,9 +1127,9 @@ WantedBy=default.target
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable anyclaw-pocketbase anyclaw-tunnel anyclaw-dispatch \
-                        anyclaw-logic anyclaw-prod-static
+                        anyclaw-logic anyclaw-app-frontend
 systemctl --user start  anyclaw-pocketbase anyclaw-tunnel anyclaw-dispatch \
-                        anyclaw-logic anyclaw-prod-static
+                        anyclaw-logic anyclaw-app-frontend
 ```
 
 Decision #28: after a successful deploy, the dispatch server shells out `systemctl --user restart anyclaw-logic` (or the supervisord equivalent inside a container) to swap the logic process onto the new prod build.
@@ -1169,9 +1169,9 @@ environment=POCKETBASE_URL="http://127.0.0.1:8090",DEV_WORKSPACE="/data/dev",PRO
 stdout_logfile=/var/log/anyclaw/dispatch.log
 stderr_logfile=/var/log/anyclaw/dispatch.err
 
-[program:logic-service]
-command=/usr/bin/node /data/prod/logic-build/index.js
-directory=/data/prod/logic-build
+[program:app-backend]
+command=/usr/bin/node /data/prod/app-backend/index.js
+directory=/data/prod/app-backend
 autorestart=unexpected
 exitcodes=0
 startretries=5
@@ -1180,14 +1180,14 @@ environment=POCKETBASE_URL="http://127.0.0.1:8090",NODE_ENV="production"
 stdout_logfile=/var/log/anyclaw/logic.log
 stderr_logfile=/var/log/anyclaw/logic.err
 
-[program:prod-static]
-command=/usr/bin/node /.anyclaw/prod-static/server.js
+[program:app-frontend]
+command=/usr/bin/node /.anyclaw/app-frontend/server.js
 autorestart=true
 startretries=10
 user=anyclaw-infra
-environment=PROD_FRONTEND="/data/prod/frontend-build",PORT="5173"
-stdout_logfile=/var/log/anyclaw/prod-static.log
-stderr_logfile=/var/log/anyclaw/prod-static.err
+environment=APP_FRONTEND="/data/prod/app-frontend",PORT="5173"
+stdout_logfile=/var/log/anyclaw/app-frontend.log
+stderr_logfile=/var/log/anyclaw/app-frontend.err
 ```
 
 ---
@@ -1230,13 +1230,13 @@ RUN groupadd --system anyclaw-infra \
 COPY --chown=anyclaw-infra:anyclaw-infra infra/ /.anyclaw/
 RUN cd /.anyclaw/dispatch    && npm ci --omit=dev \
  && cd /.anyclaw/tunnel      && npm ci --omit=dev \
- && cd /.anyclaw/prod-static && npm ci --omit=dev
+ && cd /.anyclaw/app-frontend && npm ci --omit=dev
 
 # Data directories
 RUN mkdir -p /data/pocketbase/pb_data \
              /data/dev \
-             /data/prod/frontend-build \
-             /data/prod/logic-build \
+             /data/prod/app-frontend \
+             /data/prod/app-backend \
              /data/snapshots \
              /data/.anyclaw/logs \
              /var/log/anyclaw \
@@ -1717,7 +1717,7 @@ A single Hetzner CX32 VPS (4 vCPU, 8GB RAM, 80GB disk, US East via Ashburn — d
     ...
 ```
 
-Each user's container has its own `/data` volume and its own supervisord supervising its own PocketBase, tunnel manager, dispatch server, logic service, and prod static server. A crash in one user's container cannot affect another. The transient agent subprocess inside each container is bounded by the container's cgroup `cpus`/`memory` limits plus per-process limits applied by the resource limit interface (decision #26 — no-op for MVP).
+Each user's container has its own `/data` volume and its own supervisord supervising its own PocketBase, tunnel manager, dispatch server, app backend, and prod static server. A crash in one user's container cannot affect another. The transient agent subprocess inside each container is bounded by the container's cgroup `cpus`/`memory` limits plus per-process limits applied by the resource limit interface (decision #26 — no-op for MVP).
 
 **Why one container per user, not one shared container:**
 - **Container = multi-tenancy boundary.** Supervisord inside = crash-isolation boundary within a tenant. The two boundaries don't overlap.

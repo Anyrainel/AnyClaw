@@ -1,5 +1,5 @@
 /**
- * Thin client for the AnyClaw dispatch REST API.
+ * Thin client for the AnyRaven dispatch REST API.
  * All endpoints return JSON and speak plain fetch.
  */
 

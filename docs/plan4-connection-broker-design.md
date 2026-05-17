@@ -223,7 +223,7 @@ A "server" in broker terminology is the user's entire AnyRaven host (one row per
      "server_pk": "<base64url X25519 public key>",
      "server_name": "my-home-server",
      "version": "0.3.1",
-     "capabilities": ["pocketbase", "dispatch", "prod-static"]
+     "capabilities": ["pocketbase", "dispatch", "app-frontend"]
    }
    ```
 5. The broker validates `server_token` against the `server_tokens` table, upserts a row in `servers`, stores `server_pk`, marks the token as `claimed`, and returns:
