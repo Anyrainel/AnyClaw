@@ -1,7 +1,9 @@
 import http from "http";
 import { randomUUID } from "node:crypto";
+import { execFile as execFileCallback } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import express, { type Express } from "express";
 import PocketBase from "pocketbase";
 import {
@@ -27,6 +29,8 @@ import { OpenClawAdapter } from "./adapters/openclaw.js";
 import { ClaudeCodeAdapter } from "./adapters/claude-code.js";
 import { WebhookAdapter } from "./adapters/webhook.js";
 import type { DispatchConfig, SystemContext, AgentAdapter } from "./adapters/types.js";
+
+const execFile = promisify(execFileCallback);
 
 export interface BuildServerOptions {
   config: DispatchConfig;
@@ -131,6 +135,32 @@ function makeAdapter(config: DispatchConfig, repo: TasksRepo, _paths: AnyClawPat
   }
 }
 
+export interface SupervisorExecResult {
+  stdout?: string;
+  stderr?: string;
+}
+
+export type SupervisorExec = (
+  file: string,
+  args: string[],
+) => Promise<SupervisorExecResult>;
+
+export async function restartSupervisorProgram(
+  program: string,
+  execImpl: SupervisorExec = execFile,
+): Promise<void> {
+  if (process.env.ANYCLAW_DISABLE_SUPERVISOR_RESTART === "1") {
+    return;
+  }
+  const supervisorctl = process.env.SUPERVISORCTL_PATH ?? "supervisorctl";
+  try {
+    await execImpl(supervisorctl, ["restart", program]);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to restart supervisor program ${program}: ${detail}`);
+  }
+}
+
 function makeManagers(paths: AnyClawPaths) {
   const pbDataPath = path.join(paths.pocketbaseData, "data.db");
   const versionStore = new VersionStore(paths.dev);
@@ -140,10 +170,10 @@ function makeManagers(paths: AnyClawPaths) {
     keep: 10,
   });
 
-  // TODO: implement real restart logic (e.g. signal to app-backend process)
   const restartAppBackendService = async () => {
-    // eslint-disable-next-line no-console
-    console.log("[dispatch] restartAppBackendService called (no-op in local testing)");
+    await restartSupervisorProgram(
+      process.env.APP_BACKEND_SUPERVISOR_PROGRAM ?? "app-backend",
+    );
   };
 
   const worktreeManager = new WorktreeManager({
